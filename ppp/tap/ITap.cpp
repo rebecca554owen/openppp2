@@ -145,6 +145,12 @@ namespace ppp
                 constantof(SubmaskAddress) = mask;
             }
 
+            _strand = ppp::make_shared_object<boost::asio::strand<boost::asio::io_context::executor_type>>(boost::asio::make_strand(*_context));
+            if (NULLPTR == _strand)
+            {
+                throw std::runtime_error("Default thread not working.");
+            }
+
 #if defined(_WIN32)
             if (!WintunAdapter::Ready())
             {
@@ -343,11 +349,43 @@ namespace ppp
         }
 
         /**
+         * @brief Thread-safe setter for the inbound packet handler.
+         */
+        void ITap::SetPacketInput(const PacketInputEventHandler& handler) noexcept
+        {
+            std::lock_guard<std::mutex> scope(packet_input_mutex_);
+            packet_input_ = handler;
+        }
+
+        /**
+         * @brief Thread-safe snapshot of the inbound packet handler.
+         */
+        ITap::PacketInputEventHandler ITap::GetPacketInput() noexcept
+        {
+            std::lock_guard<std::mutex> scope(packet_input_mutex_);
+            return packet_input_;
+        }
+
+        /**
+         * @brief Thread-safe snapshot of the underlying stream descriptor.
+         */
+        std::shared_ptr<boost::asio::posix::stream_descriptor> ITap::GetStream() noexcept
+        {
+            std::lock_guard<std::mutex> scope(_stream_mutex);
+            return _stream;
+        }
+
+        /**
          * @brief Closes stream resources and clears input callback.
          */
         void ITap::Finalize() noexcept
         {
-            std::shared_ptr<boost::asio::posix::stream_descriptor> stream = std::move(_stream); 
+            std::shared_ptr<boost::asio::posix::stream_descriptor> stream;
+            {
+                std::lock_guard<std::mutex> scope(_stream_mutex);
+                stream = std::move(_stream);
+            }
+
             if (NULLPTR != stream) 
             {
                 ppp::telemetry::Log(Level::kInfo, "tap", "Closing tap stream");
@@ -355,7 +393,7 @@ namespace ppp
                 ppp::net::Socket::Closestream(stream);
             }
 
-            PacketInput = NULLPTR;
+            SetPacketInput(NULLPTR);
         }
 
         /**
@@ -364,9 +402,8 @@ namespace ppp
         void ITap::Dispose() noexcept
         {
             std::shared_ptr<ITap> self = shared_from_this();
-            std::shared_ptr<boost::asio::io_context> context = GetContext();
-            boost::asio::dispatch(*context, 
-                [self, this, context]() noexcept 
+            boost::asio::dispatch(*_strand, 
+                [self, this]() noexcept 
                 {
                     Finalize();
                 });
@@ -409,7 +446,7 @@ namespace ppp
          */
         bool ITap::AsynchronousReadPacketLoops() noexcept
         {
-            std::shared_ptr<boost::asio::posix::stream_descriptor> stream = _stream;
+            std::shared_ptr<boost::asio::posix::stream_descriptor> stream = GetStream();
             if (NULLPTR == stream)
             {
                 ppp::telemetry::Log(Level::kDebug, "tap", "Read loop failed: no stream");
@@ -425,6 +462,7 @@ namespace ppp
 
             std::shared_ptr<ITap> self = shared_from_this();
             stream->async_read_some(boost::asio::buffer(_packet, sizeof(_packet)), 
+                boost::asio::bind_executor(*_strand,
                 [self, this, stream](const boost::system::error_code& ec, std::size_t sz) noexcept
                 {
                     if (ec == boost::system::errc::operation_canceled)
@@ -440,7 +478,7 @@ namespace ppp
                     }
 
                     AsynchronousReadPacketLoops();
-                });
+                }));
             return true;
         }
 
@@ -450,7 +488,7 @@ namespace ppp
          */
         void ITap::OnInput(PacketInputEventArgs& e) noexcept
         {
-            PacketInputEventHandler eh = PacketInput;
+            PacketInputEventHandler eh = GetPacketInput();
             if (eh)
             {
                 eh(this, e);
@@ -480,7 +518,7 @@ namespace ppp
                     return true;
                 }
 
-                std::shared_ptr<boost::asio::posix::stream_descriptor> stream = my->_stream;
+                std::shared_ptr<boost::asio::posix::stream_descriptor> stream = my->GetStream();
                 if (NULLPTR == stream)
                 {
                     ppp::telemetry::Log(Level::kDebug, "tap", "Write failed: no stream");
@@ -494,33 +532,80 @@ namespace ppp
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
                 }
 
-                std::shared_ptr<ITap> self = my->shared_from_this();
-                boost::asio::dispatch(*my->_context, 
-                    [self, my, stream, packet, packet_size]() noexcept 
-                    { 
-                        bool opened = stream->is_open();
-                        if (!opened)
-                        {
-                            ppp::telemetry::Log(Level::kDebug, "tap", "Write failed: stream not open (dispatch)");
-                            return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
-                        }
+                /**
+                 * @brief Enqueue the packet and let DrainWriteQueue() drive exactly one
+                 *        async_write at a time on the strand; concurrent Output() calls
+                 *        no longer overlap writes on the same stream object.
+                 */
+                bool arm = false;
+                {
+                    std::lock_guard<std::mutex> scope(my->_write_mutex);
+                    my->_write_queue.emplace_back(packet, packet_size);
+                    if (!my->_write_in_progress)
+                    {
+                        my->_write_in_progress = true;
+                        arm = true;
+                    }
+                }
 
-                        /**
-                         * @brief Completion handler finalizes on cancellation errors.
-                         */
-                        boost::asio::async_write(*stream, boost::asio::buffer(packet.get(), packet_size), 
-                            [self, my, stream, packet](const boost::system::error_code& ec, std::size_t sz) noexcept
-                            {
-                                if (ec == boost::system::errc::operation_canceled)
-                                {
-                                    my->Finalize();
-                                }
-                            });
-                        return true;
-                    }); 
+                if (arm)
+                {
+                    std::shared_ptr<ITap> self = my->shared_from_this();
+                    boost::asio::post(*my->_strand,
+                        [self, my]() noexcept
+                        {
+                            my->DrainWriteQueue();
+                        });
+                }
+
                 return true;
             }
         };
+
+        /**
+         * @brief Issues the next queued write; completions re-enter on the strand.
+         */
+        void ITap::DrainWriteQueue() noexcept
+        {
+            std::pair<std::shared_ptr<Byte>, int> front;
+            {
+                std::lock_guard<std::mutex> scope(_write_mutex);
+                if (_write_queue.empty())
+                {
+                    _write_in_progress = false;
+                    return;
+                }
+
+                front = _write_queue.front();
+                _write_queue.pop_front();
+            }
+
+            std::shared_ptr<boost::asio::posix::stream_descriptor> stream = GetStream();
+            if (NULLPTR == stream || !stream->is_open())
+            {
+                ppp::telemetry::Log(Level::kDebug, "tap", "Write queue drained: stream closed");
+                std::lock_guard<std::mutex> scope(_write_mutex);
+                _write_in_progress = false;
+                return;
+            }
+
+            std::shared_ptr<Byte> packet = front.first;
+            std::shared_ptr<ITap> self = shared_from_this();
+            boost::asio::async_write(*stream, boost::asio::buffer(packet.get(), front.second),
+                boost::asio::bind_executor(*_strand,
+                    [self, this, stream, packet](const boost::system::error_code& ec, std::size_t sz) noexcept
+                    {
+                        /**
+                         * @brief Completion handler finalizes on cancellation errors.
+                         */
+                        if (ec == boost::system::errc::operation_canceled)
+                        {
+                            Finalize();
+                        }
+
+                        DrainWriteQueue();
+                    }));
+        }
 
         /**
          * @brief Copies raw packet bytes into managed memory and writes out.

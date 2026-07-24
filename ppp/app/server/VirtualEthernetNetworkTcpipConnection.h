@@ -91,12 +91,12 @@ namespace ppp {
                 bool                                                        AcceptMuxLinklayer(const std::shared_ptr<VirtualEthernetTcpipConnection>& connection, uint32_t vlan, uint32_t seq, uint32_t ack, ppp::coroutines::YieldContext& y) noexcept;
 
             private:
-                struct {
-                    bool                                                    disposed_ : 1;
-                    bool                                                    mux_      : 7;
-                };
-                Int128                                                      id_       = 0;
-                UInt64                                                      timeout_  = 0;
+                // Cross-strand lifecycle/aging state: written on this connection's strand/coroutine,
+                // read by the switcher aging scan (TickAllConnections) under syncobj_.
+                std::atomic<bool>                                               disposed_ = { false };
+                std::atomic<bool>                                               mux_      = { false };
+                Int128                                                          id_       = 0;
+                std::atomic<UInt64>                                             timeout_  = 0;
                 ppp::threading::Executors::ContextPtr                       context_;
                 ppp::threading::Executors::StrandPtr                        strand_;
                 std::shared_ptr<VirtualEthernetSwitcher>                    switcher_;

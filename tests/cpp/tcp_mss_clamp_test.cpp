@@ -100,6 +100,13 @@ BOOST_AUTO_TEST_CASE(compute_dynamic_mss_matches_tunnel_overhead) {
     BOOST_TEST(ComputeDynamicTcpMss(false, kVEthernetTunnelOverhead) == 1360);
 }
 
+BOOST_AUTO_TEST_CASE(compute_dynamic_ipv6_mss_uses_learned_pmtu_without_exceeding_tunnel_budget) {
+    // IPv6 minimum MTU: 1280 - 40-byte IPv6 header - 20-byte TCP header = 1220.
+    BOOST_TEST(ComputeDynamicTcpMss(false, kVEthernetTunnelOverhead, 1280) == 1220);
+    // A learned MTU above the static tunnel budget must not increase the static MSS.
+    BOOST_TEST(ComputeDynamicTcpMss(false, kVEthernetTunnelOverhead, 1500) == 1360);
+}
+
 BOOST_AUTO_TEST_CASE(compute_dynamic_mss_respects_clamp_bounds) {
     BOOST_TEST(ComputeDynamicTcpMss(true, 0) == ppp::app::protocol::kTcpMssIPv4Max);
     BOOST_TEST(ComputeDynamicTcpMss(false, 0) == ppp::app::protocol::kTcpMssIPv6Max);

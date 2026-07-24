@@ -53,6 +53,11 @@ struct openppp2_ios_tap
     bool                                                                        start_completed = false;
     bool                                                                        running = false;
     bool                                                                        stopping = false;
+    /** @brief True while a thread is executing openppp2_ios_tap_stop(); destroy waits for it. */
+    bool                                                                        stop_active = false;
+    /** @brief Set once destroy has been claimed; prevents double delete. */
+    bool                                                                        destroying = false;
+    std::condition_variable                                                     stop_condition;
     std::atomic<bool>                                                           packet_logging { false };
     ppp::app::runtime::RuntimeLifecycle                                         runtime_lifecycle;
 };
@@ -468,7 +473,7 @@ namespace
 
         ppp::net::asio::vdns::enabled = configuration->udp.dns.turbo;
         ppp::net::asio::vdns::ttl = configuration->udp.dns.ttl;
-        ppp::net::asio::vdns::servers = addresses;
+        std::atomic_store(&ppp::net::asio::vdns::servers, addresses);
         ppp::net::asio::vdns::ClearCache();
         native_logf(
             "OpenPPP2 native: configured vdns servers=%s turbo=%d ttl=%d",
@@ -661,7 +666,7 @@ namespace
         try
         {
             native_logf("OpenPPP2 native start: creating runtime thread");
-            tap->runtime_thread = start_thread_with_stack_size(
+            std::thread runtime_thread = start_thread_with_stack_size(
                 [tap, configuration, options_copy, ip, gateway, mask]() mutable noexcept
             {
                 auto start = [tap, configuration, &options_copy, ip, gateway, mask](int, const char**) noexcept -> int
@@ -841,6 +846,10 @@ namespace
             // iOS Network Extension memory budget is tight (~15-50MB). Reserve a
             // moderate stack: 32MB risks Jetsam; 4MB was too small for ctcp load.
             }, static_cast<size_t>(5) * 1024 * 1024);
+            {
+                std::lock_guard<std::mutex> scope(tap->sync);
+                tap->runtime_thread = std::move(runtime_thread);
+            }
         }
         catch (const std::exception& e)
         {
@@ -868,9 +877,17 @@ namespace
             }
             bool ok = tap->start_result == 0;
             lock.unlock();
-            if (!ok && tap->runtime_thread.joinable())
+            if (!ok)
             {
-                tap->runtime_thread.join();
+                std::thread failed_runtime;
+                {
+                    std::lock_guard<std::mutex> scope(tap->sync);
+                    failed_runtime = std::move(tap->runtime_thread);
+                }
+                if (failed_runtime.joinable())
+                {
+                    failed_runtime.join();
+                }
             }
             return ok;
         }
@@ -956,11 +973,35 @@ namespace ppp {
     }
 }
 
+int openppp2_ios_tap_stop(openppp2_ios_tap* tap, int stop_reason);
+
 void openppp2_ios_tap_destroy(openppp2_ios_tap* tap)
 {
     if (nullptr == tap)
     {
         return;
+    }
+
+    {
+        std::lock_guard<std::mutex> scope(tap->sync);
+        if (tap->destroying)
+        {
+            /* A concurrent destroy already claimed this object. */
+            return;
+        }
+        tap->destroying = true;
+    }
+
+    /**
+     * @brief The runtime thread lambda captures raw `tap`; deleting while it
+     *        runs (or while another thread is still inside stop()) is UAF.
+     *        Drive the normal stop path first, then wait out any in-flight
+     *        stop owned by another thread before reclaiming the object.
+     */
+    openppp2_ios_tap_stop(tap, 0);
+    {
+        std::unique_lock<std::mutex> lock(tap->sync);
+        tap->stop_condition.wait(lock, [tap]() noexcept { return !tap->stop_active; });
     }
 
     tap->p2p_datagram_factory.reset();
@@ -1067,11 +1108,19 @@ int openppp2_ios_tap_stop(openppp2_ios_tap* tap, int stop_reason)
         return 0;
     }
 
+    {
+        std::lock_guard<std::mutex> scope(tap->sync);
+        tap->stop_active = true;
+    }
+
     const ppp::app::runtime::RuntimeSnapshot runtime = tap->runtime_lifecycle.GetSnapshot();
     const bool stop_owner = runtime.generation != 0 &&
         tap->runtime_lifecycle.TryBeginStop(runtime.generation, runtime_now_ms());
     if (runtime.generation != 0 && !stop_owner)
     {
+        std::lock_guard<std::mutex> scope(tap->sync);
+        tap->stop_active = false;
+        tap->stop_condition.notify_all();
         return 0;
     }
 
@@ -1135,9 +1184,15 @@ int openppp2_ios_tap_stop(openppp2_ios_tap* tap, int stop_reason)
         cleanup_complete(true);
     }
 
-    if (tap->runtime_thread.joinable())
+    std::thread runtime_thread;
     {
-        tap->runtime_thread.join();
+        std::lock_guard<std::mutex> scope(tap->sync);
+        runtime_thread = std::move(tap->runtime_thread);
+    }
+    if (runtime_thread.joinable())
+    {
+        /* Join outside sync: the runtime thread's exit path takes sync. */
+        runtime_thread.join();
     }
 
     {
@@ -1149,6 +1204,8 @@ int openppp2_ios_tap_stop(openppp2_ios_tap* tap, int stop_reason)
         tap->running = false;
         tap->stopping = false;
         tap->link_state = 2;
+        tap->stop_active = false;
+        tap->stop_condition.notify_all();
     }
     return 0;
 }

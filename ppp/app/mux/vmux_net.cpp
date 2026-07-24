@@ -244,6 +244,10 @@ namespace vmux {
     }
 
     void vmux_net::refresh_runtime_active_links() noexcept {
+        // Read-only container walk: safe without syncobj_ because container
+        // mutations join the syncobj_ domain (see remove/reap/attach) and
+        // handshake_complete_ is atomic, so the carrier handshake's store is
+        // safely visible here.
         std::size_t active_links = 0;
         for (const vmux_linklayer_ptr& linklayer : rx_links_) {
             if (NULLPTR != linklayer && ppp::app::mux::IsMuxLinkActive(
@@ -371,13 +375,106 @@ namespace vmux {
         m->context_                   = context;
     }
 
+    vmux_net::tx_completion_ptr vmux_net::make_tx_completion(const PostInternalAsynchronousCallback& callback) noexcept {
+        if (NULLPTR == callback) {
+            return NULLPTR;
+        }
+        try {
+            return ppp::make_shared_object<tx_completion>(callback);
+        }
+        catch (...) {
+            return NULLPTR;
+        }
+    }
+
+    bool vmux_net::track_tx_completion(const tx_completion_ptr& completion) noexcept {
+        if (NULLPTR == completion) {
+            return true;
+        }
+
+        bool accepted = false;
+        {
+            std::lock_guard<std::mutex> scope(tx_completion_mutex_);
+            if (!close_requested_) {
+                try {
+                    pending_tx_completions_.emplace_back(completion);
+                    accepted = true;
+                }
+                catch (...) {
+                }
+            }
+        }
+
+        if (!accepted) {
+            completion->Finish(false);
+        }
+        return accepted;
+    }
+
+    void vmux_net::finish_tx_completion(const tx_completion_ptr& completion, bool successed) noexcept {
+        if (NULLPTR == completion) {
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> scope(tx_completion_mutex_);
+            for (tx_completion_list::iterator it = pending_tx_completions_.begin(); it != pending_tx_completions_.end();) {
+                if (*it == completion) {
+                    it = pending_tx_completions_.erase(it);
+                }
+                else {
+                    ++it;
+                }
+            }
+        }
+        completion->Finish(successed);
+    }
+
+    void vmux_net::finish_tx_completions(tx_completion_list& completions, bool successed) noexcept {
+        while (!completions.empty()) {
+            tx_completion_ptr completion = std::move(completions.front());
+            completions.pop_front();
+            if (NULLPTR != completion) {
+                completion->Finish(successed);
+            }
+        }
+    }
+
+    void vmux_net::fail_pending_tx_completions() noexcept {
+        tx_completion_list completions;
+        {
+            std::lock_guard<std::mutex> scope(tx_completion_mutex_);
+            completions.swap(pending_tx_completions_);
+        }
+        finish_tx_completions(completions, false);
+    }
+
+    bool vmux_net::begin_close() noexcept {
+        tx_completion_list completions;
+        {
+            std::lock_guard<std::mutex> scope(tx_completion_mutex_);
+            if (close_requested_) {
+                return false;
+            }
+            close_requested_ = true;
+            completions.swap(pending_tx_completions_);
+        }
+        finish_tx_completions(completions, false);
+        return true;
+    }
+
+    bool vmux_net::close_requested() const noexcept {
+        std::lock_guard<std::mutex> scope(tx_completion_mutex_);
+        return close_requested_;
+    }
+
     /**
      * @brief Destroys the vmux network and releases runtime resources.
      */
     vmux_net::~vmux_net() noexcept {
-        // finalize without relying on shared_from_this() (destructor
-        // context may not have shared ownership). Prefer callers to
-        // invoke close_exec() which posts finalize onto the strand.
+        // A destructor can run on any thread; finalize() detects the missing
+        // shared owner / stopped executor and tears down inline. close_exec()
+        // remains the preferred early entry.
         finalize();
     }
 
@@ -385,6 +482,11 @@ namespace vmux {
      * @brief Finalizes queues, sockets, and linklayers, then marks disposed.
      */
     void vmux_net::finalize() noexcept {
+        // Strand-affine teardown, always performed inline. Entries: on the vmux
+        // strand (directly, or posted there by close_exec), the close_exec()
+        // stopped-executor fallback, and the destructor -- in the latter two no
+        // strand handler can run concurrently. Idempotent via disposed_.
+        begin_close();
         vmux_linklayer_vector rx_links;
         rx_packet_ssqueue rx_queue;
         vmux_skt_map skts;
@@ -392,7 +494,7 @@ namespace vmux {
 
         for (;;) {
             SynchronizationObjectScope __SCOPE__(syncobj_);
-            // Idempotent: close_exec and ~vmux_net may both enter finalize.
+            // Idempotent: all teardown state below is owned by this strand.
             if (base_.disposed_.load(std::memory_order_acquire)) {
                 return;
             }
@@ -449,7 +551,11 @@ namespace vmux {
 
         for (const std::pair<uint32_t, vmux_skt_ptr>& kv : skts) {
             const vmux_skt_ptr& skt = kv.second;
-            skt->close(); // There is no need to send any data because the underlying link will be interrupted.
+            if (NULLPTR != skt) {
+                // finalize() already owns the VMUX strand, so avoid another posted
+                // close that could remain queued forever after an executor stop.
+                skt->finalize();
+            }
         }
 
         for (vmux_linklayer_ptr& linklayer : rx_links) {
@@ -475,17 +581,14 @@ namespace vmux {
 
     /** @brief Returns the first active linklayer connection, if available. */
     vmux_net::IMuxTransportPtr vmux_net::get_linklayer() noexcept {
+        SynchronizationObjectScope __SCOPE__(syncobj_);
         vmux_linklayer_vector::iterator tail = rx_links_.begin();
         vmux_linklayer_vector::iterator endl = rx_links_.end();
         return tail != endl ? (*tail)->connection : NULLPTR;
     }
 
-    /** @brief Removes one link-layer endpoint from receive/transmit scheduling state. */
-    void vmux_net::remove_linklayer(const vmux_linklayer_ptr& linklayer) noexcept {
-        if (NULLPTR == linklayer) {
-            return;
-        }
-
+    /** @brief Removes one link-layer endpoint from the scheduling containers; caller holds syncobj_. */
+    void vmux_net::remove_linklayer_locked(const vmux_linklayer_ptr& linklayer) noexcept {
         for (vmux_linklayer_vector::iterator it = rx_links_.begin(); it != rx_links_.end();) {
             if (*it == linklayer) {
                 it = rx_links_.erase(it);
@@ -494,7 +597,6 @@ namespace vmux {
                 ++it;
             }
         }
-        refresh_runtime_active_links();
 
         for (vmux_linklayer_list::iterator it = tx_links_.begin(); it != tx_links_.end();) {
             if (*it == linklayer) {
@@ -504,10 +606,24 @@ namespace vmux {
                 ++it;
             }
         }
+    }
 
+    /** @brief Removes one link-layer endpoint from receive/transmit scheduling state. */
+    void vmux_net::remove_linklayer(const vmux_linklayer_ptr& linklayer) noexcept {
+        if (NULLPTR == linklayer) {
+            return;
+        }
+
+        {
+            SynchronizationObjectScope __SCOPE__(syncobj_);
+            remove_linklayer_locked(linklayer);
+        }
+        refresh_runtime_active_links();
     }
 
     size_t vmux_net::count_live_carriers(const vmux_linklayer_ptr& except) const noexcept {
+        // Read-only walk: handshake_complete_ is atomic; container mutations are
+        // strand-side and join the syncobj_ domain (see remove/reap/attach).
         size_t live = 0;
         for (const vmux_linklayer_ptr& link : rx_links_) {
             if (NULLPTR == link || link == except) {
@@ -732,13 +848,29 @@ namespace vmux {
         }
     }
 
-    /** @brief Posts deferred close/finalize work onto the vmux strand. */
+    /** @brief Begins terminal close and finalizes on the VMUX strand (inline when the executor is stopped). */
     void vmux_net::close_exec() noexcept {
-        std::shared_ptr<vmux_net> self = shared_from_this();
-        vmux_post_exec(context_, strand_,
-            [self, this]() noexcept {
-                finalize();
-            });
+        std::shared_ptr<vmux_net> self = weak_from_this().lock();
+        if (NULLPTR == self || !self->begin_close()) {
+            return;
+        }
+
+        if (NULLPTR != self->strand_ && self->strand_->running_in_this_thread()) {
+            self->finalize();
+            return;
+        }
+
+        const ContextPtr& context = self->context_;
+        if (NULLPTR == context || context->stopped() ||
+            !vmux_post_exec(context, self->strand_,
+                [self]() noexcept {
+                    self->finalize();
+                })) {
+            // Stopped executor: a posted finalizer would never run and the session
+            // would leak. finalize() detects this and tears down inline.
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+            self->finalize();
+        }
     }
 
     /**
@@ -754,13 +886,20 @@ namespace vmux {
 
         ContextPtr context = transmission->GetContext();
         StrandPtr strand = transmission->GetStrand();
+        ContextPtr vmux_context = self->get_context();
+        if (NULLPTR == context || NULLPTR == vmux_context || context->stopped() || vmux_context->stopped()) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+            return false;
+        }
 
         const ppp::function<void(bool)> on_completely =
             [self, ac, accounting_fallback](bool successed) noexcept {
-                const bool posted = vmux_post_exec(self->get_context(), self->get_strand(),
-                    [self, successed, ac]() noexcept {
-                        ac(successed);
-                    });
+                const ContextPtr callback_context = self->get_context();
+                const bool posted = NULLPTR != callback_context && !callback_context->stopped() &&
+                    vmux_post_exec(callback_context, self->get_strand(),
+                        [self, successed, ac]() noexcept {
+                            ac(successed);
+                        });
                 if (!posted && NULLPTR != accounting_fallback) {
                     accounting_fallback();
                 }
@@ -789,19 +928,19 @@ namespace vmux {
     /**
      * @brief Sends one packet through the specified underlying linklayer.
      */
-    bool vmux_net::underlyin_sent(const vmux_linklayer_ptr& linklayer, const std::shared_ptr<Byte>& packet, int packet_length, const PostInternalAsynchronousCallback& posted_ac) noexcept {
-        if (NULLPTR == packet || packet_length < sizeof(vmux_hdr)) {
+    bool vmux_net::underlyin_sent(const vmux_linklayer_ptr& linklayer, const std::shared_ptr<Byte>& packet, int packet_length, const tx_completion_ptr& completion) noexcept {
+        if (NULLPTR == linklayer || NULLPTR == packet || packet_length < sizeof(vmux_hdr)) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
             return false;
         }
         
-        if (base_.disposed_.load(std::memory_order_acquire)) {
+        if (base_.disposed_.load(std::memory_order_acquire) || close_requested()) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
         }
 
         IMuxTransportPtr& connection = linklayer->connection;
-        if (!connection->IsLinked()) {
+        if (NULLPTR == connection || !connection->IsLinked()) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionTransportMissing);
             return false;
         }
@@ -818,7 +957,11 @@ namespace vmux {
             return false;
         }
 
-        std::shared_ptr<vmux_net> self = shared_from_this();
+        std::shared_ptr<vmux_net> self = weak_from_this().lock();
+        if (NULLPTR == self) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+            return false;
+        }
         ppp::telemetry::Count("mux.link.send", 1);
         // Track in-flight writes per link (strand-affine) so runtime link removal
         // (turbo dynamic pool) can retire a link only after its last write
@@ -835,10 +978,11 @@ namespace vmux {
         const int accounted_length = packet_length;
 
         bool queued = transmission_write(self, transmission, packet, packet_length,
-            [self, this, linklayer, posted_ac, write, accounted_length](bool ok) noexcept {
+            [self, this, linklayer, completion, write, accounted_length](bool ok) noexcept {
                 // Decrement in-flight first; this completion is accounted regardless
                 // of what follows. Runtime removal checks inflight_ == 0 to retire.
                 if (!linklayer->drain_.CompleteWrite(write)) {
+                    self->finish_tx_completion(completion, ok);
                     return;
                 }
 
@@ -849,17 +993,15 @@ namespace vmux {
                     linklayer->queued_bytes_ = 0;
                 }
 
-                if (NULLPTR != posted_ac) {
-                    posted_ac(ok);
-                }
+                self->finish_tx_completion(completion, ok);
 
                 // Teardown guard: a send may complete after the session has been
                 // finalized (link flap, idle timeout, or peer close). finalize()
                 // clears tx_links_/tx_flows_ under syncobj_; touching them again
                 // from this strand callback (emplace_back / erase / re-drain) would
-                // race the teardown and operate on freed list nodes. Once disposed,
-                // drop the completion: there is nothing left to schedule.
-                if (base_.disposed_.load(std::memory_order_acquire)) {
+                // race the teardown and operate on freed list nodes. Once closing or
+                // disposed, no scheduler state may be touched again.
+                if (base_.disposed_.load(std::memory_order_acquire) || self->close_requested()) {
                     return;
                 }
 
@@ -900,20 +1042,17 @@ namespace vmux {
                         tx_links_.emplace_back(linklayer);
                         process_tx_all_packets();
                     }
-                    else if (!underlyin_sent(linklayer, packet.buffer, packet.length, packet.ac)) {
+                    else if (!underlyin_sent(linklayer, packet.buffer, packet.length, packet.completion)) {
                         drr_requeue_front(std::move(packet));
                         process_tx_all_packets();
                     }
                 }
             },
-            [linklayer, write, accounted_length]() noexcept {
-                if ((size_t)accounted_length <= linklayer->queued_bytes_) {
-                    linklayer->queued_bytes_ -= (size_t)accounted_length;
-                }
-                else {
-                    linklayer->queued_bytes_ = 0;
-                }
+            [self, linklayer, completion, write]() noexcept {
+                // This fallback may run on the carrier executor. MuxLinkDrainState
+                // is thread-safe; queued_bytes_ and scheduler containers are not.
                 (void)linklayer->drain_.AbortWrite(write);
+                self->finish_tx_completion(completion, false);
             });
         if (!queued) {
             if ((size_t)accounted_length <= linklayer->queued_bytes_) {
@@ -2045,8 +2184,7 @@ namespace vmux {
                 continue;
             }
 
-            PostInternalAsynchronousCallback null_ac;
-            if (!underlyin_sent(chosen, entry->buffer, entry->length, null_ac)) {
+            if (!underlyin_sent(chosen, entry->buffer, entry->length, tx_completion_ptr())) {
                 leftover.emplace_back(key);
                 continue;
             }
@@ -2526,6 +2664,15 @@ namespace vmux {
             return false;
         }
 
+        // Exactly-once completion for this post: tracked so a session close fails
+        // the waiter instead of leaving it hanging. track_tx_completion() failing
+        // means close already began (it has fired the completion with false).
+        tx_completion_ptr completion = make_tx_completion(posted_ac);
+        if (!track_tx_completion(completion)) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+            return false;
+        }
+
         vmux_hdr* h = (vmux_hdr*)packet.get();
         bool prioritize_ctrl = false;
         if (is_reliability_control(h->cmd)) {
@@ -2566,7 +2713,7 @@ namespace vmux {
             // Control frames bypass acceleration and jump the data backlog. The
             // optional completion is fired immediately (the frame is queued for a
             // priority drain that runs at the top of process_tx_all_packets).
-            tx_ctrl_queue_.emplace_back(tx_packet{ packet, packet_length, posted_ac });
+            tx_ctrl_queue_.emplace_back(tx_packet{ packet, packet_length, completion });
             return process_tx_all_packets();
         }
 
@@ -2588,7 +2735,7 @@ namespace vmux {
                 if (lt != le) {
                     tx_links_.erase(lt);
                     ppp::telemetry::Count("mux.turbo.syn", 1);
-                    return underlyin_sent(turbo_link, packet, packet_length, posted_ac);
+                    return underlyin_sent(turbo_link, packet, packet_length, completion);
                 }
             }
             // fall through to the normal path when no free turbo link is available.
@@ -2610,15 +2757,24 @@ namespace vmux {
                 const uint32_t cid = peek_connection_id(packet, packet_length);
                 bool throttle = tx_data_frames_ >= tx_queue_high_water_;
                 if (throttle) {
-                    enqueue_flow_tx(cid, tx_packet{ packet, packet_length, posted_ac });
+                    enqueue_flow_tx(cid, tx_packet{ packet, packet_length, completion });
                 }
                 else {
-                    enqueue_flow_tx(cid, tx_packet{ packet, packet_length, nullptr });
-                    if (NULLPTR != posted_ac) {
-                        vmux_post_exec(context_, strand_,
-                            [posted_ac]() noexcept {
-                                posted_ac(true);
-                            });
+                    enqueue_flow_tx(cid, tx_packet{ packet, packet_length, tx_completion_ptr() });
+                    if (NULLPTR != completion) {
+                        // Early-ack through the tracked completion so a concurrent
+                        // session close still resolves it exactly once; when the
+                        // executor is already stopped, fail it inline instead of
+                        // dropping the waiter.
+                        std::shared_ptr<vmux_net> self = weak_from_this().lock();
+                        bool fired = NULLPTR != self &&
+                            vmux_post_exec(context_, strand_,
+                                [self, completion]() noexcept {
+                                    self->finish_tx_completion(completion, true);
+                                });
+                        if (!fired) {
+                            finish_tx_completion(completion, false);
+                        }
                     }
                 }
 
@@ -2628,7 +2784,7 @@ namespace vmux {
 
         {
             const uint32_t cid = peek_connection_id(packet, packet_length);
-            enqueue_flow_tx(cid, tx_packet{ packet, packet_length, posted_ac });
+            enqueue_flow_tx(cid, tx_packet{ packet, packet_length, completion });
         }
         return process_tx_all_packets();
     }
@@ -2672,7 +2828,7 @@ namespace vmux {
             vmux_linklayer_ptr linklayer = *chosen;
             tx_links_.erase(chosen);
 
-            if (!underlyin_sent(linklayer, nexting_packet.buffer, nexting_packet.length, nexting_packet.ac)) {
+            if (!underlyin_sent(linklayer, nexting_packet.buffer, nexting_packet.length, nexting_packet.completion)) {
                 drr_requeue_front(std::move(nexting_packet));
                 if (tx_links_.empty()) {
                     return true;
@@ -2841,7 +2997,7 @@ namespace vmux {
             vmux_linklayer_ptr linklayer = *link_tail;
             tx_links_.erase(link_tail);
 
-            if (!underlyin_sent(linklayer, nexting_packet.buffer, nexting_packet.length, nexting_packet.ac)) {
+            if (!underlyin_sent(linklayer, nexting_packet.buffer, nexting_packet.length, nexting_packet.completion)) {
                 drr_requeue_front(std::move(nexting_packet));
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                 return false;
@@ -2869,7 +3025,7 @@ namespace vmux {
             tx_packet nexting_packet = *packet_tail;
             tx_ctrl_queue_.erase(packet_tail);
 
-            if (!underlyin_sent(linklayer, nexting_packet.buffer, nexting_packet.length, nexting_packet.ac)) {
+            if (!underlyin_sent(linklayer, nexting_packet.buffer, nexting_packet.length, nexting_packet.completion)) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                 return false;
             }
@@ -3019,7 +3175,7 @@ namespace vmux {
             }
 
             if (NULLPTR != cb && !cb()) {
-                remove_linklayer(linklayer);
+                remove_linklayer_locked(linklayer);
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                 return false;
             }
@@ -3028,7 +3184,7 @@ namespace vmux {
             if (base_.server_or_client_) {
                 connection_id = allocate_linklayer_id(linklayer);
                 if (connection_id == 0) {
-                    remove_linklayer(linklayer);
+                    remove_linklayer_locked(linklayer);
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionQuotaExceeded);
                     return false;
                 }
@@ -3073,7 +3229,7 @@ namespace vmux {
                         });
                 };
             if (!ppp::coroutines::YieldContext::Spawn(BufferAllocator.get(), *connection_context, connection_strand.get(), process)) {
-                remove_linklayer(linklayer);
+                remove_linklayer_locked(linklayer);
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineSpawnFailed);
                 return false;
             }
@@ -3149,74 +3305,90 @@ namespace vmux {
      * @brief Begins retiring the least-recently-active carrier link at runtime (C-B4).
      */
     bool vmux_net::retire_linklayer_runtime() noexcept {
-        SynchronizationObjectScope __SCOPE__(syncobj_);
-        if (base_.disposed_.load(std::memory_order_acquire) || !base_.established_) {
-            return false;
-        }
-
-        // Never shrink below the base (--tun-mux): the base pool must always stand.
-        // Count links that are not already retiring.
-        size_t live = 0;
-        for (const vmux_linklayer_ptr& l : rx_links_) {
-            if (NULLPTR != l && !l->drain_.retiring()) {
-                live++;
-            }
-        }
-
-        if (live <= status_.max_connections) {
-            return false;
-        }
-
-        // Pick the least-recently-active non-retiring link (the weakest contributor
-        // to the competition pool by our recency proxy).
-        vmux_linklayer_ptr victim;
-        uint64_t oldest = 0;
-        for (const vmux_linklayer_ptr& l : rx_links_) {
-            if (NULLPTR == l || l->drain_.retiring()) {
-                continue;
+        vmux_linklayer_vector reaped;
+        {
+            SynchronizationObjectScope __SCOPE__(syncobj_);
+            if (base_.disposed_.load(std::memory_order_acquire) || !base_.established_) {
+                return false;
             }
 
-            if (NULLPTR == victim || l->last_active_ <= oldest) {
-                victim = l;
-                oldest = l->last_active_;
+            // Never shrink below the base (--tun-mux): the base pool must always stand.
+            // Count links that are not already retiring.
+            size_t live = 0;
+            for (const vmux_linklayer_ptr& l : rx_links_) {
+                if (NULLPTR != l && !l->drain_.retiring()) {
+                    live++;
+                }
             }
-        }
 
-        if (NULLPTR == victim) {
-            return false;
-        }
-
-        victim->drain_.BeginRetire();
-        refresh_runtime_active_links();
-
-        // Stop sending new frames on the victim: remove it from the free-link list.
-        // (If it is currently busy it is not in tx_links_; its completion sees
-        // retiring_ and will not re-credit it.)
-        for (vmux_linklayer_list::iterator it = tx_links_.begin(); it != tx_links_.end(); ++it) {
-            if (*it == victim) {
-                tx_links_.erase(it);
-                break;
+            if (live <= status_.max_connections) {
+                return false;
             }
+
+            // Pick the least-recently-active non-retiring link (the weakest contributor
+            // to the competition pool by our recency proxy).
+            vmux_linklayer_ptr victim;
+            uint64_t oldest = 0;
+            for (const vmux_linklayer_ptr& l : rx_links_) {
+                if (NULLPTR == l || l->drain_.retiring()) {
+                    continue;
+                }
+
+                if (NULLPTR == victim || l->last_active_ <= oldest) {
+                    victim = l;
+                    oldest = l->last_active_;
+                }
+            }
+
+            if (NULLPTR == victim) {
+                return false;
+            }
+
+            victim->drain_.BeginRetire();
+            refresh_runtime_active_links();
+
+            // Stop sending new frames on the victim: remove it from the free-link list.
+            // (If it is currently busy it is not in tx_links_; its completion sees
+            // retiring_ and will not re-credit it.)
+            for (vmux_linklayer_list::iterator it = tx_links_.begin(); it != tx_links_.end(); ++it) {
+                if (*it == victim) {
+                    tx_links_.erase(it);
+                    break;
+                }
+            }
+
+            ppp::telemetry::Count("mux.link.retire.begin", 1);
+            ppp::telemetry::Log(Level::kInfo, "mux", "link retiring (runtime shrink), inflight=%d", (int)victim->drain_.inflight());
+
+            // If it already has no in-flight writes, reap immediately. Reaped
+            // transports are disposed after the lock is released (no I/O under syncobj_).
+            reap_retired_linklayers_locked(reaped);
         }
 
-        ppp::telemetry::Count("mux.link.retire.begin", 1);
-        ppp::telemetry::Log(Level::kInfo, "mux", "link retiring (runtime shrink), inflight=%d", (int)victim->drain_.inflight());
-
-        // If it already has no in-flight writes, reap immediately.
-        reap_retired_linklayers();
+        for (vmux_linklayer_ptr& linklayer : reaped) {
+            if (NULLPTR != linklayer && NULLPTR != linklayer->connection) {
+                linklayer->connection->Dispose();
+            }
+            ppp::telemetry::Count("mux.link.retire.done", 1);
+            ppp::telemetry::Log(Level::kInfo, "mux", "link retired (runtime shrink), links=%d", (int)rx_links_.size());
+        }
         return true;
     }
 
     /**
-     * @brief Disposes carrier links that finished retiring (inflight_ == 0).
+     * @brief Collects carrier links that finished retiring (inflight_ == 0); caller holds syncobj_.
      */
-    void vmux_net::reap_retired_linklayers() noexcept {
+    void vmux_net::reap_retired_linklayers_locked(vmux_linklayer_vector& reaped) noexcept {
+        // Container ops only: reaped transports are disposed by the caller after
+        // the lock is released (no I/O under syncobj_).
+        bool erased_any = false;
         for (vmux_linklayer_vector::iterator it = rx_links_.begin(); it != rx_links_.end();) {
             vmux_linklayer_ptr linklayer = *it;
             if (NULLPTR != linklayer && linklayer->drain_.reapable()) {
                 it = rx_links_.erase(it);
+                erased_any = true;
 
-                // Ensure it is not left in the free-link list, then dispose its transport.
+                // Ensure it is not left in the free-link list.
                 for (vmux_linklayer_list::iterator t = tx_links_.begin(); t != tx_links_.end();) {
                     if (*t == linklayer) {
                         t = tx_links_.erase(t);
@@ -3226,17 +3398,34 @@ namespace vmux {
                     }
                 }
 
-                if (NULLPTR != linklayer->connection) {
-                    linklayer->connection->Dispose();
-                }
-
-                ppp::telemetry::Count("mux.link.retire.done", 1);
-                ppp::telemetry::Log(Level::kInfo, "mux", "link retired (runtime shrink), links=%d", (int)rx_links_.size());
-                refresh_runtime_active_links();
+                reaped.emplace_back(linklayer);
             }
             else {
                 ++it;
             }
+        }
+
+        if (erased_any) {
+            refresh_runtime_active_links();
+        }
+    }
+
+    /**
+     * @brief Disposes carrier links that finished retiring (inflight_ == 0).
+     */
+    void vmux_net::reap_retired_linklayers() noexcept {
+        vmux_linklayer_vector reaped;
+        {
+            SynchronizationObjectScope __SCOPE__(syncobj_);
+            reap_retired_linklayers_locked(reaped);
+        }
+
+        for (vmux_linklayer_ptr& linklayer : reaped) {
+            if (NULLPTR != linklayer && NULLPTR != linklayer->connection) {
+                linklayer->connection->Dispose();
+            }
+            ppp::telemetry::Count("mux.link.retire.done", 1);
+            ppp::telemetry::Log(Level::kInfo, "mux", "link retired (runtime shrink), links=%d", (int)rx_links_.size());
         }
     }
 
@@ -3547,8 +3736,8 @@ namespace vmux {
         }
 
         // Stamp the most-recent-inbound tick used by turbo's approximate
-        // best-link selection (recency, not RTT). Strand-affine: called from
-        // the vmux strand on every inbound frame.
+        // best-link selection (recency, not RTT). Atomic: written by the vmux
+        // strand on every inbound frame and by the carrier forwarding coroutine.
         linklayer->last_active_ = now_tick();
 
         IMuxTransportPtr& connection = linklayer->connection;

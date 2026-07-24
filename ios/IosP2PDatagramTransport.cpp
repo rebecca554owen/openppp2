@@ -2,6 +2,7 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstring>
 #include <mutex>
 #include <vector>
@@ -124,16 +125,20 @@ namespace ppp {
                         std::lock_guard<std::mutex> lock(receive_state_->mutex);
                         receive_state_->callback = callback;
                     }
-                    bool started = false;
+                    // Create the handle under the lock, but invoke
+                    // provider_.start without holding it: the provider may
+                    // deliver callbacks that re-enter this transport.
+                    void* handle = nullptr;
                     {
                         std::lock_guard<std::mutex> lock(handle_mutex_);
                         if (!receive_state_->closed.load(std::memory_order_acquire) &&
                             !handle_) {
                             handle_ = provider_.create(
                                 ProviderReceive, receive_state_.get(), user_data_);
-                            started = handle_ && provider_.start(handle_) != 0;
+                            handle = handle_;
                         }
                     }
+                    const bool started = handle && provider_.start(handle) != 0;
                     if (!started) {
                         Close();
                         return false;
@@ -165,13 +170,30 @@ namespace ppp {
                         address_size = static_cast<int>(bytes.size());
                         std::memcpy(address.data(), bytes.data(), bytes.size());
                     }
-                    std::lock_guard<std::mutex> lock(handle_mutex_);
-                    if (receive_state_->closed.load(std::memory_order_acquire) ||
-                        !handle_) {
-                        return false;
+                    // Register the in-flight send under the lock, then invoke
+                    // the provider without holding it (the provider may
+                    // synchronously re-enter this transport).  Close() drains
+                    // sends_in_flight_ before closing the handle, so the raw
+                    // pointer stays valid for the whole call.
+                    void* handle = nullptr;
+                    {
+                        std::lock_guard<std::mutex> lock(handle_mutex_);
+                        if (receive_state_->closed.load(std::memory_order_acquire) ||
+                            !handle_) {
+                            return false;
+                        }
+                        handle = handle_;
+                        ++sends_in_flight_;
                     }
-                    return provider_.send(handle_, address.data(), address_size,
-                        endpoint.port(), packet, packet_size) != 0;
+                    const int sent = provider_.send(handle, address.data(),
+                        address_size, endpoint.port(), packet, packet_size);
+                    {
+                        std::lock_guard<std::mutex> lock(handle_mutex_);
+                        if (--sends_in_flight_ == 0) {
+                            sends_drained_.notify_all();
+                        }
+                    }
+                    return sent != 0;
                 }
 
                 void Close() noexcept override {
@@ -181,9 +203,13 @@ namespace ppp {
                     }
                     void* handle = nullptr;
                     {
-                        std::lock_guard<std::mutex> lock(handle_mutex_);
+                        std::unique_lock<std::mutex> lock(handle_mutex_);
                         handle = handle_;
                         handle_ = nullptr;
+                        // Close must not run while a provider send is still
+                        // executing (use-after-close); wait for the drain.
+                        sends_drained_.wait(lock,
+                            [this]() noexcept { return sends_in_flight_ == 0; });
                     }
                     if (handle) {
                         provider_.close(handle);
@@ -196,7 +222,9 @@ namespace ppp {
                 openppp2_ios_p2p_datagram_provider provider_;
                 void* user_data_ = nullptr;
                 void* handle_ = nullptr;
+                int sends_in_flight_ = 0;
                 std::mutex handle_mutex_;
+                std::condition_variable sends_drained_;
                 std::shared_ptr<IosProviderReceiveState> receive_state_;
             };
 

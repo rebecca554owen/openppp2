@@ -68,7 +68,10 @@ namespace ppp {
                         const std::shared_ptr<ppp::net::packet::UdpFrame>& frame,
                         const std::shared_ptr<ppp::net::packet::BufferSegment>& messages) noexcept override;
 
-                    std::shared_ptr<ppp::dns::DnsResolver> GetResolver() const noexcept { return dns_resolver_; }
+                    std::shared_ptr<ppp::dns::DnsResolver> GetResolver() const noexcept {
+                        std::lock_guard<std::mutex> scope(syncobj_);
+                        return dns_resolver_;
+                    }
 
                     const RuleMap* RuleTables() const noexcept { return dns_ruless_; }
 
@@ -86,6 +89,9 @@ namespace ppp {
                     std::shared_ptr<ppp::dns::DnsUdpFlowRegistry> udp_flow_registry_;
                     std::shared_ptr<FakeIpPool> fake_ip_pool_ = make_shared_object<FakeIpPool>();
                     RuleMap dns_ruless_[3];
+                    /** @brief Serializes Close()/Open() against HandleQuery/OnSessionInfo/LoadRules
+                    for configuration_, dns_resolver_, and dns_ruless_ (fake_ip_pool_ stays atomic). */
+                    mutable std::mutex syncobj_;
                 };
 
             }

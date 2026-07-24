@@ -2425,7 +2425,7 @@ namespace ppp {
                 }
 
 
-                tap->PacketInput =
+                tap->SetPacketInput(
                     [self = shared_from_this()](ppp::tap::ITap* sender, ppp::tap::ITap::PacketInputEventArgs& e) noexcept -> bool {
                         if (NULLPTR == sender || NULLPTR == e.Packet || e.PacketLength < ppp::ipv6::IPv6_HEADER_MIN_SIZE) {
                             return false;
@@ -2437,7 +2437,7 @@ namespace ppp {
                         }
 
                         return switcher->ReceiveIPv6TransitPacket(reinterpret_cast<Byte*>(e.Packet), e.PacketLength);
-                    };
+                    });
 
                 if (!OpenIPv6TransitSsmtIfNeed(tap)) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitTapOpenFailed);

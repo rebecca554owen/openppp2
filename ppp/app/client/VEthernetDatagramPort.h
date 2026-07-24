@@ -34,6 +34,8 @@
  * the GNU General Public License v3.0 (GPL-3.0).
  */
 
+#include <atomic>
+
 #include <ppp/threading/Executors.h>
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/transmissions/ITransmission.h>
@@ -256,13 +258,13 @@ namespace ppp {
             private:
 
             private:
-                struct {
-                    bool                                                disposed_ : 1; ///< True when Dispose() has been called.
-                    bool                                                onlydns_  : 1; ///< True when only DNS traffic has been seen.
-                    bool                                                sendto_   : 1; ///< True once the first SendTo() call succeeds.
-                    bool                                                finalize_ : 5; ///< Non-zero after MarkFinalize() is called.
-                    UInt64                                              timeout_  = 0; ///< Absolute tick-count expiry timestamp.
-                };
+                // Lifecycle state is shared with the manager GC thread (IsPortAging) and the
+                // Dispose/Finalize path, so every field below is individually atomic.
+                std::atomic<bool>                                       disposed_{false}; ///< True when Dispose() has been called.
+                std::atomic<bool>                                       onlydns_{false};  ///< True when only DNS traffic has been seen.
+                std::atomic<bool>                                       sendto_{false};   ///< True once the first SendTo() call succeeds.
+                std::atomic<bool>                                       finalize_{false}; ///< Non-zero after MarkFinalize() is called.
+                std::atomic<UInt64>                                     timeout_{0};      ///< Absolute tick-count expiry timestamp.
                 /** @brief Guards disposal flag and Android message queue. */
                 SynchronizedObject                                      syncobj_;
                 /** @brief IO context for all async operations. */

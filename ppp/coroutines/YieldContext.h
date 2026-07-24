@@ -81,9 +81,14 @@ namespace ppp
          * pair of `fcontext_t` handles (`callee_` / `caller_`) that represent the
          * bidirectional jump targets between the coroutine body and the Asio event loop.
          *
-         * The atomic state flag `s_` is used to serialise concurrent `Resume()` and
-         * `Suspend()` calls with `compare_exchange_strong(memory_order_acq_rel)`, which
-         * prevents double-resume races common in async completion pipelines.
+         * The state flag `s_` is guarded by `syncobj_` and serialises concurrent
+         * `Resume()` / `Suspend()` calls.  A wakeup (`Resume()` / `R()`) that arrives
+         * while the coroutine is still running, or while it is in the middle of its
+         * suspend handoff, is latched into `wakeup_pending_` instead of being dropped;
+         * the next `Suspend()` consumes the latch and returns without blocking.  This
+         * makes the completion-before-suspend interleaving impossible to lose when the
+         * owning `io_context` is executed by more than one `run()` thread.  The mutex
+         * is never held across a `jump_fcontext` call.
          *
          * @warning Never construct directly — use the `Spawn` static factory methods.
          */
@@ -268,14 +273,22 @@ namespace ppp
             static void                                                         Handle(boost::context::detail::transfer_t t) noexcept;
 
             /**
-             * @brief Validates state and atomically transitions the suspend flag.
-             * @return true when the transition was accepted and the context switch was made.
-             * @throws May propagate exceptions from handler code in debug builds.
+             * @brief Publishes the fully-suspended state after the coroutine jumped out.
+             * @return true  when the coroutine was parked (`STATUS_SUSPEND`); the caller
+             *               must return to the event loop.
+             * @return false when a latched wakeup was consumed instead; the caller must
+             *               immediately re-enter the coroutine (the suspend must not block).
+             * @note  Must be called without holding `syncobj_`; the lock is taken internally.
              */
-            bool                                                                Switch() noexcept(false);
+            bool                                                                Switch() noexcept;
 
             /**
              * @brief Stores the inbound transfer and completes the switch step.
+             * @details When the coroutine completed (`t.data` is null) the context is
+             *          marked `STATUS_COMPLETED` and released.  Otherwise the coroutine
+             *          park point is stored and `Switch()` publishes the suspended state;
+             *          while a latched wakeup remains outstanding the coroutine is
+             *          re-entered immediately until it parks with no wakeup pending.
              * @param t Transfer structure from `jump_fcontext`.
              * @param y Pointer to the owning `YieldContext`; used to update `caller_`.
              * @return true on success.
@@ -384,8 +397,12 @@ namespace ppp
             ~YieldContext() noexcept;
 
         private:
-            /** @brief Atomic coroutine state flag; 0 = idle, non-zero = suspended/active. */
+            /** @brief Coroutine state flag (`STATUS_*`); written under `syncobj_`, read lock-free by `S()`. */
             std::atomic<int>                                                    s_          = 0;
+            /** @brief Guards `s_` / `wakeup_pending_` transitions; never held across `jump_fcontext`. */
+            std::mutex                                                          syncobj_;
+            /** @brief Latched wakeup consumed by the next `Suspend()` (completion-before-suspend). */
+            bool                                                                wakeup_pending_ = false;
             /** @brief Stored callee (coroutine) context handle; updated on each switch. */
             std::atomic<boost::context::detail::fcontext_t>                     callee_     = NULLPTR;
             /** @brief Stored caller (event loop) context handle; updated on each switch. */

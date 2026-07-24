@@ -251,8 +251,13 @@ namespace ppp
             /** @brief Number of SSMT worker executor threads currently running. */
             int                                                             ssmt_     = 0;
 #if defined(_LINUX)
-            /** @brief Desired Linux TAP multi-queue (MQ) SSMT mode. */
-            bool                                                            ssmt_mq_                = false;
+            /**
+             * @brief Desired Linux TAP multi-queue (MQ) SSMT mode.
+             * @note  Written inside syncobj_ in SsmtMQ(); read lock-free from ForkAllSsmt().
+             *        Must be std::atomic<bool> to prevent a data race between the writer
+             *        and the concurrent lock-free reader.
+             */
+            std::atomic<bool>                                               ssmt_mq_                = { false };
 #endif
             /**
              * @brief Signals that MQ mode has taken effect.
@@ -275,10 +280,16 @@ namespace ppp
             std::shared_ptr<VNetstack>                                      netstack_;
             /** @brief Asio context shared with the virtual stack and packet pipeline. */
             std::shared_ptr<boost::asio::io_context>                        context_;
-            /** @brief Periodic timer driving OnTick()/OnUpdate() callbacks. */
+            /**
+             * @brief Periodic timer driving OnTick()/OnUpdate() callbacks.
+             * @note  Accessed exclusively via std::atomic_load / std::atomic_store /
+             *        std::atomic_exchange free functions (C++17 pattern): StopTimeout()
+             *        exchanges it from the finalizer thread while the timer callback
+             *        re-arms it through NextTimeout() on an IO worker thread.
+             */
             std::shared_ptr<ppp::threading::Timer>                          timeout_;
             /** @brief Millisecond timestamp of the last OnTick() invocation. */
-            uint64_t                                                        lasttickts_ = 0;
+            std::atomic<uint64_t>                                           lasttickts_ = { 0 };
         };
     }
 }

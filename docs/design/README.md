@@ -12,7 +12,7 @@
 Design documents describe behavior before implementation and remain status-bound evidence. Stable behavior moves
 to paired reference documentation once verified. The Chinese desktop Client design notes below are likewise
 status-bound and deliberately do not imply English stable-reference peers. Worktree-specific plans and specifications
-are indexed separately as [working records](../superpowers/README.md); they are not current-behavior or
+are intentionally not indexed in this repository snapshot; they are not current-behavior or
 stable-reference claims.
 
 - [P2P direct-channel protocol](p2p-direct-channel/protocol.md)

@@ -64,6 +64,8 @@ namespace ppp
         private:
             std::atomic<bool>       opened_;
             PacketOutputEventHandler output_;
+            /** @brief Serialises output_ assignment/clear/copy (SetPacketOutput vs Dispose vs Output). */
+            mutable std::mutex      output_mutex_;
             mutable std::mutex      p2p_factory_mutex_;
             std::shared_ptr<ppp::p2p::IP2PDatagramTransportFactory> p2p_factory_;
         };

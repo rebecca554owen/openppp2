@@ -230,7 +230,7 @@ Guardian routes are **Experimental**. When authentication is enabled, normal `/a
 | Streaming | `GET /api/v1/sse/logs/{name}`, `GET /api/v1/sse/events` |
 | UI | `GET /` catch-all static file server; no SPA history fallback |
 
-Source truth is `go/guardian/api/router.go`, `middleware.go`, handler files, and `go/guardian/webui/src/lib/api.js`.
+Source truth is `go/guardian/api/router.go`, `go/guardian/api/middleware.go`, handler files, and `go/guardian/webui/src/lib/api.js`.
 
 Guardian config and instance state are written as JSON with mode `0600`; profiles and backups are ordinary files with mode `0644`; the registered-binary map is in memory and is rebuilt through discovery after restart.
 
@@ -336,7 +336,7 @@ Creating a supported native SDK would require a deliberately small installed hea
 | `build_windows.bat` | Windows x86/x64/ARM64 Ninja builds | **Stable developer interface** | Environment/toolchain discovery is machine-dependent |
 | `android/CMakeLists.txt`, build scripts | Four Android `libopenppp2.so` ABIs | **Internal build interface** | Hard-coded third-party defaults; no JNI export check |
 | `ios/CMakeLists.txt` | `libopenppp2_ios.a` | **Experimental build interface** | Not built by current Actions |
-| `cd go && go test ./ppp/... && go build .`; `cd go/guardian && go test ./... && go build .` | Separate manager and Guardian module checks | **Stable developer interface** | Guardian handler coverage is sparse; build `./cmd/tui` separately when needed |
+| `cd go && go test ./ppp/... && go build .`; `cd go/guardian && go test ./... && go build .` | Separate manager and Guardian module checks | **Stable developer interface** | Guardian handler coverage is sparse; build `go/guardian/cmd/tui` separately when needed |
 | `flutter test`; `cd ios/App && swift test` | Android Flutter/Dart tests; separate iOS Swift logic tests | **Stable developer interface** | No PR device test for Android VPN lifecycle |
 | `cd desktop/client && npm test && npm run build` | Desktop Client frontend tests/build | **Experimental developer interface** | Tauri shell packaging/signing not gated |
 | `scripts/run-cpp-tests.sh` | Standalone C++ CTest suite | **Stable developer interface** | Full platform networking still needs integration tests |

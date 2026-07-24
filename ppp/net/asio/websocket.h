@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <mutex>
 
 /**
@@ -126,6 +127,24 @@ namespace ppp {
                 AsioWebSocket                                                   websocket_;
                 IPEndPoint                                                      localEP_;
                 IPEndPoint                                                      remoteEP_;
+
+                /**
+                 * @brief One queued asynchronous write; the payload is owned by the queue
+                 *        until its completion fires.
+                 */
+                struct AsynchronousWriteContext {
+                    std::shared_ptr<Byte>                                       buffer;
+                    int                                                         length = 0;
+                    AsynchronousWriteCallback                                   cb;
+                };
+                /** @brief Serializes write queue state across IO worker threads. */
+                std::mutex                                                      write_mutex_;
+                /** @brief True while a Beast async_write is outstanding (at most one at a time). */
+                bool                                                            write_in_progress_ = false;
+                /** @brief FIFO of pending writes drained one-by-one after each completion. */
+                std::deque<AsynchronousWriteContext>                            write_queue_;
+                /** @brief Starts the next queued write; never overlaps a write already in flight. */
+                void                                                            DoWriteAsync() noexcept;
             };
 
             /**
@@ -265,6 +284,24 @@ namespace ppp {
                 std::mutex                                                      exporter_mutex_;
                 std::atomic_bool                                                tls_handshake_complete_{false};
                 std::shared_ptr<SslvWebSocket>                                  ssl_websocket_;
+
+                /**
+                 * @brief One queued asynchronous write; the payload is owned by the queue
+                 *        until its completion fires.
+                 */
+                struct AsynchronousWriteContext {
+                    std::shared_ptr<Byte>                                       buffer;
+                    int                                                         length = 0;
+                    AsynchronousWriteCallback                                   cb;
+                };
+                /** @brief Serializes write queue state across IO worker threads. */
+                std::mutex                                                      write_mutex_;
+                /** @brief True while a Beast async_write is outstanding (at most one at a time). */
+                bool                                                            write_in_progress_ = false;
+                /** @brief FIFO of pending writes drained one-by-one after each completion. */
+                std::deque<AsynchronousWriteContext>                            write_queue_;
+                /** @brief Starts the next queued write; never overlaps a write already in flight. */
+                void                                                            DoWriteAsync() noexcept;
                 IPEndPoint                                                      localEP_;
                 IPEndPoint                                                      remoteEP_;
                 std::shared_ptr<boost::asio::ip::tcp::socket>                   socket_native_;

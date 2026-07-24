@@ -1803,15 +1803,35 @@ namespace ppp {
                     return false;
                 }
 
+                const Byte version = packet[0] >> 4;
+                app::protocol::VirtualEthernetIPv6PathMtuAddress assigned_ipv6;
+                bool has_assigned_ipv6 = false;
+                if (version == ppp::ipv6::IPv6_VERSION) {
+                    const auto information_extensions = switcher_->GetInformationExtensions();
+                    if (information_extensions.AssignedIPv6Address.is_v6()) {
+                        assigned_ipv6 = app::protocol::VirtualEthernetIPv6PathMtuAddress::Create(
+                            information_extensions.AssignedIPv6Address.to_v6());
+                        has_assigned_ipv6 = true;
+                    }
+                }
+
                 AppConfigurationPtr configuration = GetConfiguration();
                 if (NULLPTR != configuration && !configuration->client.peer_gateway_forward) {
-                    int ip_length = packet_length;
-                    ppp::net::native::ip_hdr* ip = ppp::net::native::ip_hdr::Parse(packet, ip_length);
-                    if (NULLPTR == ip) {
-                        return false;
+                    bool destination_matches = false;
+                    if (version == ppp::net::native::ip_hdr::IP_VER) {
+                        int ip_length = packet_length;
+                        ppp::net::native::ip_hdr* ip = ppp::net::native::ip_hdr::Parse(packet, ip_length);
+                        destination_matches = NULLPTR != ip && ip->dest == tap->IPAddress;
+                    }
+                    elif(version == ppp::ipv6::IPv6_VERSION) {
+                        boost::asio::ip::address_v6 source;
+                        boost::asio::ip::address_v6 destination;
+                        destination_matches = has_assigned_ipv6 &&
+                            ppp::ipv6::TryParsePacket(packet, packet_length, source, destination) &&
+                            app::protocol::VirtualEthernetIPv6PathMtuAddress::Create(destination) == assigned_ipv6;
                     }
 
-                    if (ip->dest != tap->IPAddress) {
+                    if (!destination_matches) {
                         ppp::telemetry::Log(Level::kInfo, "client_exchanger", "peer gateway forward rejected");
                         ppp::telemetry::Count("client.peer_gateway_forward.rejected", 1);
                         return false;
@@ -1825,6 +1845,15 @@ namespace ppp {
                     if (app::protocol::GetVirtualEthernetPathMtuCache().Observe(
                             error.QuotedDestination, error.NextHopMtu, Executors::GetTickCount())) {
                         ppp::telemetry::Count("pmtu.cache_update", 1);
+                    }
+                }
+
+                app::protocol::IcmpIPv6PathMtuError ipv6_error;
+                if (has_assigned_ipv6 && app::protocol::TryParseIcmpIPv6PathMtuError(packet, packet_length, ipv6_error) &&
+                    ipv6_error.OuterDestination == assigned_ipv6 && ipv6_error.QuotedSource == assigned_ipv6) {
+                    if (app::protocol::GetVirtualEthernetIPv6PathMtuCache().Observe(
+                            ipv6_error.QuotedDestination, ipv6_error.NextHopMtu, Executors::GetTickCount())) {
+                        ppp::telemetry::Count("pmtu.ipv6_cache_update", 1);
                     }
                 }
 
