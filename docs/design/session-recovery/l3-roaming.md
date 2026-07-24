@@ -1,7 +1,7 @@
 # Authenticated L3 Session Roaming
 > Status: Implemented
 > Type: Design
-> Last verified: 82643dc
+> Last verified: 93d9cae
 > Parent index: [Design documents](../README.md)
 
 ## Scope
@@ -47,15 +47,13 @@ Control messages use the existing trailing JSON object of an INFO frame. No `Pac
     "session-id": "00112233445566778899aabbccddeeff",
     "generation": "7",
     "client-nonce": "<64 lower-case hex characters>",
-    "server-nonce": "<64 lower-case hex characters>",
     "candidate-binding": "<64 lower-case hex characters>",
-    "proof": "<64 lower-case hex characters>",
-    "reason": ""
+    "proof": "<64 lower-case hex characters>"
   }
 }
 ```
 
-Actions are `offer`, `accepted`, `resume-request`, `generation-sync`, `resume-accept`, `resume-confirm`, `resume-committed`, and `reject`. Required fields depend on the action; values have exact JSON types. `version` is exactly 1, `capabilities` is an unsigned 32-bit mask with only advertised v1 bits accepted, `session-id` is exactly 16 bytes encoded as 32 lowercase hexadecimal characters, `generation` is an unsigned 64-bit integer represented as a decimal string to avoid JSON integer-width ambiguity, each nonce/binding/proof is exactly 32 bytes encoded as 64 lowercase hexadecimal characters, and `reason` is a bounded non-secret token. Unknown fields inside the object are ignored for additive compatibility, but known fields with the wrong type, length, range, or action combination reject the whole control.
+Actions are `offer`, `accepted`, `resume-request`, `generation-sync`, `resume-accept`, `resume-confirm`, `resume-committed`, and `reject`. Required fields depend on the action; values have exact JSON types. `resume-request` and `generation-sync` omit `server-nonce` and authenticate an all-zero server nonce in the fixed-width transcript; the accept, confirm, and committed actions carry both nonces. `version` is exactly 1, `capabilities` is an unsigned 32-bit mask with only advertised v1 bits accepted, `session-id` is exactly 16 bytes encoded as 32 lowercase hexadecimal characters, `generation` is an unsigned 64-bit integer represented as a decimal string to avoid JSON integer-width ambiguity, each nonce/binding/proof is exactly 32 bytes encoded as 64 lowercase hexadecimal characters, and `reason` is a bounded non-secret token used only by reject controls. Unknown fields inside the object are ignored for additive compatibility, but known fields with the wrong type, length, range, or action combination reject the whole control.
 
 During the pre-data proof phase, the strict single-frame reader accepts only one complete INFO frame. Any ordinary data-plane action, malformed frame, or trailing bytes fails the candidate carrier.
 
@@ -101,24 +99,24 @@ After a server restart, an armed client sends `resume-request` to a fresh exchan
 
 ```text
 client                                      server exchanger owner
-  resume-request(generation, nonces,
+  resume-request(generation, client nonce,
                  candidate binding, proof) ->
                                             reserve only
-                                        <-  resume-accept(proof)
+                                        <-  resume-accept(both nonces, proof)
   verify; send resume-confirm(proof)       ->
-                                            commit reservation
-                                            attach/publish carrier
+                                            validate and prepare commit
+                                        <-  resume-committed(next generation, proof)
                                             generation := generation + 1
-                                        <-  resume-committed(new generation, proof)
+                                            attach/publish carrier
   verify committed generation
   only now publish transmission and start ordinary Run
 ```
 
-`resume-accept` reserves the suspended exchanger but does not attach or publish the carrier. The exchanger owns `BeginResume`, `CommitResume`, and `CancelResume`; only a matching reservation can commit. Any read/write/verification/deadline failure cancels the reservation and leaves the prior suspended state recoverable until its grace deadline. Commit attaches the candidate, publishes it, increments generation exactly once, and invalidates the reservation.
+`resume-accept` reserves the suspended exchanger but does not attach or publish the carrier. `VirtualEthernetSwitcher::Establish` delegates the existing-session control sequence to `RunSessionResumeEstablishTransaction`; its narrow adapter invokes exchanger-owned `BeginResume`, commit preparation, `PublishCommittedResume`, and `CancelResume`. Only a matching reservation can commit. The transaction sends the prepared committed control before publication. Only after that send succeeds does `PublishCommittedResume` increment generation exactly once, attach the candidate, publish UDP/echo/statistics state, and invalidate the reservation. Any earlier read/write/verification/deadline failure cancels the reservation and leaves the prior suspended state recoverable until its grace deadline; a committed-frame write failure explicitly preserves the suspended session, and an unpublished prepared commit receives only a bounded publish grace.
 
-A stale generation never attaches. The server returns an authenticated `generation-sync` containing the current generation. The client creates a new nonce and retries at most once. A missing session, expired session, lost retained root, or process restart returns authenticated rejection where possible; the client clears old retained state and performs a fresh handshake on that same carrier. It does not repeatedly probe arbitrary session IDs.
+A stale generation never attaches. The server returns an authenticated `generation-sync` containing the current generation. The client creates a new nonce and retries at most once. When the session is genuinely missing after a process restart, the newly created exchanger enters the fresh path and first sends an offer-bearing or plain INFO frame; a subsequently arriving `ResumeRequest` probe can be consumed by that fresh path without requiring a bare rejection, so the client clears stale retained state and continues fresh on the same carrier. If an exchanger with that session ID still exists but authentication or resume state validation fails, the candidate fails closed and cannot replace it; cleanup/grace expiry must remove the old exchanger before a fresh connection can claim that ID.
 
-The client completes proof before `EchoLanToRemoteExchanger`, publishing `transmission_`, mapping setup, static echo, or ordinary `Run`. The server never calls resume attachment based only on session ID and never exposes the replacement carrier before confirmation commits.
+The client completes proof before `EchoLanToRemoteExchanger`, publishing `transmission_`, mapping setup, static echo, or ordinary `Run`. The server never calls resume attachment based only on session ID and never publishes the replacement carrier before the committed control frame has been sent.
 
 ## Secret lifecycle
 
@@ -147,6 +145,16 @@ Emit counters without identifiers, nonces, bindings, or proofs:
 - fresh fallback after missing retained session.
 
 Existing link telemetry continues to distinguish clean close, carrier failure, suspend, and terminal expiry. Logs may include action, bounded reason code, generation, and aggregate latency; they must not include session secrets or authentication byte strings.
+
+## Verification scope
+
+`session_resume_wss_fault_injection_test` runs the production TLS exporter, resume authenticator, INFO-extension JSON codec, and recovery-state commit fence over a real loopback TCP/TLS/WebSocket connection. It covers a successful request/accept/confirm/committed exchange, write-before-publish ordering, exactly-once generation advancement, dropped controls, duplicate requests, old-carrier replay, stale-generation synchronization, concurrent reservations, grace-boundary expiry, and rejection before the application handshake gate. The test intentionally disables client certificate verification: it verifies exporter equality and the post-handshake application gate, not public-key-infrastructure identity validation.
+
+`session_resume_production_wss_lifecycle_test` additionally instantiates a real loopback pair of production `ISslWebsocketTransmission` objects. It verifies that the exporter fails closed before the OpenPPP application handshake, is available on both strands after the complete TLS/WebSocket/application handshake, derives equal retained roots and per-carrier bindings, carries payloads through production application framing and I/O, produces a different binding on a replacement carrier, rejects an old-carrier binding in the new proof transcript, and fails closed again after disposal. Its test configuration intentionally uses plaintext application framing inside authenticated TLS, so this test does not claim coverage of the optional `Ciphertext` payload mode.
+
+`session_resume_establish_transaction_wss_test` executes the same production transaction coordinator called by `VirtualEthernetSwitcher::Establish` over replacement production `ISslWebsocketTransmission` pairs and strict INFO controls. It covers successful carrier publication, one-shot authenticated generation synchronization, bad-confirm cancellation, old-carrier binding rejection, committed-frame write failure that preserves the suspended session, and fatal publish failure. The state adapter uses the production authenticator and `SessionRecoveryState`; it asserts generation `1 -> 2`, write-before-publish ordering, carrier-only replacement, and unchanged logical-session, assigned-IP/NAT, and UDP-manager identity sentinels.
+
+These are in-process integration tests, not complete executable or network-namespace end-to-end tests. The newest test enters the production coordinator used by `VirtualEthernetSwitcher::Establish`, but it does not instantiate the full switcher/exchanger/TUN graph, create TUN interfaces, move packets through real NAT/UDP managers, switch physical network interfaces, cross a process boundary, or prove recovery of existing TCP/proxy/FRP byte streams. Those data-plane flows remain outside the v1 roaming guarantee and reconnect at their own layer.
 
 ## Rollout and rollback
 

@@ -16,6 +16,7 @@
 #include <ppp/io/File.h>
 #include <ppp/app/protocol/VirtualEthernetTcpMss.h>
 #include <ppp/app/protocol/SessionResumeAuthenticator.h>
+#include <ppp/app/server/SessionResumeEstablishTransaction.h>
 #include <ppp/app/server/SessionResumeFallbackDecision.h>
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/net/packet/UdpFrame.h>
@@ -1808,20 +1809,27 @@ namespace ppp {
                     ppp::app::protocol::SessionResumePendingAttempt candidate_material;
                     ppp::app::protocol::SessionResumeCandidateBinding& candidate =
                         candidate_material.fields.candidate_binding;
-                    if (!configuration_->server.session_resume.enabled ||
-                        !DeriveSessionResumeCandidateBinding(
-                            transmission, session_id, candidate)) {
-                        /**
-                         * Resume is unavailable for this carrier (disabled, or the
-                         * transport cannot bind a resume candidate).  Dropping the
-                         * new connection would strand the client until the stale
-                         * session's grace expires; replace the stale exchanger and
-                         * continue with a fresh establish on this carrier instead
-                         * (pre-resume behavior).  A resume probe the client may
-                         * already have sent is consumed silently by the fresh
-                         * exchanger's run loop.
-                         */
+                    const bool resume_enabled =
+                        configuration_->server.session_resume.enabled;
+                    const bool candidate_available = resume_enabled &&
+                        DeriveSessionResumeCandidateBinding(
+                            transmission, session_id, candidate);
+                    if (!candidate_available) {
+                        const SessionResumeFallbackReason fallback_reason = resume_enabled
+                            ? SessionResumeFallbackReason::IneligibleCarrier
+                            : SessionResumeFallbackReason::ResumeDisabled;
                         ppp::telemetry::Count("server.session.resume_rejected", 1);
+                        if (DecideSessionResumeFallback(fallback_reason) !=
+                            SessionResumeFallbackDecision::Fresh) {
+                            return false;
+                        }
+
+                        /**
+                         * Session resume is explicitly disabled, so preserve the
+                         * pre-resume behavior and replace the existing exchanger.
+                         * When resume is enabled, an ineligible carrier must never
+                         * reach this path or claim the session by ID alone.
+                         */
                         VirtualEthernetExchangerPtr removed = DeleteExchanger(channel.get());
                         if (NULLPTR == removed) {
                             return false;
@@ -1836,7 +1844,7 @@ namespace ppp {
 
                         ppp::telemetry::Gauge("server.active_sessions", (int64_t)exchangers_.size());
                         ppp::telemetry::Count("server.session.accepted", 1);
-                        ppp::telemetry::Log(Level::kInfo, "server", "session accepted (fresh, resume unavailable)");
+                        ppp::telemetry::Log(Level::kInfo, "server", "session accepted (fresh, resume disabled)");
                     }
 
                     auto read_resume_control = [&](ppp::app::protocol::SessionResumeControl& control) noexcept {
@@ -1870,60 +1878,91 @@ namespace ppp {
                     bool resumed = false;
                     SessionResumeFallbackReason fallback_reason =
                         SessionResumeFallbackReason::OtherResumeFailure;
-                    for (int attempt = 0; !fresh && attempt < 2; ++attempt) {
-                        ppp::app::protocol::SessionResumeControl request;
-                        if (!read_resume_control(request)) {
-                            fallback_reason = SessionResumeFallbackReason::LookupMiss;
-                            break;
-                        }
-
-                        std::uint64_t reservation_token = 0;
-                        ppp::app::protocol::SessionResumeControl response;
-                        VirtualEthernetExchanger::ResumeBeginStatus status =
-                            channel->BeginResume(transmission, request, candidate,
-                                Executors::GetTickCount(), reservation_token, response);
-                        if (status == VirtualEthernetExchanger::ResumeBeginStatus::Rejected) {
-                            fallback_reason = SessionResumeFallbackReason::BeginRejected;
-                            break;
-                        }
-                        if (status == VirtualEthernetExchanger::ResumeBeginStatus::GenerationSync) {
-                            if (!send_resume_control(response) || attempt != 0) {
-                                break;
+                    if (!fresh) {
+                        using ReadResumeControl = decltype(read_resume_control);
+                        using SendResumeControl = decltype(send_resume_control);
+                        class EstablishResumeOperations final :
+                            public SessionResumeEstablishOperations {
+                        public:
+                            EstablishResumeOperations(
+                                ReadResumeControl& read_control,
+                                SendResumeControl& send_control,
+                                VirtualEthernetExchangerPtr& channel,
+                                const ITransmissionPtr& transmission,
+                                const ppp::app::protocol::SessionResumeCandidateBinding& candidate) noexcept
+                                : read_control_(read_control)
+                                , send_control_(send_control)
+                                , channel_(channel)
+                                , transmission_(transmission)
+                                , candidate_(candidate) {
                             }
-                            continue;
-                        }
 
-                        if (!send_resume_control(response)) {
-                            channel->CancelResume(transmission, reservation_token);
-                            break;
-                        }
+                            bool ReadControl(Control& control) noexcept override {
+                                return read_control_(control);
+                            }
 
-                        ppp::app::protocol::SessionResumeControl confirm;
-                        if (!read_resume_control(confirm)) {
-                            channel->CancelResume(transmission, reservation_token);
-                            break;
-                        }
+                            bool SendControl(const Control& control) noexcept override {
+                                return send_control_(control);
+                            }
 
-                        ppp::app::protocol::SessionResumeControl committed;
-                        if (!channel->CommitResume(transmission, confirm, candidate,
-                                reservation_token, Executors::GetTickCount(), committed)) {
-                            channel->CancelResume(transmission, reservation_token);
-                            break;
-                        }
+                            SessionResumeTransactionBeginStatus Begin(
+                                const Control& request,
+                                std::uint64_t& reservation_token,
+                                Control& response) noexcept override {
+                                const VirtualEthernetExchanger::ResumeBeginStatus status =
+                                    channel_->BeginResume(transmission_, request,
+                                        candidate_, Executors::GetTickCount(),
+                                        reservation_token, response);
+                                if (status == VirtualEthernetExchanger::ResumeBeginStatus::Reserved) {
+                                    return SessionResumeTransactionBeginStatus::Accepted;
+                                }
+                                if (status == VirtualEthernetExchanger::ResumeBeginStatus::GenerationSync) {
+                                    return SessionResumeTransactionBeginStatus::GenerationSync;
+                                }
+                                return SessionResumeTransactionBeginStatus::Rejected;
+                            }
 
-                        if (!send_resume_control(committed)) {
-                            channel->CancelResume(transmission, reservation_token);
+                            bool Commit(const Control& confirm,
+                                std::uint64_t reservation_token,
+                                Control& committed) noexcept override {
+                                return channel_->CommitResume(transmission_, confirm,
+                                    candidate_, reservation_token,
+                                    Executors::GetTickCount(), committed);
+                            }
+
+                            bool Publish(
+                                std::uint64_t reservation_token) noexcept override {
+                                return channel_->PublishCommittedResume(transmission_,
+                                    reservation_token, Executors::GetTickCount());
+                            }
+
+                            void Cancel(
+                                std::uint64_t reservation_token) noexcept override {
+                                channel_->CancelResume(transmission_, reservation_token);
+                            }
+
+                        private:
+                            ReadResumeControl& read_control_;
+                            SendResumeControl& send_control_;
+                            VirtualEthernetExchangerPtr& channel_;
+                            const ITransmissionPtr& transmission_;
+                            const ppp::app::protocol::SessionResumeCandidateBinding& candidate_;
+                        } operations(read_resume_control, send_resume_control,
+                            channel, transmission, candidate);
+
+                        const SessionResumeTransactionResult transaction =
+                            RunSessionResumeEstablishTransaction(operations);
+                        resumed = transaction.outcome ==
+                            SessionResumeTransactionOutcome::Resumed;
+                        fallback_reason = transaction.fallback_reason;
+                        if (transaction.outcome ==
+                            SessionResumeTransactionOutcome::PreserveSuspended) {
                             return true;
                         }
-                        if (!channel->PublishCommittedResume(
-                                transmission, reservation_token,
-                                Executors::GetTickCount())) {
-                            channel->CancelResume(transmission, reservation_token);
+                        if (transaction.outcome ==
+                            SessionResumeTransactionOutcome::Fatal) {
                             return false;
                         }
-
-                        resumed = true;
-                        break;
                     }
 
                     if (!resumed && !fresh) {
