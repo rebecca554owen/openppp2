@@ -18,4 +18,3 @@ This section preserves historical material. Every entry is archived and is not c
 - [IPv6 Implementation Analysis and Fixes](IPV6_FIXES.md)
 - [VMUX Defect Ledger and Fix / Optimization Plan](MUX_DEFECTS_AND_FIXES.md)
 - [P2P Networking — Manual Validation Scenarios](P2P_MANUAL_VALIDATION.md)
-- [Historical `docs/` directory map (Chinese)](debug.md)

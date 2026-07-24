@@ -325,12 +325,15 @@ namespace ppp {
 
                 // -----------------------------------------------------------------------------
                 // DNS_RequestContext – manages a single asynchronous resolution.
-                // All operations are thread-safe relative to the owning io_context.
+                // Socket and timers are bound to a per-request strand so the receive,
+                // timeout, and merge handlers never run concurrently on multi-threaded
+                // io_context workers; the request state below needs no extra locking.
                 // -----------------------------------------------------------------------------
                 /** @brief Per-query asynchronous DNS request state machine. */
                 struct DNS_RequestContext final : public std::enable_shared_from_this<DNS_RequestContext> {
                     boost::asio::ip::udp::endpoint                                              source;
                     boost::asio::io_context&                                                    executor;
+                    boost::asio::strand<boost::asio::io_context::executor_type>                 strand;   // Request-level serialization domain
                     std::shared_ptr<boost::asio::ip::udp::socket>                               socket;
                     boost::asio::steady_timer                                                   timeout_timer;
                     std::shared_ptr<boost::asio::steady_timer>                                  merge_timer;
@@ -361,8 +364,9 @@ namespace ppp {
                      */
                     explicit DNS_RequestContext(boost::asio::io_context& context) noexcept
                         : executor(context)
-                        , timeout_timer(context) {
-                        socket = make_shared_object<boost::asio::ip::udp::socket>(context);
+                        , strand(boost::asio::make_strand(context))
+                        , timeout_timer(strand) {
+                        socket = make_shared_object<boost::asio::ip::udp::socket>(strand);
                         if (NULLPTR != socket) {
                             boost::system::error_code ec;
                             socket->open(boost::asio::ip::udp::v6(), ec);
@@ -533,7 +537,7 @@ namespace ppp {
                             {
                                 SynchronizedObjectScope lock(merge_timer_mutex);
                                 if (NULLPTR == merge_timer) {
-                                    merge_timer = make_shared_object<boost::asio::steady_timer>(executor);
+                                    merge_timer = make_shared_object<boost::asio::steady_timer>(strand);
                                     if (NULLPTR != merge_timer) {
                                         merge_timer->expires_after(Timer::DurationTime(PPP_IP_DNS_MERGE_WAIT));
                                         pending_timer = merge_timer; // capture before releasing lock
@@ -765,9 +769,9 @@ namespace ppp {
                 // -----------------------------------------------------------------------------
                 // Global configuration variables
                 // -----------------------------------------------------------------------------
-                IPEndPointVectorPtr                                                         servers;
-                bool                                                                        enabled = false;
-                int                                                                         ttl = PPP_DEFAULT_DNS_TTL;
+                IPEndPointVectorPtr                                                         servers; // Publish via std::atomic_store; read via std::atomic_load
+                std::atomic<bool>                                                           enabled{ false };
+                std::atomic<int>                                                            ttl{ PPP_DEFAULT_DNS_TTL };
 
                 // -----------------------------------------------------------------------------
                 // Initialisation function – must be called early in main().
@@ -778,10 +782,11 @@ namespace ppp {
                     ttl = PPP_DEFAULT_DNS_TTL;
 
                     auto dns_servers = make_shared_object<IPEndPointVector>();
-                    servers = dns_servers;
-
                     dns_servers->emplace_back(boost::asio::ip::udp::endpoint(StringToAddress(PPP_PREFERRED_DNS_SERVER_1, ec), PPP_DNS_SYS_PORT));
                     dns_servers->emplace_back(boost::asio::ip::udp::endpoint(StringToAddress(PPP_PREFERRED_DNS_SERVER_2, ec), PPP_DNS_SYS_PORT));
+
+                    // Publish only after the vector is fully populated; readers treat it as immutable.
+                    std::atomic_store(&servers, dns_servers);
                 }
 
                 // -----------------------------------------------------------------------------

@@ -52,7 +52,7 @@ namespace ppp {
                 actions.stop_input = [this]() noexcept {
                     owner_->TickEvent = NULLPTR;
                     if (const std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap(); tap) {
-                        tap->PacketInput = NULLPTR;
+                        tap->SetPacketInput(NULLPTR);
                     }
                     if (auto http_proxy = std::move(owner_->http_proxy_); http_proxy) {
                         http_proxy->Dispose();

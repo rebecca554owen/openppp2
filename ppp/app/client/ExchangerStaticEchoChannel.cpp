@@ -556,15 +556,22 @@ namespace ppp {
                         return false;
                     }
 
+                    if (NULLPTR == socket->receive_buffer_) {
+                        socket->receive_buffer_ = ppp::make_shared_alloc<Byte>(PPP_BUFFER_SIZE);
+                        if (NULLPTR == socket->receive_buffer_) {
+                            return false;
+                        }
+                    }
+
                     auto self = owner.shared_from_this();
                     if (std::shared_ptr<ppp::transmissions::ITransmissionQoS> qos = owner.switcher_->GetQoS(); NULLPTR != qos) {
                         return qos->BeginRead(
                             [self, &owner, &channel, socket, qos]() noexcept {
-                                socket->async_receive_from(boost::asio::buffer(owner.buffer_.get(), PPP_BUFFER_SIZE), owner.static_echo_.static_echo_source_ep_,
+                                socket->async_receive_from(boost::asio::buffer(socket->receive_buffer_.get(), PPP_BUFFER_SIZE), socket->receive_source_ep_,
                                     [self, &owner, &channel, qos, socket](const boost::system::error_code& ec, std::size_t sz) noexcept {
                                         int bytes_transferred = std::max<int>(-1, ec ? -1 : (int)sz);
                                         if (bytes_transferred > 0) {
-                                            qos->EndRead(ExchangerStaticEchoDetail::StaticEchoYieldReceiveForm(owner, channel, owner.buffer_.get(), bytes_transferred));
+                                            qos->EndRead(ExchangerStaticEchoDetail::StaticEchoYieldReceiveForm(owner, channel, socket->receive_buffer_.get(), bytes_transferred));
                                         }
 
                                         ExchangerStaticEchoDetail::StaticEchoLoopbackSocket(owner, channel, socket);
@@ -572,11 +579,11 @@ namespace ppp {
                             });
                     }
                     else {
-                        socket->async_receive_from(boost::asio::buffer(owner.buffer_.get(), PPP_BUFFER_SIZE), owner.static_echo_.static_echo_source_ep_,
+                        socket->async_receive_from(boost::asio::buffer(socket->receive_buffer_.get(), PPP_BUFFER_SIZE), socket->receive_source_ep_,
                             [self, &owner, &channel, qos, socket](const boost::system::error_code& ec, std::size_t sz) noexcept {
                                 int bytes_transferred = std::max<int>(-1, ec ? -1 : (int)sz);
                                 if (bytes_transferred > 0) {
-                                    ExchangerStaticEchoDetail::StaticEchoYieldReceiveForm(owner, channel, owner.buffer_.get(), bytes_transferred);
+                                    ExchangerStaticEchoDetail::StaticEchoYieldReceiveForm(owner, channel, socket->receive_buffer_.get(), bytes_transferred);
                                 }
 
                                 ExchangerStaticEchoDetail::StaticEchoLoopbackSocket(owner, channel, socket);

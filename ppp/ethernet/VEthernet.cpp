@@ -33,7 +33,6 @@ namespace ppp
 {
     namespace threading
     {
-        void Executors_NetstackAllocExitAwaitable() noexcept;
         bool Executors_NetstackTryExit() noexcept;
     }
 
@@ -52,7 +51,7 @@ namespace ppp
 #if !defined(_WIN32)
             ssmt_ = 0;
 #if defined(_LINUX)
-            ssmt_mq_ = false;
+            ssmt_mq_.store(false, std::memory_order_relaxed);
             ssmt_mq_to_take_effect_.store(false, std::memory_order_relaxed);
 #endif
 #endif
@@ -111,7 +110,7 @@ namespace ppp
 
             if (NULLPTR != tap)
             {
-                tap->PacketInput = NULLPTR;
+                tap->SetPacketInput(NULLPTR);
                 tap->Dispose();
             }
 
@@ -126,7 +125,7 @@ namespace ppp
          */
         void VEthernet::StopTimeout() noexcept
         {
-            std::shared_ptr<ppp::threading::Timer> timeout = std::move(timeout_);
+            std::shared_ptr<ppp::threading::Timer> timeout = std::atomic_exchange(&timeout_, std::shared_ptr<ppp::threading::Timer>());
             if (NULLPTR != timeout)
             {
                 timeout->Dispose();
@@ -386,11 +385,6 @@ namespace ppp
                     }
 
                     opened_ = lwip::netstack::open();
-                    if (opened_)
-                    {
-                        ppp::threading::Executors_NetstackAllocExitAwaitable();
-                    }
-                    
                     return opened_;
                 }
 
@@ -526,7 +520,7 @@ namespace ppp
             std::atomic_store(&netstack_, netstack);
             std::atomic_store(&fragment_, fragment);
 
-            tap->PacketInput       = TAP_PACKET_INPUT_EVENT;
+            tap->SetPacketInput(TAP_PACKET_INPUT_EVENT);
             fragment->PacketInput  = FRAGMENT_PACKET_INPUT_EVENT;
             fragment->PacketOutput = FRAGEMENT_PACKET_OUTPUT_EVENT;
 
@@ -563,10 +557,10 @@ namespace ppp
         bool VEthernet::SsmtMQ(bool* mq) noexcept
         {
             SynchronizedObjectScope scope(syncobj_);
-            bool snow = ssmt_mq_;
+            bool snow = ssmt_mq_.load(std::memory_order_acquire);
             if (NULLPTR != mq)
             {
-                ssmt_mq_ = *mq;
+                ssmt_mq_.store(*mq, std::memory_order_release);
             }
 
             return snow;
@@ -818,7 +812,7 @@ namespace ppp
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeThreadStartFailed);
                 }
 
-                if (ssmt_mq_)
+                if (ssmt_mq_.load(std::memory_order_acquire))
                 {
                     /**
                      * @brief ssmt_mq_to_take_effect_ is now std::atomic<bool>; the store
@@ -848,7 +842,7 @@ namespace ppp
                 return false;
             }
 
-            timeout_ = Timer::Timeout(context_, 10, 
+            std::atomic_store(&timeout_, Timer::Timeout(context_, 10,
                 [self, this](Timer*) noexcept
                 {
                     if (disposed_.load(std::memory_order_acquire))
@@ -857,16 +851,16 @@ namespace ppp
                     }
 
                     uint64_t now = Executors::GetTickCount();
-                    uint64_t now_seconds = now / 1000; 
-                    if (lasttickts_ != now_seconds)
+                    uint64_t now_seconds = now / 1000;
+                    if (lasttickts_.load(std::memory_order_acquire) != now_seconds)
                     {
-                        lasttickts_ = now_seconds;
+                        lasttickts_.store(now_seconds, std::memory_order_release);
                         OnTick(now);
                     }
 
                     OnUpdate(now);
                     return NextTimeout();
-                });
+                }));
             return true;
         }
 

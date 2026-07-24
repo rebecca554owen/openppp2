@@ -128,19 +128,24 @@ namespace ppp {
                     , const std::shared_ptr<ppp::net::ProtectorNetwork>& protect_network
 #endif
                 ) noexcept {
-                    configuration_ = configuration;
+                    {
+                        std::lock_guard<std::mutex> scope(syncobj_);
+                        configuration_ = configuration;
+                    }
                     if (proxy_only || NULLPTR == context || NULLPTR == configuration) {
                         return true;
                     }
 
-                    dns_resolver_ = make_shared_object<ppp::dns::DnsResolver>(*context);
-                    if (NULLPTR == dns_resolver_) {
+                    // Configure the resolver locally and publish it under the lock only once
+                    // fully initialized, so concurrent readers never observe a half-built one.
+                    std::shared_ptr<ppp::dns::DnsResolver> resolver = make_shared_object<ppp::dns::DnsResolver>(*context);
+                    if (NULLPTR == resolver) {
                         return true;
                     }
-                    dns_resolver_->SetUdpFlowRegistry(udp_flow_registry_);
+                    resolver->SetUdpFlowRegistry(udp_flow_registry_);
 
 #if defined(_ANDROID)
-                    dns_resolver_->SetProtectSocketCallback(
+                    resolver->SetProtectSocketCallback(
                         [](int handle) noexcept -> bool {
                             return ppp::android::ProtectSocketFd(handle);
                         });
@@ -153,13 +158,13 @@ namespace ppp {
                     ppp::string domestic = configuration->dns.servers.domestic;
                     ppp::string foreign = configuration->dns.servers.foreign;
                     if (!domestic.empty() || !foreign.empty()) {
-                        dns_resolver_->SetDefaultProviders(domestic, foreign);
+                        resolver->SetDefaultProviders(domestic, foreign);
                     }
 
-                    dns_resolver_->SetEcsConfig(
+                    resolver->SetEcsConfig(
                         configuration->dns.ecs.enabled,
                         configuration->dns.ecs.override_ip);
-                    dns_resolver_->SetTlsVerifyPeer(configuration->dns.tls.verify_peer);
+                    resolver->SetTlsVerifyPeer(configuration->dns.tls.verify_peer);
 
                     if (!configuration->dns.stun.candidates.empty()) {
                         ppp::vector<ppp::dns::StunCandidate> stun_cands;
@@ -180,10 +185,10 @@ namespace ppp {
                             ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "client", "DNS STUN candidate ignored: %s", cs.c_str());
                         }
                         if (!stun_cands.empty()) {
-                            dns_resolver_->SetStunCandidates(std::move(stun_cands));
+                            resolver->SetStunCandidates(std::move(stun_cands));
                         }
                         if (!stun_host_cands.empty()) {
-                            dns_resolver_->SetStunHostnameCandidates(std::move(stun_host_cands));
+                            resolver->SetStunHostnameCandidates(std::move(stun_host_cands));
                         }
                     }
 
@@ -204,6 +209,10 @@ namespace ppp {
                         }
                     }
 
+                    {
+                        std::lock_guard<std::mutex> scope(syncobj_);
+                        dns_resolver_ = std::move(resolver);
+                    }
                     return true;
                 }
 
@@ -213,6 +222,7 @@ namespace ppp {
                     if (NULLPTR != fake_ip_pool) {
                         fake_ip_pool->Clear();
                     }
+                    std::lock_guard<std::mutex> scope(syncobj_);
                     dns_resolver_.reset();
                     for (auto& table : dns_ruless_) {
                         table.clear();
@@ -223,18 +233,24 @@ namespace ppp {
                 void DnsInterceptor::OnSessionInfo(
                     const ppp::app::protocol::VirtualEthernetInformationExtensions& extensions,
                     bool allow_ipv6_response) noexcept {
-                    if (NULLPTR == dns_resolver_) {
+                    std::shared_ptr<ppp::dns::DnsResolver> resolver;
+                    {
+                        std::lock_guard<std::mutex> scope(syncobj_);
+                        resolver = dns_resolver_;
+                    }
+                    if (NULLPTR == resolver) {
                         return;
                     }
 
                     if (!extensions.ClientExitIP.is_unspecified()) {
-                        dns_resolver_->SetExitIP(extensions.ClientExitIP);
+                        resolver->SetExitIP(extensions.ClientExitIP);
                     }
 
-                    dns_resolver_->SetAllowIPv6Response(allow_ipv6_response);
+                    resolver->SetAllowIPv6Response(allow_ipv6_response);
                 }
 
                 int DnsInterceptor::LoadRules(const ppp::string& rules, bool from_file) noexcept {
+                    std::lock_guard<std::mutex> scope(syncobj_);
                     if (from_file) {
                         return Rule::LoadFile(rules, dns_ruless_[0], dns_ruless_[1], dns_ruless_[2]);
                     }
@@ -247,7 +263,16 @@ namespace ppp {
                     const ppp::function<void(uint32_t)>& add_tunnel_ip,
                     const ppp::function<void(uint32_t)>& add_nic_ip) noexcept {
 
-                    for (const auto& table : dns_ruless_) {
+                    // Snapshot the rule tables under the lock; the reachability callbacks run unlocked.
+                    RuleMap rule_tables[3];
+                    {
+                        std::lock_guard<std::mutex> scope(syncobj_);
+                        for (int i = 0; i < 3; ++i) {
+                            rule_tables[i] = dns_ruless_[i];
+                        }
+                    }
+
+                    for (const auto& table : rule_tables) {
                         DnsReachability::CollectRuleTableReachabilityIps(table, add_tunnel_ip, add_nic_ip);
                     }
 
@@ -260,8 +285,13 @@ namespace ppp {
                     const std::shared_ptr<ppp::dns::DnsUdpFlowRegistry>& registry) noexcept {
 
                     udp_flow_registry_ = registry;
-                    if (dns_resolver_) {
-                        dns_resolver_->SetUdpFlowRegistry(registry);
+                    std::shared_ptr<ppp::dns::DnsResolver> resolver;
+                    {
+                        std::lock_guard<std::mutex> scope(syncobj_);
+                        resolver = dns_resolver_;
+                    }
+                    if (resolver) {
+                        resolver->SetUdpFlowRegistry(registry);
                     }
                 }
 
@@ -292,8 +322,14 @@ namespace ppp {
                     const ppp::string& hostname,
                     const std::shared_ptr<ppp::net::packet::BufferSegment>& messages) noexcept {
 
-                    std::shared_ptr<ppp::dns::DnsResolver> resolver = dns_resolver_;
-                    if (NULLPTR == resolver || NULLPTR == configuration_ || NULLPTR == messages) {
+                    std::shared_ptr<ppp::dns::DnsResolver> resolver;
+                    std::shared_ptr<ppp::configurations::AppConfiguration> configuration;
+                    {
+                        std::lock_guard<std::mutex> scope(syncobj_);
+                        resolver = dns_resolver_;
+                        configuration = configuration_;
+                    }
+                    if (NULLPTR == resolver || NULLPTR == configuration || NULLPTR == messages) {
                         return;
                     }
 
@@ -318,7 +354,7 @@ namespace ppp {
                     case DnsRouteAction::kResolveUnmatched:
                     case DnsRouteAction::kDeferToTunnel: {
                         ppp::vector<ppp::dns::ServerEntry> foreign_entries =
-                            DnsReachability::BuildResolverEntries(configuration_->dns.servers.foreign_entries);
+                            DnsReachability::BuildResolverEntries(configuration->dns.servers.foreign_entries);
                         if (!foreign_entries.empty()) {
                             resolver->ResolveAsyncWithEntries(
                                 foreign_entries, false,
@@ -328,7 +364,7 @@ namespace ppp {
                         }
 
                         ppp::vector<ppp::dns::ServerEntry> domestic_entries =
-                            DnsReachability::BuildResolverEntries(configuration_->dns.servers.domestic_entries);
+                            DnsReachability::BuildResolverEntries(configuration->dns.servers.domestic_entries);
                         if (!domestic_entries.empty()) {
                             resolver->ResolveAsyncWithEntries(
                                 domestic_entries, true,
@@ -338,8 +374,8 @@ namespace ppp {
                         }
 
                         resolver->ResolveAsyncWithFallback(
-                            configuration_->dns.servers.foreign,
-                            configuration_->dns.servers.domestic,
+                            configuration->dns.servers.foreign,
+                            configuration->dns.servers.domestic,
                             "cloudflare",
                             static_cast<const Byte*>(messages->Buffer.get()),
                             messages->Length,
@@ -397,9 +433,19 @@ namespace ppp {
                     boost::asio::ip::address destinationIP = Ipep::ToAddress(packet->Destination);
                     ::dns::QuestionSection& qs = *m.questions.data();
 
+                    // Snapshot the shared resolver/configuration under the lock; Close() may
+                    // reset them concurrently from the teardown thread.
+                    std::shared_ptr<ppp::dns::DnsResolver> resolver;
+                    std::shared_ptr<ppp::configurations::AppConfiguration> configuration;
+                    {
+                        std::lock_guard<std::mutex> scope(syncobj_);
+                        resolver = dns_resolver_;
+                        configuration = configuration_;
+                    }
+
                     if (qs.mType == ::dns::RecordType::kAAAA &&
-                        NULLPTR != dns_resolver_ &&
-                        !dns_resolver_->IsAllowIPv6Response()) {
+                        NULLPTR != resolver &&
+                        !resolver->IsAllowIPv6Response()) {
                         ppp::vector<Byte> synthesized = ppp::dns::DnsResolver::BuildAaaaBlockedResponse(
                             static_cast<const Byte*>(messages->Buffer.get()),
                             messages->Length);
@@ -432,10 +478,10 @@ namespace ppp {
                     plan_input.qtype = ToPlanQueryType(qs.mType);
                     plan_input.destination = destinationIP;
                     plan_input.intercept_unmatched =
-                        NULLPTR != configuration_ && configuration_->dns.intercept_unmatched;
-                    plan_input.has_resolver = NULLPTR != dns_resolver_;
+                        NULLPTR != configuration && configuration->dns.intercept_unmatched;
+                    plan_input.has_resolver = NULLPTR != resolver;
                     plan_input.allow_ipv6_response =
-                        NULLPTR == dns_resolver_ || dns_resolver_->IsAllowIPv6Response();
+                        NULLPTR == resolver || resolver->IsAllowIPv6Response();
 #if !defined(_ANDROID)
                     plan_input.defer_same_destination_to_tunnel = true;
 #endif
@@ -450,12 +496,15 @@ namespace ppp {
                             DnsRedirectPlan::IsGatewayDnsServer(dest, gw, mask);
                     }
 
-                    plan_input.rule = Rule::Get(
-                        stl::transform<ppp::string>(qs.mName),
-                        dns_ruless_[0], dns_ruless_[1], dns_ruless_[2]);
+                    {
+                        std::lock_guard<std::mutex> scope(syncobj_);
+                        plan_input.rule = Rule::Get(
+                            stl::transform<ppp::string>(qs.mName),
+                            dns_ruless_[0], dns_ruless_[1], dns_ruless_[2]);
+                    }
 
                     if (plan_input.is_gateway_query) {
-                        auto& dnsServers = ppp::net::asio::vdns::servers;
+                        auto dnsServers = std::atomic_load(&ppp::net::asio::vdns::servers);
                         plan_input.gateway_upstream_available =
                             NULLPTR != dnsServers && !dnsServers->empty();
                         if (plan_input.gateway_upstream_available) {
@@ -518,7 +567,6 @@ namespace ppp {
                             use_underlying_nic);
                     };
                     dispatch_ports.resolve_unmatched = [&]() noexcept {
-                        std::shared_ptr<ppp::dns::DnsResolver> resolver = dns_resolver_;
                         auto callback =
                             [resolver, context, sourceEP, destEP, messages, packet](ppp::vector<Byte> response) noexcept {
                                 (void)resolver;
@@ -527,7 +575,7 @@ namespace ppp {
                             };
 
                         ppp::vector<ppp::dns::ServerEntry> foreign_entries =
-                            DnsReachability::BuildResolverEntries(configuration_->dns.servers.foreign_entries);
+                            DnsReachability::BuildResolverEntries(configuration->dns.servers.foreign_entries);
                         if (!foreign_entries.empty()) {
                             resolver->ResolveAsyncWithEntries(
                                 foreign_entries, false,
@@ -537,7 +585,7 @@ namespace ppp {
                         }
 
                         ppp::vector<ppp::dns::ServerEntry> domestic_entries =
-                            DnsReachability::BuildResolverEntries(configuration_->dns.servers.domestic_entries);
+                            DnsReachability::BuildResolverEntries(configuration->dns.servers.domestic_entries);
                         if (!domestic_entries.empty()) {
                             resolver->ResolveAsyncWithEntries(
                                 domestic_entries, true,
@@ -547,8 +595,8 @@ namespace ppp {
                         }
 
                         resolver->ResolveAsyncWithFallback(
-                            configuration_->dns.servers.foreign,
-                            configuration_->dns.servers.domestic,
+                            configuration->dns.servers.foreign,
+                            configuration->dns.servers.domestic,
                             "cloudflare",
                             static_cast<const Byte*>(messages->Buffer.get()),
                             messages->Length,
@@ -556,7 +604,6 @@ namespace ppp {
                         return true;
                     };
                     dispatch_ports.resolve_provider = [&](const ppp::string& provider_name, bool domestic) noexcept {
-                        std::shared_ptr<ppp::dns::DnsResolver> resolver = dns_resolver_;
                         resolver->ResolveAsync(
                             provider_name, domestic,
                             static_cast<const Byte*>(messages->Buffer.get()),

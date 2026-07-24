@@ -51,6 +51,17 @@ namespace ppp {
                     }
 
                     bool opened = false;
+
+                    /**
+                     * @brief Per-generation receive buffer and source endpoint.
+                     *
+                     * Socket rotation keeps the retired socket open for 500-1000 ms while
+                     * its in-flight receive is still outstanding; giving every socket
+                     * generation its own receive targets prevents the old and new sockets
+                     * from writing the same owner-level buffer/endpoint concurrently.
+                     */
+                    std::shared_ptr<Byte> receive_buffer_;
+                    boost::asio::ip::udp::endpoint receive_source_ep_;
                 };
 
                 static bool IsValidServerPort(int serverPort) noexcept {

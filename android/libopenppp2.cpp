@@ -1443,7 +1443,7 @@ __LIBOPENPPP2__(jboolean) Java_supersocksr_ppp_android_c_libopenppp2_set_1dns_1b
 
     ppp::net::asio::vdns::enabled = turbo;
     ppp::net::asio::vdns::ttl = ttl;
-    ppp::net::asio::vdns::servers = addresses;
+    std::atomic_store(&ppp::net::asio::vdns::servers, addresses);
     ppp::net::asio::vdns::ClearCache();
     return true;
 }

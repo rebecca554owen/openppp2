@@ -1209,7 +1209,6 @@ namespace ppp {
                     std::atomic_store(&established_pcb->sync_ack_byte_array_, std::shared_ptr<Byte>());
                     established_pcb->sync_ack_bytes_size_.store(0, std::memory_order_release);
                     std::atomic_store(&established_pcb->sync_ack_tap_driver_, std::shared_ptr<ITap>());
-                    established_pcb->sync_ack_retry_count_ = 0;
                     established_pcb->sync_ack_state_ = VNETSTACK_SYNC_ACK_STATE_CLOSED;
 
                     ppp::telemetry::Log(Level::kDebug, "vnetstack", "native client ack established nat=%u flags=0x%02x payload=%d",
@@ -2128,16 +2127,47 @@ namespace ppp {
 
         /**
          * @brief Cancels pending SYN/ACK retry timer if present.
+         *
+         * The cancel is serialized through the same strand that owns the socket and the
+         * retry timer, so it can never run concurrently with the timer handler; the
+         * retry counter is reset inside that serial domain as well.
          */
         void VNetstack::TapTcpClient::CancelSyncAckRetry() noexcept {
-            std::shared_ptr<boost::asio::steady_timer> timer = std::move(this->sync_ack_retry_timer_);
-            if (NULLPTR != timer) {
-                timer->cancel();
+            ppp::threading::Executors::StrandPtr strand = this->strand_;
+            std::shared_ptr<TapTcpClient> self = weak_from_this().lock();
+            if (NULLPTR == strand || NULLPTR == self) {
+                /**
+                 * @brief Without a strand there is no second serial domain to marshal to.
+                 *        A null self means the object is being destroyed; a pending
+                 *        async_wait always holds a reference, so no handler can be in
+                 *        flight concurrently here.
+                 */
+                std::shared_ptr<boost::asio::steady_timer> timer = std::move(this->sync_ack_retry_timer_);
+                if (NULLPTR != timer) {
+                    timer->cancel();
+                }
+
+                this->sync_ack_retry_count_ = 0;
+                return;
             }
+
+            boost::asio::post(*strand,
+                [self]() noexcept {
+                    std::shared_ptr<boost::asio::steady_timer> timer = std::move(self->sync_ack_retry_timer_);
+                    if (NULLPTR != timer) {
+                        timer->cancel();
+                    }
+
+                    self->sync_ack_retry_count_ = 0;
+                });
         }
 
         /**
          * @brief Arms SYN/ACK retransmission timer with exponential-like schedule.
+         *
+         * The timer is created on (and the arming is posted to) the same strand executor
+         * that owns the socket, so the wait handler, sync_ack_retry_timer_ and
+         * sync_ack_retry_count_ are only ever touched inside that serial domain.
          */
         void VNetstack::TapTcpClient::ScheduleSyncAckRetry(uint64_t delay_ms) noexcept {
             if (disposed_ || delay_ms == 0) {
@@ -2150,51 +2180,68 @@ namespace ppp {
             }
 
             std::shared_ptr<TapTcpClient> self = shared_from_this();
-            std::shared_ptr<boost::asio::steady_timer> timer = this->sync_ack_retry_timer_;
-            if (NULLPTR == timer) {
-                timer = make_shared_object<boost::asio::steady_timer>(*context);
-                this->sync_ack_retry_timer_ = timer;
+            ppp::threading::Executors::StrandPtr strand = this->strand_;
+
+            auto do_schedule =
+                [self, strand, context, delay_ms]() noexcept {
+                    if (self->disposed_) {
+                        return;
+                    }
+
+                    std::shared_ptr<boost::asio::steady_timer> timer = self->sync_ack_retry_timer_;
+                    if (NULLPTR == timer) {
+                        timer = strand ? make_shared_object<boost::asio::steady_timer>(*strand)
+                                       : make_shared_object<boost::asio::steady_timer>(*context);
+                        self->sync_ack_retry_timer_ = timer;
+                    }
+
+                    if (NULLPTR == timer) {
+                        return;
+                    }
+
+                    timer->expires_after(std::chrono::milliseconds(delay_ms));
+                    timer->async_wait([self](const boost::system::error_code& ec) noexcept {
+                        if (ec || self->disposed_) {
+                            return;
+                        }
+
+                        std::shared_ptr<Byte> packet = std::atomic_load(&self->sync_ack_byte_array_);
+                        std::shared_ptr<ITap> tap    = std::atomic_load(&self->sync_ack_tap_driver_);
+                        int packet_length            = self->sync_ack_bytes_size_.load(std::memory_order_acquire);
+                        if (NULLPTR == packet || NULLPTR == tap || packet_length < 1) {
+                            return;
+                        }
+
+                        if (self->sync_ack_state_.load() != VNETSTACK_SYNC_ACK_STATE_SYN_RECVD) {
+                            return;
+                        }
+
+                        /**
+                         * @brief Retry delays in milliseconds for SYN/ACK retransmission.
+                         */
+                        static constexpr uint64_t retry_delays[] = {200, 400, 800, 1200, 1600};
+
+                        int retry_index = self->sync_ack_retry_count_;
+                        if (retry_index < 0 || retry_index >= static_cast<int>(arraysizeof(retry_delays))) {
+                            return;
+                        }
+
+                        bool ok = tap->Output(packet, packet_length);
+                        self->sync_ack_retry_count_ = retry_index + 1;
+
+                        if (self->sync_ack_retry_count_ < static_cast<int>(arraysizeof(retry_delays))) {
+                            self->ScheduleSyncAckRetry(retry_delays[self->sync_ack_retry_count_]);
+                        }
+
+                    });
+                };
+
+            if (NULLPTR != strand) {
+                boost::asio::post(*strand, std::move(do_schedule));
             }
-
-            if (NULLPTR == timer) {
-                return;
+            else {
+                boost::asio::post(*context, std::move(do_schedule));
             }
-
-            timer->expires_after(std::chrono::milliseconds(delay_ms));
-            timer->async_wait([self](const boost::system::error_code& ec) noexcept {
-                if (ec || self->disposed_) {
-                    return;
-                }
-
-                std::shared_ptr<Byte> packet = std::atomic_load(&self->sync_ack_byte_array_);
-                std::shared_ptr<ITap> tap    = std::atomic_load(&self->sync_ack_tap_driver_);
-                int packet_length            = self->sync_ack_bytes_size_.load(std::memory_order_acquire);
-                if (NULLPTR == packet || NULLPTR == tap || packet_length < 1) {
-                    return;
-                }
-
-                if (self->sync_ack_state_.load() != VNETSTACK_SYNC_ACK_STATE_SYN_RECVD) {
-                    return;
-                }
-
-                /**
-                 * @brief Retry delays in milliseconds for SYN/ACK retransmission.
-                 */
-                static constexpr uint64_t retry_delays[] = {200, 400, 800, 1200, 1600};
-
-                int retry_index = self->sync_ack_retry_count_;
-                if (retry_index < 0 || retry_index >= static_cast<int>(arraysizeof(retry_delays))) {
-                    return;
-                }
-
-                bool ok = tap->Output(packet, packet_length);
-                self->sync_ack_retry_count_ = retry_index + 1;
-
-                if (self->sync_ack_retry_count_ < static_cast<int>(arraysizeof(retry_delays))) {
-                    self->ScheduleSyncAckRetry(retry_delays[self->sync_ack_retry_count_]);
-                }
-
-            });
         }
     }
 }

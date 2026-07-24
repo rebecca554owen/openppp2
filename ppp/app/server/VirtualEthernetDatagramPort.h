@@ -36,6 +36,7 @@
  */
 
 namespace ppp::configurations { class AppConfiguration; }
+#include <atomic>
 #include <ppp/threading/Executors.h>
 #include <ppp/transmissions/ITransmission.h>
 #include <ppp/app/server/udp/ServerUdpRelayHost.h>
@@ -161,24 +162,26 @@ namespace ppp {
 
             private:
                 /**
-                 * @brief Packed bitfield flags and timeout for this port.
+                 * @brief Lifecycle flags and timeout for this port.
                  *
                  * Fields:
-                 *   - disposed_ : 1  — True after Dispose() is called.
-                 *   - onlydns_  : 1  — True when all traffic through this port is DNS traffic.
-                 *   - sendto_   : 1  — True while a SendTo operation is in progress.
-                 *   - in_       : 1  — True when the port is in the inbound receive path.
-                 *   - finalize_ : 4  — Set by MarkFinalize() to signal external GC completion.
-                 *   - timeout_  : UInt64 — Absolute tick (ms) after which the port is considered aging.
+                 *   - disposed_ — True after Dispose() is called.
+                 *   - onlydns_  — True when all traffic through this port is DNS traffic.
+                 *   - sendto_   — True while a SendTo operation is in progress.
+                 *   - in_       — True when the port is in the inbound receive path.
+                 *   - finalize_ — Set by MarkFinalize() to signal external GC completion.
+                 *   - timeout_  — Absolute tick (ms) after which the port is considered aging.
+                 *
+                 * @details Every field is individually atomic because IsPortAging() is read by the
+                 *          manager GC thread while SendTo()/Finalize()/receive completions run on
+                 *          the owning io_context thread.
                  */
-                struct {
-                    bool                                                disposed_ : 1;  ///< True after Dispose() is called.
-                    bool                                                onlydns_  : 1;  ///< True when all datagrams are DNS traffic.
-                    bool                                                sendto_   : 1;  ///< True while a SendTo is in flight.
-                    bool                                                in_       : 1;  ///< True when port is in the inbound receive path.
-                    bool                                                finalize_ : 4;  ///< Set by MarkFinalize() from the GC sweep.
-                    UInt64                                              timeout_  = 0;  ///< Absolute expiry tick in milliseconds.
-                };
+                std::atomic<bool>                                       disposed_{false};  ///< True after Dispose() is called.
+                std::atomic<bool>                                       onlydns_{false};   ///< True when all datagrams are DNS traffic.
+                std::atomic<bool>                                       sendto_{false};    ///< True while a SendTo is in flight.
+                std::atomic<bool>                                       in_{false};        ///< True when port is in the inbound receive path.
+                std::atomic<bool>                                       finalize_{false};  ///< Set by MarkFinalize() from the GC sweep.
+                std::atomic<UInt64>                                     timeout_{0};       ///< Absolute expiry tick in milliseconds.
                 std::shared_ptr<boost::asio::io_context>                context_;           ///< io_context for async operations.
                 boost::asio::ip::udp::socket                            socket_;            ///< UDP socket for outbound/inbound traffic.
                 ppp::app::server::udp::ServerUdpRelayHostPorts          ports_;             ///< Injected exchanger/switcher capabilities (P2-e-2).

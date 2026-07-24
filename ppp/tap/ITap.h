@@ -66,8 +66,10 @@ namespace ppp
             uint32_t                                                        SubmaskAddress = ppp::net::IPEndPoint::AnyAddress;
 
         public:
-            /** @brief Inbound packet event handler; invoked for every packet received from the device. */
-            PacketInputEventHandler                                         PacketInput;
+            /** @brief Thread-safe setter for the inbound packet event handler (invoked for every packet received from the device). */
+            void                                                            SetPacketInput(const PacketInputEventHandler& handler) noexcept;
+            /** @brief Thread-safe snapshot of the inbound packet event handler. */
+            PacketInputEventHandler                                         GetPacketInput() noexcept;
             /** @brief Shared swap-based memory allocator for packet buffer lifetimes. */
             std::shared_ptr<ppp::threading::BufferswapAllocator>            BufferAllocator;
 
@@ -179,7 +181,7 @@ namespace ppp
             /**
              * @brief Returns underlying asynchronous stream descriptor.
              */
-            std::shared_ptr<boost::asio::posix::stream_descriptor>          GetStream() noexcept { return _stream; }
+            std::shared_ptr<boost::asio::posix::stream_descriptor>          GetStream() noexcept;
             /**
              * @brief Returns reusable packet buffer used for read operations.
              */
@@ -200,6 +202,11 @@ namespace ppp
              * @brief Closes stream and clears packet callback.
              */
             void                                                            Finalize() noexcept;
+            /**
+             * @brief Drains the outbound write queue one async_write at a time.
+             * @note  Always runs on _strand; re-entered from each write completion.
+             */
+            void                                                            DrainWriteQueue() noexcept;
 
         private:
             /** @brief Platform device identifier string (e.g., GUID on Windows, "tun0" on Linux). */
@@ -219,6 +226,20 @@ namespace ppp
             std::shared_ptr<boost::asio::posix::stream_descriptor>          _stream;
             /** @brief Shared io_context used for all asynchronous read/write operations. */
             std::shared_ptr<boost::asio::io_context>                        _context;
+            /** @brief Strand serialising read re-arm, write drain and Finalize on this adapter. */
+            std::shared_ptr<boost::asio::strand<boost::asio::io_context::executor_type>> _strand;
+            /** @brief Guards _stream publication (constructor/Finalize vs I/O paths). */
+            std::mutex                                                      _stream_mutex;
+            /** @brief Guards packet_input_ assignment/clear/copy. */
+            std::mutex                                                      packet_input_mutex_;
+            /** @brief Inbound packet event handler (was a public field; access via Set/GetPacketInput). */
+            PacketInputEventHandler                                         packet_input_;
+            /** @brief Guards _write_queue/_write_in_progress. */
+            std::mutex                                                      _write_mutex;
+            /** @brief Outbound packets waiting for the stream to become writable (one async_write at a time). */
+            std::deque<std::pair<std::shared_ptr<Byte>, int>>               _write_queue;
+            /** @brief True while an async_write is outstanding on _stream. */
+            bool                                                            _write_in_progress = false;
             /** @brief Reusable buffer for single-copy packet reads.
              *
              * Sized to ITap::Mtu + 4 to accommodate the 4-byte address-family

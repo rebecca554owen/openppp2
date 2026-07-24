@@ -12,7 +12,7 @@ Go 1.22 and Node 22 are already in the base image.
 
 | Service | Lint / Test / Build / Run | Notes |
 |---------|---------------------------|-------|
-| C++ standalone unit tests (`tests/cpp`) | lint: `bash tools/check_include_boundaries.sh`, `bash tools/check_vcxproj_sources.sh`; test/build: `scripts/run-cpp-tests.sh` (cmake+ninja+clang → `ctest`) | Does **not** need the full native dep tree. See `docs/TESTING.md`. |
+| C++ standalone unit tests (`tests/cpp`) | lint: `bash tools/check_include_boundaries.sh`, `bash tools/check_vcxproj_sources.sh`; test/build: `scripts/run-cpp-tests.sh` (cmake+ninja+clang → `ctest`); TSan: `scripts/run-cpp-tsan-tests.sh` (separate `build/test-tsan` dir, `ENABLE_TSAN=ON`, mutually exclusive with ASan/UBSan) | Does **not** need the full native dep tree. See `docs/TESTING.md`. |
 | Go Guardian (`go/guardian`) | test: `go test ./...`; build: `go build .`; run: `./guardian --config=guardian.json` | HTTP API + embedded Web UI on `127.0.0.1:18080`. |
 
 ### Non-obvious caveats
@@ -47,7 +47,7 @@ Go 1.22 and Node 22 are already in the base image.
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **openppp2** (40830 symbols, 80333 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **openppp2** (42217 symbols, 83981 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

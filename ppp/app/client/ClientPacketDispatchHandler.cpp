@@ -132,7 +132,12 @@ namespace ppp {
                     return false;
                 }
 
-                app::protocol::ClampTcpMssIPv6(packet, packet_length, app::protocol::ComputeDynamicTcpMss(false, app::protocol::kVEthernetTunnelOverhead));
+                const app::protocol::VirtualEthernetIPv6PathMtuAddress path_mtu_destination =
+                    app::protocol::VirtualEthernetIPv6PathMtuAddress::Create(destination);
+                const int path_mtu = app::protocol::GetVirtualEthernetIPv6PathMtuCache().Lookup(
+                    path_mtu_destination, Executors::GetTickCount());
+                app::protocol::ClampTcpMssIPv6(packet, packet_length,
+                    app::protocol::ComputeDynamicTcpMss(false, app::protocol::kVEthernetTunnelOverhead, path_mtu));
 
                 std::shared_ptr<VEthernetExchanger> exchanger = owner_->exchanger_;
                 if (NULLPTR == exchanger) {

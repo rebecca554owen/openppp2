@@ -304,10 +304,10 @@ namespace ppp {
 #if defined(_WIN32)
                 std::shared_ptr<ppp::net::QoSS>                                 qoss_;          ///< Windows QoS socket handle for traffic prioritization.
 #endif
-                struct {
-                    bool                                                        disposed_  : 1; ///< True after `Finalize()` has been invoked; guards idempotent cleanup.
-                    bool                                                        connected_ : 7; ///< True once a successful handshake has been completed.
-                };
+                // Cross-executor lifecycle state: written by Finalize() on the lifecycle strand,
+                // read by read/write completions running on the socket executor.
+                std::atomic<bool>                                               disposed_ = { false }; ///< True after `Finalize()` has been invoked; guards idempotent cleanup.
+                std::atomic<bool>                                               connected_ = { false }; ///< True once a successful handshake has been completed.
                 AppConfigurationPtr                                             configuration_; ///< Runtime configuration shared with the owning context.
                 ContextPtr                                                      context_;       ///< Asio IO context driving async operations for this connection.
                 StrandPtr                                                       strand_;        ///< Serialized executor guaranteeing single-threaded callback ordering.

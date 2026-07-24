@@ -47,7 +47,7 @@ C++ 类中的 `public` 只表示仓库代码可以访问，并不等于外部 AP
 |---|---|---|---|---|---|
 | `ppp` 可执行文件 | `--mode=server`（默认）、`client` 或 `proxy`；加载配置并启动 `PppApplication` | 完整隧道通常需要 root/Administrator；桌面 proxy 模式不操作 TUN/路由 | **当前**可执行行为 | `main.cpp`、`ppp/app/ApplicationConfig.cpp`、`ppp/app/PppApplication.*` | 没有正式退出码表 |
 | Go 管理器 | 可选配置文件参数（默认 `appsettings.json`）；仅在 `database.master` 和 Redis 配置完整时进入托管模式，否则运行本地独立订阅管理器 | 长期运行 HTTP/WebSocket 服务；独立模式状态在本地持久化 | **当前**仓库内服务 | `go/main.go`、`go/ppp/Configuration.go`、`go/ppp/ManagedServer.go` | 停机和数据迁移契约未集中定义 |
-| Guardian | 管理二进制、配置档、实例、日志和系统服务 | 可能需要主机管理权限 | **实验** | `go/guardian/main.go`、`api/router.go` | 主机路径访问和多数 handler 缺少直接 API 测试 |
+| Guardian | 管理二进制、配置档、实例、日志和系统服务 | 可能需要主机管理权限 | **实验** | `go/guardian/main.go`、`go/guardian/api/router.go` | 主机路径访问和多数 handler 缺少直接 API 测试 |
 | 桌面 Client 应用 | Tauri 壳运行本地 UI，管理订阅/手动节点，并拉起 `ppp --mode=client` | 完整隧道需要子进程 `ppp` 的 Administrator/root；UI 本身在用户会话运行 | **实验**内置 companion | `desktop/client/`、`desktop/client/src-tauri/src/desktop.rs` | 不是第三方 SDK；IPC 面可能无通知变更 |
 | Android `VpnService` | 内置 Flutter UI 在 `:vpn` 进程启动/停止 native 隧道 | 需要用户批准 VPN 和前台服务；Service 不导出 | **内部**内置 companion | `PppVpnService.kt` | release 布局的跨进程设备覆盖仍是缺口，见缺口总表 |
 | iOS Packet Tunnel 扩展 | App 保存 `NETunnelProviderManager` 配置并启动扩展 | 需要 Network Extension entitlement 和用户授权 | **内部**内置 companion | `ios/App/OpenPPP2/VPNController.swift`、`PacketTunnelProvider.swift` | Actions 未真实构建扩展和原生库集成 |
@@ -230,7 +230,7 @@ Guardian 路由整体为**实验**。启用鉴权时，普通 `/api/*` 路由要
 | 流式 | `GET /api/v1/sse/logs/{name}`、`GET /api/v1/sse/events` |
 | UI | `GET /` catch-all 静态文件服务；没有 SPA history fallback |
 
-源码依据：`go/guardian/api/router.go`、`middleware.go`、各 handler 和 `webui/src/lib/api.js`。
+源码依据：`go/guardian/api/router.go`、`go/guardian/api/middleware.go`、各 handler 和 `webui/src/lib/api.js`。
 
 Guardian 配置和实例状态以 `0600` 模式写入 JSON；profiles/backups 是 `0644` 普通文件；binary 注册表仅在内存中，重启后依赖重新发现。
 
@@ -336,7 +336,7 @@ TUI 依赖 TTY，并受 `PPP_NO_TUI` 控制。命令在 ConsoleUI 生命周期�
 | `build_windows.bat` | Windows x86/x64/ARM64 Ninja 构建 | **稳定开发接口** | 环境/toolchain 发现依赖机器 |
 | `android/CMakeLists.txt`、构建脚本 | 四个 Android `libopenppp2.so` ABI | **内部构建接口** | 硬编码第三方默认路径；无 JNI export 检查 |
 | `ios/CMakeLists.txt` | `libopenppp2_ios.a` | **实验构建接口** | 当前 Actions 不构建 |
-| `cd go && go test ./ppp/... && go build .`；`cd go/guardian && go test ./... && go build .` | 独立的 manager 与 Guardian module 检查 | **稳定开发接口** | Guardian handler 覆盖稀疏；需要时另行构建 `./cmd/tui` |
+| `cd go && go test ./ppp/... && go build .`；`cd go/guardian && go test ./... && go build .` | 独立的 manager 与 Guardian module 检查 | **稳定开发接口** | Guardian handler 覆盖稀疏；需要时另行构建 `go/guardian/cmd/tui` |
 | `flutter test`；`cd ios/App && swift test` | Android Flutter/Dart 测试；独立 iOS Swift 逻辑测试 | **稳定开发接口** | PR 不跑 Android VPN 生命周期设备测试 |
 | `cd desktop/client && npm test && npm run build` | 桌面 Client 前端测试/构建 | **实验开发接口** | Tauri 壳打包/签名未纳入门禁 |
 | `scripts/run-cpp-tests.sh` | 独立 C++ CTest | **稳定开发接口** | 完整平台网络仍需集成测试 |

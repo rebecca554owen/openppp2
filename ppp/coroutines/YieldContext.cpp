@@ -18,6 +18,8 @@ namespace ppp
         static constexpr int STATUS_SUSPEND    = 2;
         /** @brief State: coroutine is entering resume transition. */
         static constexpr int STATUS_RESUMING   = -1;
+        /** @brief State: coroutine handler returned; the context is being reclaimed. */
+        static constexpr int STATUS_COMPLETED  = 3;
 
         /**
          * @brief Constructs a coroutine context and allocates stack memory.
@@ -55,40 +57,76 @@ namespace ppp
         /** @brief Suspends execution and switches back to caller context. */
         bool YieldContext::Suspend() noexcept
         {
-            int L = STATUS_RESUMED;
-            if (s_.compare_exchange_strong(L, STATUS_SUSPENDING))
+            YieldContext* y = this;
             {
-                YieldContext* y = this;
-                y->caller_.exchange(
-                    boost::context::detail::jump_fcontext(
-                        y->caller_.exchange(NULLPTR), y).fctx);
+                std::lock_guard<std::mutex> scope(y->syncobj_);
+                if (y->wakeup_pending_)
+                {
+                    /**
+                     * @brief A completion was latched before this suspend could park
+                     *        (completion-before-suspend); consume it without blocking.
+                     */
+                    y->wakeup_pending_ = false;
+                    return true;
+                }
 
-                L = STATUS_RESUMING;
-                return y->s_.compare_exchange_strong(L, STATUS_RESUMED);
+                if (y->s_.load() != STATUS_RESUMED)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
+                    return false;
+                }
+
+                y->s_.store(STATUS_SUSPENDING);
             }
-            else
+
+            /** @brief The mutex is released before jumping; never hold it across fcontext switches. */
+            y->caller_.exchange(
+                boost::context::detail::jump_fcontext(
+                    y->caller_.exchange(NULLPTR), y).fctx);
+
             {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
-                return false;
+                /** @brief The resumer published STATUS_RESUMING before jumping back in. */
+                std::lock_guard<std::mutex> scope(y->syncobj_);
+                y->s_.store(STATUS_RESUMED);
             }
+
+            return true;
         }
 
         /** @brief Resumes execution from suspended coroutine context. */
         bool YieldContext::Resume() noexcept
         {
-            int L = STATUS_SUSPEND;
-            if (s_.compare_exchange_strong(L, STATUS_RESUMING))
+            YieldContext* y = this;
             {
-                YieldContext* y = this;
-                return Switch(
-                    boost::context::detail::jump_fcontext(
-                        y->callee_.exchange(NULLPTR), y), y);
+                std::lock_guard<std::mutex> scope(y->syncobj_);
+                int status = y->s_.load();
+                if (status == STATUS_SUSPEND)
+                {
+                    y->s_.store(STATUS_RESUMING);
+                }
+                else if (status == STATUS_RESUMED || status == STATUS_SUSPENDING)
+                {
+                    /**
+                     * @brief The coroutine has not published its park point yet (it is
+                     *        still running, or is in the middle of the suspend handoff).
+                     *        Latch the wakeup so the pending Suspend() consumes it;
+                     *        dropping it here permanently hangs the coroutine when the
+                     *        io_context is driven by more than one run() thread.
+                     */
+                    y->wakeup_pending_ = true;
+                    return true;
+                }
+                else
+                {
+                    /** @brief STATUS_RESUMING (duplicate wakeup) or STATUS_COMPLETED. */
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
+                    return false;
+                }
             }
-            else
-            {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
-                return false;
-            }
+
+            return Switch(
+                boost::context::detail::jump_fcontext(
+                    y->callee_.exchange(NULLPTR), y), y);
         }
 
         /**
@@ -124,20 +162,35 @@ namespace ppp
         }
 
         /**
-         * @brief Finalizes suspend transition by atomically updating state.
-         * @throw std::runtime_error Thrown when state machine is corrupted.
+         * @brief Publishes the suspended state, or consumes a wakeup that raced the
+         *        suspend handoff and requests immediate re-entry.
          */
-        bool YieldContext::Switch() noexcept(false)
+        bool YieldContext::Switch() noexcept
         {
-            int L = STATUS_SUSPENDING;
-            if (s_.compare_exchange_strong(L, STATUS_SUSPEND))
+            YieldContext* y = this;
+            std::lock_guard<std::mutex> scope(y->syncobj_);
+
+            if (y->s_.load() != STATUS_SUSPENDING)
             {
+                /** @brief Defensive: the suspend handoff is single-threaded, so this is unreachable. */
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return true;
             }
 
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
-            
-            throw std::runtime_error("The internal atomic state used for the yield_context switch was corrupted..");
+            if (y->wakeup_pending_)
+            {
+                /**
+                 * @brief A wakeup raced the suspend handoff; consume it and tell the
+                 *        caller to re-enter the coroutine immediately so the suspend
+                 *        never blocks.
+                 */
+                y->wakeup_pending_ = false;
+                y->s_.store(STATUS_RESUMING);
+                return false;
+            }
+
+            y->s_.store(STATUS_SUSPEND);
+            return true;
         }
 
         /**
@@ -145,16 +198,44 @@ namespace ppp
          */
         bool YieldContext::Switch(const boost::context::detail::transfer_t& t, YieldContext* y) noexcept
         {
-            if (t.data)
+            if (!t.data)
             {
-                y->callee_.exchange(t.fctx);
-                return y->Switch();
-            }
-            else
-            {
+                /** @brief Coroutine handler returned; mark completed and reclaim. */
+                {
+                    std::lock_guard<std::mutex> scope(y->syncobj_);
+                    y->s_.store(STATUS_COMPLETED);
+                }
+
                 YieldContext::Release(y);
                 return true;
             }
+
+            y->callee_.exchange(t.fctx);
+            while (!y->Switch())
+            {
+                /**
+                 * @brief A wakeup was latched while the coroutine was parking; re-enter
+                 *        it immediately so the suspend is never allowed to block.
+                 */
+                boost::context::detail::transfer_t r =
+                    boost::context::detail::jump_fcontext(
+                        y->callee_.exchange(NULLPTR), y);
+
+                if (!r.data)
+                {
+                    {
+                        std::lock_guard<std::mutex> scope(y->syncobj_);
+                        y->s_.store(STATUS_COMPLETED);
+                    }
+
+                    YieldContext::Release(y);
+                    return true;
+                }
+
+                y->callee_.exchange(r.fctx);
+            }
+
+            return true;
         }
 
         /**
@@ -252,10 +333,11 @@ namespace ppp
         }
 
         /**
-         * @brief Posts a resume request to the strand.
-         * @note Removed infinite retry loop - if Resume() fails, it indicates the coroutine
-         *       is not in SUSPEND state (already completed or corrupted), retrying will not help.
-         *       Caller must handle failure cases appropriately.
+         * @brief Posts a resume request to the strand or context.
+         * @note Resume() latches the wakeup when the coroutine has not finished parking
+         *       yet, so a completion racing Suspend() is consumed by that Suspend()
+         *       instead of being dropped.  Resume() only fails on a duplicate wakeup
+         *       (STATUS_RESUMING) or after the coroutine has completed.
          */
         bool YieldContext::R() noexcept
         {

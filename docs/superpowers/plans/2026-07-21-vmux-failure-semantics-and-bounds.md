@@ -8,7 +8,7 @@
 > **Audience:** Maintainers investigating the recorded VMUX design and implementation sequence.
 > **Status:** Historical worktree-specific execution record; not a current implementation contract.
 > **Last verified against:** Saved `fix/vmux-failure-semantics-bounds` plan record, 2026-07-21; historical boundary reviewed 2026-07-22.
-> **Parent index:** [Working Plan and Specification Records](../README.md)
+> **Parent index:** [Working Plan and Specification Records](../../archive/plans/README.md)
 
 > **Verification warning:** This plan names an isolated worktree and records packages, source paths, test results, and completion states as of that record. Confirm the current checkout and rerun applicable tests before relying on any implementation claim.
 

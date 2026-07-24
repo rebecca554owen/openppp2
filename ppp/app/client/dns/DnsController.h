@@ -17,7 +17,9 @@ namespace ppp::net { class ProtectorNetwork; }
 
 namespace ppp::app::client::dns {
 
-class DnsController final {
+// Used through std::shared_ptr so async resolver callbacks can hold a weak reference
+// to the controller and bail out once it has been destroyed (see HandleQuery).
+class DnsController final : public std::enable_shared_from_this<DnsController> {
 public:
     DnsController(
         std::unique_ptr<IDnsPolicy> policy,

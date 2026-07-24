@@ -5,7 +5,7 @@
 >
 > **Purpose:** Navigate the source-backed architecture of the native `ppp` runtime.
 > **Audience:** Contributors, operators, and reviewers.
-> **Current documentation:** Pages in this index describe the current `openppp2/` tree unless a page explicitly says otherwise.
+> **Current documentation:** Pages in this index describe the current repository source tree unless a page explicitly says otherwise.
 > **Parent index:** [Documentation](../README.md) · **Chinese:** [架构](README_CN.md)
 
 Start with [System Architecture](ARCHITECTURE.md) for the process and component map, then follow the path that matches the question:

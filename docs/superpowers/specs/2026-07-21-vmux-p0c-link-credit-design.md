@@ -8,7 +8,7 @@
 > **Audience:** Maintainers reviewing the recorded VMUX design decision.
 > **Status:** Accepted working specification; not a current release contract.
 > **Last verified against:** Saved `fix/vmux-failure-semantics-bounds` worktree record, 2026-07-21; boundary reviewed 2026-07-22.
-> **Parent index:** [Working Plan and Specification Records](../README.md) · **Archived copy:** [historical design evidence](../../archive/designs/2026-07-21-vmux-p0c-link-credit-design.md)
+> **Parent index:** [Working Plan and Specification Records](../../archive/designs/README.md) · **Archived copy:** [historical design evidence](../../archive/designs/2026-07-21-vmux-p0c-link-credit-design.md)
 
 > **Verification warning:** Branch, worktree, implementation, and test claims below are recorded evidence. Confirm the current checkout and tests before relying on them.
 

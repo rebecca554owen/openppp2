@@ -101,7 +101,29 @@ namespace ppp {
             if (bawait) {
                 bool suspend = y.Suspend();
                 if (!suspend) {
+                    /**
+                     * @brief Suspend failed - remove the queued coroutine context under the same
+                     *        lock so Finalize/Update cannot later resume a destroyed coroutine
+                     *        through a dangling pointer.
+                     */
+                    SynchronizedObjectScope scope(syncobj_);
+                    for (auto it = contexts_.begin(); it != contexts_.end(); ++it) {
+                        if (*it == co) {
+                            contexts_.erase(it);
+                            break;
+                        }
+                    }
+
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid, NULLPTR);
+                }
+
+                /**
+                 * @brief The object may have been disposed while this coroutine was suspended;
+                 *        do not invoke the read callback in that case.
+                 */
+                SynchronizedObjectScope scope(syncobj_);
+                if (disposed_) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionClosing, NULLPTR);
                 }
             }
 

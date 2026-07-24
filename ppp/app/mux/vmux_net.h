@@ -46,12 +46,12 @@ namespace vmux {
          */
         typedef struct vmux_linklayer {
             IMuxTransportPtr                                                        connection;
-            uint16_t                                                                id_ = 0; ///< Server-assigned carrier-link id used by MUXON handshake; 0 means unassigned. Strand-affine.
-            uint64_t                                                                last_active_ = 0; ///< Tick of the most recent inbound frame on this link; turbo's approximate "best link" signal (recency, NOT RTT). Strand-affine.
+            uint16_t                                                                id_ = 0; ///< Server-assigned carrier-link id used by MUXON handshake; 0 means unassigned. Protected by syncobj_ (written by the carrier handshake under it).
+            std::atomic<uint64_t>                                                   last_active_{0}; ///< Tick of the most recent inbound frame on this link; turbo's approximate "best link" signal (recency, NOT RTT). Atomic: written by both the vmux strand and the carrier forwarding coroutine.
             size_t                                                                  queued_bytes_ = 0; ///< Outstanding local write bytes (not peer ACK). Strand-affine.
             uint64_t                                                                total_sent_bytes_ = 0; ///< Lifetime bytes accepted by local write path. Strand-affine.
             ppp::app::mux::MuxLinkDrainState                                        drain_;            ///< Strand-affine in-flight write and retirement state.
-            bool                                                                    handshake_complete_ = false; ///< True only after the carrier handshake succeeds. Protected by syncobj_.
+            std::atomic<bool>                                                       handshake_complete_{false}; ///< True only after the carrier handshake succeeds. Atomic: written by the carrier handshake (under syncobj_), read lock-free on the vmux strand.
         }                                                                           vmux_linklayer;
 
         typedef std::shared_ptr<vmux_linklayer>                                     vmux_linklayer_ptr;
@@ -149,6 +149,41 @@ namespace vmux {
 
         /** @brief Internal completion callback for post operations. */
         typedef ppp::function<void(bool)>                                           PostInternalAsynchronousCallback;
+
+        /**
+         * @brief Exactly-once completion shared by queue, transport, and shutdown paths.
+         * @details The callback is extracted under the local mutex and invoked after
+         * releasing it, so a close request may race a carrier completion safely.
+         */
+        class tx_completion final {
+        public:
+            explicit tx_completion(const PostInternalAsynchronousCallback& callback) noexcept
+                : callback_(callback) {}
+
+            void                                                                    Finish(bool successed) noexcept {
+                PostInternalAsynchronousCallback callback;
+                {
+                    std::lock_guard<std::mutex> scope(mutex_);
+                    if (finished_) {
+                        return;
+                    }
+                    finished_ = true;
+                    callback = std::move(callback_);
+                    callback_ = NULLPTR;
+                }
+                if (NULLPTR != callback) {
+                    callback(successed);
+                }
+            }
+
+        private:
+            std::mutex                                                              mutex_;
+            bool                                                                    finished_ = false;
+            PostInternalAsynchronousCallback                                        callback_;
+        };
+        typedef std::shared_ptr<tx_completion>                                      tx_completion_ptr;
+        typedef vmux::list<tx_completion_ptr>                                       tx_completion_list;
+
         /**
          * @brief Receive packet holder used by the ordered RX reorder queue.
          *
@@ -160,12 +195,12 @@ namespace vmux {
         };
 
         /**
-         * @brief Transmit packet holder with an optional async completion callback.
+         * @brief Transmit packet holder with an optional exactly-once completion.
          *
-         * Extends @ref rx_packet with a post-send acknowledgment callback.
+         * Extends @ref rx_packet with a shared post-send acknowledgment state.
          */
         struct tx_packet : rx_packet {
-            PostInternalAsynchronousCallback                                        ac; ///< Optional callback invoked after the packet is sent.
+            tx_completion_ptr                                                       completion;
         };
 
         typedef vmux::list<vmux_linklayer_ptr>                                      vmux_linklayer_list;
@@ -380,6 +415,8 @@ namespace vmux {
         bool                                                                        retire_linklayer_runtime() noexcept;
         /** @brief Dispose links that finished retiring (inflight_ == 0). Strand-affine; called from update(). */
         void                                                                        reap_retired_linklayers() noexcept;
+        /** @brief Container-only reap; caller holds syncobj_. Reaped links are collected for disposal after the lock is released. */
+        void                                                                        reap_retired_linklayers_locked(vmux_linklayer_vector& reaped) noexcept;
         /**
          * @brief Turbo pool controller step (C-B5). Strand-affine; called from update().
          * @param now Current tick.
@@ -451,8 +488,23 @@ namespace vmux {
         bool                                                                        attach_linklayer_locked(
             const IMuxTransportPtr&                                                 connection,
             vmux_linklayer_ptr&                                                     linklayer) noexcept;
+        /** @brief Create an optional exactly-once completion for one accepted post. */
+        tx_completion_ptr                                                           make_tx_completion(const PostInternalAsynchronousCallback& callback) noexcept;
+        /** @brief Register a completion unless shutdown has already been requested. */
+        bool                                                                        track_tx_completion(const tx_completion_ptr& completion) noexcept;
+        /** @brief Finish one completion and remove it from the pending registry. */
+        void                                                                        finish_tx_completion(const tx_completion_ptr& completion, bool successed) noexcept;
+        /** @brief Finish a detached completion list without holding VMUX state locks. */
+        static void                                                                 finish_tx_completions(tx_completion_list& completions, bool successed) noexcept;
+        /** @brief Fail every accepted TX completion that has not finished yet. */
+        void                                                                        fail_pending_tx_completions() noexcept;
+        /** @brief Begin terminal close once and fail outstanding user completions. */
+        bool                                                                        begin_close() noexcept;
+        /** @brief True once external close has prevented new work from registering. */
+        bool                                                                        close_requested() const noexcept;
+
         /** @brief Send packet to one specific underlying link-layer endpoint. */
-        bool                                                                        underlyin_sent(const vmux_linklayer_ptr& linklayer, const std::shared_ptr<Byte>& packet, int packet_length, const PostInternalAsynchronousCallback& posted_ac) noexcept;
+        bool                                                                        underlyin_sent(const vmux_linklayer_ptr& linklayer, const std::shared_ptr<Byte>& packet, int packet_length, const tx_completion_ptr& completion) noexcept;
 
         /** @brief Find logical socket by connection id. */
         vmux_skt_ptr                                                                get_connection(uint32_t connection_id) noexcept;
@@ -617,6 +669,8 @@ namespace vmux {
         IMuxTransportPtr                                                            get_linklayer() noexcept;
         /** @brief Remove one link-layer endpoint from scheduling tables. */
         void                                                                        remove_linklayer(const vmux_linklayer_ptr& linklayer) noexcept;
+        /** @brief Container-only link removal; caller holds syncobj_ (no callbacks/IO). */
+        void                                                                        remove_linklayer_locked(const vmux_linklayer_ptr& linklayer) noexcept;
         /**
          * @brief Handle one carrier exit on the vmux strand.
          * @details Removes the link. If no other live carriers remain, closes the
@@ -670,9 +724,19 @@ namespace vmux {
         /** @brief Core boolean state flags for vmux session lifecycle. */
         struct {
             bool                                                                    ftt_               : 1; ///< Fast transport training frame received.
-            bool                                                                    established_       : 1; ///< At least one link-layer is established.
             bool                                                                    server_or_client_  : 1; ///< true = server role; false = client role.
             bool                                                                    acceleration_      : 4; ///< Acceleration enabled flags (multi-bit).
+
+            /**
+             * @brief Session-established flag (atomic).
+             *
+             * Written by the carrier handshake path (under syncobj_) and read
+             * lock-free from the vmux strand, user threads, and exchanger
+             * getters (is_established). Kept as a standalone std::atomic<bool> —
+             * NOT a bit-field — so a load never tears against the carrier-side
+             * store and writing it never read-modify-writes neighbouring flags.
+             */
+            std::atomic<bool>                                                       established_;          ///< At least one link-layer is established.
 
             /**
              * @brief Session-finalized flag (atomic).
@@ -696,13 +760,22 @@ namespace vmux {
             uint32_t                                                                rx_ack_            = 0; ///< Last acknowledged inbound sequence number.
             uint32_t                                                                tx_seq_            = 0; ///< Next outbound sequence number to use.
 
-            uint64_t                                                                last_              = 0; ///< Monotonic tick of last received packet.
-            uint64_t                                                                last_heartbeat_    = 0; ///< Monotonic tick of last heartbeat sent.
+            std::atomic<uint64_t>                                                   last_              {0}; ///< Monotonic tick of last received packet. Atomic: written by carrier handshake and vmux strand; read via get_last() from any thread.
+            std::atomic<uint64_t>                                                   last_heartbeat_    {0}; ///< Monotonic tick of last heartbeat sent. Atomic: written by carrier handshake and vmux strand.
 
-            uint64_t                                                                heartbeat_timeout_ = 0; ///< Deadline tick beyond which session is considered dead.
+            std::atomic<uint64_t>                                                   heartbeat_timeout_ {0}; ///< Deadline tick beyond which session is considered dead. Atomic: written by carrier handshake and vmux strand.
         }                                                                           status_;
 
-        SynchronizationObject                                                       syncobj_;           ///< Mutex protecting shared connection map.
+        SynchronizationObject                                                       syncobj_;           ///< Mutex protecting shared connection map and the link containers (rx_links_/tx_links_) against the carrier handshake strand.
+        /**
+         * @brief Cross-thread terminal state for accepted TX completions only.
+         * @details This deliberately does not protect scheduler containers: those
+         * remain VMUX-strand-affine. It lets a stop/close caller fail waiters without
+         * touching queues, links, maps, or socket state off strand.
+         */
+        mutable std::mutex                                                          tx_completion_mutex_;
+        tx_completion_list                                                          pending_tx_completions_;
+        bool                                                                        close_requested_ = false;
         mutable std::mutex                                                          runtime_state_mutex_; ///< Guards runtime_state_ writes; prefer strand.
         ppp::app::mux::MuxRuntimeState                                               runtime_state_;       ///< Authoritative runtime facts.
         mutable std::shared_ptr<const ppp::app::mux::MuxRuntimeState>               runtime_snapshot_;    ///< Lock-free published copy for cross-thread reads.

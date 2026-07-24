@@ -3,6 +3,7 @@
 
 #include <array>
 #include <atomic>
+#include <mutex>
 
 #if defined(_LINUX) && !defined(_ANDROID) && defined(UDP_GRO)
 #include <netinet/udp.h>
@@ -32,39 +33,43 @@ namespace ppp {
                         return false;
                     }
 
-                    callback_ = callback;
-                    socket_ = std::make_unique<boost::asio::ip::udp::socket>(io_context_);
-                    boost::system::error_code ec;
-                    socket_->open(boost::asio::ip::udp::v4(), ec);
-                    if (ec || !socket_->is_open()) {
-                        Close();
-                        return false;
-                    }
-                    socket_->bind(
-                        boost::asio::ip::udp::endpoint(
-                            boost::asio::ip::address_v4::any(), 0), ec);
-                    if (ec || !ProtectP2PSocket(
-                            protector_, static_cast<int>(socket_->native_handle()))) {
-                        Close();
-                        return false;
-                    }
-                    local_endpoint_ = socket_->local_endpoint(ec);
-                    if (ec) {
-                        Close();
-                        return false;
-                    }
+                    {
+                        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+                        callback_ = callback;
+                        socket_ = std::make_unique<boost::asio::ip::udp::socket>(io_context_);
+                        boost::system::error_code ec;
+                        socket_->open(boost::asio::ip::udp::v4(), ec);
+                        if (ec || !socket_->is_open()) {
+                            CloseLocked();
+                            return false;
+                        }
+                        socket_->bind(
+                            boost::asio::ip::udp::endpoint(
+                                boost::asio::ip::address_v4::any(), 0), ec);
+                        if (ec || !ProtectP2PSocket(
+                                protector_, static_cast<int>(socket_->native_handle()))) {
+                            CloseLocked();
+                            return false;
+                        }
+                        local_endpoint_ = socket_->local_endpoint(ec);
+                        if (ec) {
+                            CloseLocked();
+                            return false;
+                        }
 
 #if defined(_LINUX) && !defined(_ANDROID) && defined(UDP_GRO)
-                    int one = 1;
-                    ::setsockopt(static_cast<int>(socket_->native_handle()),
-                        IPPROTO_UDP, UDP_GRO, &one, sizeof(one));
+                        int one = 1;
+                        ::setsockopt(static_cast<int>(socket_->native_handle()),
+                            IPPROTO_UDP, UDP_GRO, &one, sizeof(one));
 #endif
+                    }
 
                     StartReceive();
                     return true;
                 }
 
                 boost::asio::ip::udp::endpoint LocalEndpoint() const noexcept override {
+                    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
                     return local_endpoint_;
                 }
 
@@ -72,6 +77,7 @@ namespace ppp {
                         const uint8_t* packet,
                         int packet_size,
                         const boost::asio::ip::udp::endpoint& endpoint) noexcept override {
+                    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
                     if (closed_.load(std::memory_order_acquire) || !socket_ ||
                         !socket_->is_open() || !packet || packet_size < 1) {
                         return false;
@@ -84,9 +90,18 @@ namespace ppp {
                 }
 
                 void Close() noexcept override {
-                    if (closed_.exchange(true, std::memory_order_acq_rel)) {
+                    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+                    if (closed_.load(std::memory_order_acquire)) {
                         return;
                     }
+                    CloseLocked();
+                }
+
+            private:
+                // Caller must hold lifecycle_mutex_; serializes teardown with the receive
+                // chain and SendTo so the socket object is never touched concurrently.
+                void CloseLocked() noexcept {
+                    closed_.store(true, std::memory_order_release);
                     if (socket_) {
                         boost::system::error_code ec;
                         socket_->close(ec);
@@ -95,11 +110,14 @@ namespace ppp {
                     local_endpoint_ = {};
                 }
 
-            private:
                 void StartReceive() noexcept {
+                    std::unique_lock<std::mutex> lock(lifecycle_mutex_);
                     if (closed_.load(std::memory_order_acquire) || !socket_) {
                         return;
                     }
+                    // Initiation is serialized with CloseLocked() under lifecycle_mutex_;
+                    // the completion handler never runs inline, so holding the lock across
+                    // async_receive_from cannot deadlock.
                     socket_->async_receive_from(
                         boost::asio::buffer(receive_buffer_),
                         receive_sender_,
@@ -109,16 +127,23 @@ namespace ppp {
                             if (self->closed_.load(std::memory_order_acquire)) {
                                 return;
                             }
+                            // Copy the callback under the lock, then release it before
+                            // invoking: user code may call Close()/SendTo() re-entrantly.
+                            P2PDatagramReceiveCallback callback;
+                            {
+                                std::lock_guard<std::mutex> lock(self->lifecycle_mutex_);
+                                callback = self->callback_;
+                            }
                             if (ec) {
-                                if (self->callback_ &&
+                                if (callback &&
                                     ec != boost::asio::error::operation_aborted) {
-                                    self->callback_(P2PDatagramReceiveStatus::Error,
+                                    callback(P2PDatagramReceiveStatus::Error,
                                         {}, nullptr, 0);
                                 }
                                 return;
                             }
-                            if (self->callback_) {
-                                self->callback_(P2PDatagramReceiveStatus::Packet,
+                            if (callback) {
+                                callback(P2PDatagramReceiveStatus::Packet,
                                     self->receive_sender_,
                                     self->receive_buffer_.data(),
                                     static_cast<int>(bytes));
@@ -130,6 +155,9 @@ namespace ppp {
             private:
                 boost::asio::io_context& io_context_;
                 std::shared_ptr<ISocketProtector> protector_;
+                // lifecycle_mutex_ serializes socket_/callback_/local_endpoint_ access across
+                // Start/SendTo/Close and the receive completion chain.
+                mutable std::mutex lifecycle_mutex_;
                 std::unique_ptr<boost::asio::ip::udp::socket> socket_;
                 P2PDatagramReceiveCallback callback_;
                 boost::asio::ip::udp::endpoint local_endpoint_;

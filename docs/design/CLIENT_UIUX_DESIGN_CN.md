@@ -33,8 +33,8 @@
 | 进程退出 | ✅ wrapper 接收 OS 退出码（可为空）和 stderr 文本；不是固定的 `0/-1` 契约 | `desktop/client/src-tauri/src/process.rs` |
 | 连接时长 | ✅ wrapper 本地计时 | `desktop/client/src/lib/runtime/tauri.js` |
 | 上传/下载速度、累计流量 | ✅ 已实现：`--stats-json` NDJSON + 桌面 wrapper 差分 | `ppp/app/ApplicationMainLoop.cpp`、`desktop/client/src-tauri/src/stats.rs` |
-| 链路质量（quality%/等级/错误计数） | ✅ `link.*` 位于 stats 行内 | `ppp/app/RuntimeStatsJson.h`、`desktop/client/src-tauri/src/stats.rs` |
-| 活动链路数（mux_active_links） | ✅ stats 的 `runtime.mux_active_links` | `ppp/app/RuntimeSnapshotJson.h` |
+| 链路质量（quality%/等级/错误计数） | ✅ `link.*` 位于 stats 行内 | `ppp/app/runtime/RuntimeStatsJson.h`、`desktop/client/src-tauri/src/stats.rs` |
+| 活动链路数（mux_active_links） | ✅ stats 的 `runtime.mux_active_links` | `ppp/app/runtime/RuntimeSnapshotJson.h` |
 | 结构化运行态（phase/effective_path/last_error） | ✅ stats 的 `runtime` 对象；UI 透传引擎字符串 | 同上 |
 | TUN IP/网关/掩码、本地代理端口 | ✅ wrapper 自有（启动参数和自己生成的配置） | `desktop/client/src-tauri/src/launch_options.rs` |
 | 进程 PID / 运行时长 | ✅ wrapper 进程状态和本地计时 | `desktop/client/src-tauri/src/process.rs`、`desktop/client/src/lib/runtime/tauri.js` |

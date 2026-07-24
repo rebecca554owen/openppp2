@@ -1580,6 +1580,13 @@ namespace ppp {
             }
 
             SynchronizedObjectScope scope(syncobj_);
+            // Re-check under the lock: Finalize() holds syncobj_ while tearing
+            // down tun_ssmt_sds_, so a concurrent Ssmt() must not create a new
+            // descriptor (and re-arm a read loop) after disposal.
+            if (disposed_.load() != FALSE) {
+                return false;
+            }
+
             int tun = OpenDriver(dev.data());
             if (tun == -1) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitTapOpenFailed);

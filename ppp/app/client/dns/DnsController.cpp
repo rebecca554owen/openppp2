@@ -119,9 +119,16 @@ bool DnsController::HandleQuery(
         std::lock_guard<std::mutex> scope(syncobj_);
         context = context_;
     }
+    // Capture a weak self reference: the resolver callback may complete after this
+    // controller has been closed or destroyed; bail out instead of touching freed memory.
+    std::weak_ptr<DnsController> weak_self = weak_from_this();
     context.handle_resolver_response =
-        [this, session](const auto& pending, const auto& source, const auto& destination, auto response) noexcept {
-            HandleResolverResponse(session, pending, source, destination, std::move(response));
+        [weak_self, session](const auto& pending, const auto& source, const auto& destination, auto response) noexcept {
+            std::shared_ptr<DnsController> self = weak_self.lock();
+            if (nullptr == self) {
+                return;
+            }
+            self->HandleResolverResponse(session, pending, source, destination, std::move(response));
         };
     return context.IsValid() && policy_->HandleQuery(context, session, packet, frame, messages);
 }

@@ -553,6 +553,20 @@ namespace ppp {
              * @note Closes transmission and socket; resets connected/disposed flags.
              */
             void VirtualEthernetTcpipConnection::Finalize() noexcept {
+                if (disposed_.exchange(true)) {   // Publish disposal first; cleanup runs only once.
+                    return;
+                }
+
+                connected_ = false;
+
+                // Cancel in-flight I/O before closing, so read/write completions running on the
+                // socket executor observe the disposed state and stop the forwarding chain.
+                std::shared_ptr<boost::asio::ip::tcp::socket> socket = socket_;
+                if (NULLPTR != socket) {
+                    boost::system::error_code ec;
+                    socket->cancel(ec);
+                }
+
                 ITransmissionPtr transmission = std::move(transmission_);
                 if (NULLPTR != transmission) {
                     transmission->Dispose();
@@ -561,9 +575,6 @@ namespace ppp {
 #if defined(_WIN32)
                 qoss_.reset();
 #endif
-
-                disposed_ = true;
-                connected_ = false;
 
 #if defined(_IPHONE) || defined(IPHONE)
                 native_tap_relay_started_.store(false, std::memory_order_release);
@@ -756,6 +767,10 @@ namespace ppp {
                 auto self = shared_from_this();
                 boost::asio::post(socket_->get_executor(),
                     [self, this, buffer, buffer_size]() noexcept {
+                        if (disposed_) {                // Never arm new reads after finalization.
+                            return;
+                        }
+
                         // Plaintext transport still wraps binary frames in base94; cap the raw
                         // TCP chunk so the encoded frame cannot exceed PPP_BUFFER_SIZE.
                         int read_size = buffer_size;

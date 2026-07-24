@@ -188,7 +188,7 @@ namespace ppp {
                         std::shared_ptr<VirtualEthernetMappingPort>                         mapping_port_;               // Parent mapping port
                         std::shared_ptr<VirtualEthernetLinklayer>                           linklayer_;                  // Link layer for FRP operations
                         std::shared_ptr<boost::asio::ip::tcp::socket>                       socket_;                     // TCP socket to local user
-                        UInt64                                                              timeout_;                    // Expiration timestamp
+                        std::atomic<UInt64>                                                   timeout_;                    // Expiration timestamp
                         AppConfigurationPtr                                                 configuration_;              // App configuration
                         std::shared_ptr<Byte>                                               buffer_chunked_;             // Read buffer for socket
                     };
@@ -258,7 +258,7 @@ namespace ppp {
                         int                                                                 connection_id_     = 0;     // Unique ID
                         std::shared_ptr<VirtualEthernetLinklayer>                           linklayer_;                  // Link layer
                         std::shared_ptr<boost::asio::ip::tcp::socket>                       socket_;                     // TCP socket to destination
-                        UInt64                                                              timeout_           = 0;     // Expiration timestamp
+                        std::atomic<UInt64>                                                   timeout_           = 0;     // Expiration timestamp
                         AppConfigurationPtr                                                 configuration_;              // App config
                         ITransmissionPtr                                                    transmission_;               // Transmission object
                         std::shared_ptr<Byte>                                               buffer_chunked_;             // Read buffer
@@ -297,7 +297,7 @@ namespace ppp {
                     private:
                         std::atomic<int>                                                    disposed_ = FALSE;           // Disposal flag
                         boost::asio::ip::udp::socket                                        socket_;                     // UDP socket for local communication
-                        uint64_t                                                            timeout_  = 0;               // Expiration timestamp
+                        std::atomic<uint64_t>                                                 timeout_  = 0;               // Expiration timestamp
                         AppConfigurationPtr                                                 configuration_;              // App config
                         std::shared_ptr<VirtualEthernetMappingPort>                         mapping_port_;               // Parent mapping port
                         std::shared_ptr<Byte>                                               buffer_chunked_;             // Receive buffer
@@ -342,6 +342,7 @@ namespace ppp {
 
             private:
                 std::atomic<int>                                                            disposed_     = FALSE;      // Disposal flag
+                std::mutex                                                                  socket_connections_mutex_;   // Guards server/client connection & datagram-port tables
                 std::shared_ptr<VirtualEthernetLinklayer>                                   linklayer_;                  // Link layer reference
                 ITransmissionPtr                                                            transmission_;               // Transmission reference
 

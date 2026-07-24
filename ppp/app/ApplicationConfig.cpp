@@ -436,10 +436,13 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
 
         GetDnsAddresses(ni->DnsAddresses, &ni->DnsLabels, argc, argv);
         if (!ni->DnsAddresses.empty()) {
-            auto dns_servers = ppp::net::asio::vdns::servers;
-            dns_servers->clear();
-            for (const boost::asio::ip::address& dns_server : ni->DnsAddresses) {
-                dns_servers->emplace_back(boost::asio::ip::udp::endpoint(dns_server, PPP_DNS_SYS_PORT));
+            // Publish a new immutable server list; in-place mutation would race with readers.
+            auto dns_servers = ppp::make_shared_object<ppp::net::asio::vdns::IPEndPointVector>();
+            if (NULLPTR != dns_servers) {
+                for (const boost::asio::ip::address& dns_server : ni->DnsAddresses) {
+                    dns_servers->emplace_back(boost::asio::ip::udp::endpoint(dns_server, PPP_DNS_SYS_PORT));
+                }
+                std::atomic_store(&ppp::net::asio::vdns::servers, dns_servers);
             }
         }
 

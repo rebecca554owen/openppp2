@@ -57,6 +57,7 @@ namespace ppp
 
         void TapIos::SetPacketOutput(PacketOutputEventHandler output) noexcept
         {
+            std::lock_guard<std::mutex> scope(output_mutex_);
             output_ = output;
         }
 
@@ -67,7 +68,7 @@ namespace ppp
                 return false;
             }
 
-            if (!IsOpen() || NULLPTR == PacketInput)
+            if (!IsOpen() || NULLPTR == GetPacketInput())
             {
                 return false;
             }
@@ -112,7 +113,10 @@ namespace ppp
         void TapIos::Dispose() noexcept
         {
             opened_.store(false);
-            output_ = NULLPTR;
+            {
+                std::lock_guard<std::mutex> scope(output_mutex_);
+                output_ = NULLPTR;
+            }
             ITap::Dispose();
         }
 
@@ -123,7 +127,12 @@ namespace ppp
                 return false;
             }
 
-            PacketOutputEventHandler output = output_;
+            PacketOutputEventHandler output;
+            {
+                std::lock_guard<std::mutex> scope(output_mutex_);
+                output = output_;
+            }
+
             if (NULLPTR == output)
             {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);

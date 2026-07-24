@@ -38,7 +38,7 @@ namespace ppp {
             static inline unsigned short ComputeDynamicTcpMss(bool ipv4, int tunnel_overhead, int path_mtu) noexcept {
                 tunnel_overhead = std::max<int>(0, tunnel_overhead);
                 int base_mtu = ppp::tap::ITap::Mtu - tunnel_overhead;
-                if (ipv4 && path_mtu > 0) {
+                if (path_mtu > 0) {
                     base_mtu = std::min<int>(base_mtu, path_mtu);
                 }
 
