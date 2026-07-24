@@ -1,7 +1,7 @@
 # Design Documents
 > Status: Active
 > Type: Design
-> Last verified: 8c8a888
+> Last verified: 82643dc
 
 > **Purpose:** Index active, status-bound design evidence that has not become stable reference material.
 > **Audience:** OPENPPP2 maintainers and reviewers.
@@ -15,6 +15,7 @@ status-bound and deliberately do not imply English stable-reference peers. Workt
 are intentionally not indexed in this repository snapshot; they are not current-behavior or
 stable-reference claims.
 
+- [Authenticated L3 session roaming](session-recovery/l3-roaming.md)
 - [P2P direct-channel protocol](p2p-direct-channel/protocol.md)
 - [P2P direct-channel state machine](p2p-direct-channel/state-machine.md)
 - [P2P direct-channel threat model](p2p-direct-channel/threat-model.md)

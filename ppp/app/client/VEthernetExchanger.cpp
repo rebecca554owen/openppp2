@@ -5,6 +5,7 @@
 #include <ppp/app/client/VEthernetDatagramPort.h>
 #include <ppp/app/client/udp/ClientDatagramPortManager.h>
 #include <ppp/app/client/ClientFrpRegistry.h>
+#include <ppp/app/client/ClientSessionResumeHandshakePolicy.h>
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/protocol/VirtualEthernetPathMtu.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
@@ -40,7 +41,11 @@
 #include <ios/ppp/tap/TapIos.h>
 #endif
 
+#include <algorithm>
 #include <chrono>
+#include <limits>
+
+#include <openssl/crypto.h>
 
 #include <ppp/transmissions/ITcpipTransmission.h>
 #include <ppp/transmissions/IWebsocketTransmission.h>
@@ -70,6 +75,138 @@ namespace ppp {
     namespace app {
         namespace client {
             using ppp::telemetry::Level;
+            using ppp::app::protocol::SessionResumeAction;
+            using ppp::app::protocol::SessionResumeCandidateBinding;
+            using ppp::app::protocol::SessionResumeControl;
+            using ppp::app::protocol::SessionResumeExporter;
+            using ppp::app::protocol::SessionResumeId;
+            using ppp::app::protocol::SessionResumeNonce;
+            using ppp::app::protocol::SessionResumePendingAttempt;
+            using ppp::app::protocol::SessionResumeProof;
+            using ppp::app::protocol::SessionResumeSecret;
+            using ppp::app::protocol::SessionResumeTranscriptFields;
+
+            template <std::size_t N>
+            class SessionResumeArrayCleanser final {
+            public:
+                explicit SessionResumeArrayCleanser(
+                    std::array<std::uint8_t, N>& value) noexcept
+                    : value_(value) {
+                }
+
+                ~SessionResumeArrayCleanser() noexcept {
+                    OPENSSL_cleanse(value_.data(), value_.size());
+                }
+
+            private:
+                std::array<std::uint8_t, N>& value_;
+            };
+
+            template <std::size_t N>
+            static bool DecodeSessionResumeHex(
+                const ppp::string& text,
+                std::array<std::uint8_t, N>& output) noexcept {
+                if (text.size() != N * 2) {
+                    output.fill(0);
+                    return false;
+                }
+
+                std::array<std::uint8_t, N> decoded{};
+                SessionResumeArrayCleanser decoded_cleanser(decoded);
+                for (std::size_t i = 0; i < N; ++i) {
+                    const auto nibble = [](char c, std::uint8_t& value) noexcept -> bool {
+                        if (c >= '0' && c <= '9') {
+                            value = static_cast<std::uint8_t>(c - '0');
+                            return true;
+                        }
+                        if (c >= 'a' && c <= 'f') {
+                            value = static_cast<std::uint8_t>(c - 'a' + 10);
+                            return true;
+                        }
+                        return false;
+                    };
+                    std::uint8_t high = 0;
+                    std::uint8_t low = 0;
+                    if (!nibble(text[i * 2], high) || !nibble(text[i * 2 + 1], low)) {
+                        output.fill(0);
+                        return false;
+                    }
+                    decoded[i] = static_cast<std::uint8_t>((high << 4) | low);
+                }
+                output = decoded;
+                return true;
+            }
+
+            template <std::size_t N>
+            static ppp::string EncodeSessionResumeHex(
+                const std::array<std::uint8_t, N>& value) {
+                static constexpr char LowerHex[] = "0123456789abcdef";
+                ppp::string encoded;
+                encoded.resize(N * 2);
+                for (std::size_t i = 0; i < N; ++i) {
+                    encoded[i * 2] = LowerHex[value[i] >> 4];
+                    encoded[i * 2 + 1] = LowerHex[value[i] & 0x0f];
+                }
+                return encoded;
+            }
+
+            static bool DecodeAuthenticatedSessionResumeControl(
+                const SessionResumeControl& control,
+                SessionResumePendingAttempt& output) noexcept {
+                output.Clear();
+                SessionResumeTranscriptFields& fields = output.fields;
+                SessionResumeProof& proof = output.proof;
+                fields.action = control.action;
+                fields.capabilities = control.capabilities;
+                fields.generation = control.generation;
+                if (control.version != SessionResumeControl::ProtocolVersion ||
+                    control.capabilities != SessionResumeControl::CapabilityV1 ||
+                    !DecodeSessionResumeHex(control.session_id, fields.session_id) ||
+                    !DecodeSessionResumeHex(control.client_nonce, fields.client_nonce) ||
+                    (!control.server_nonce.empty() &&
+                        !DecodeSessionResumeHex(control.server_nonce, fields.server_nonce)) ||
+                    !DecodeSessionResumeHex(control.candidate_binding, fields.candidate_binding) ||
+                    !DecodeSessionResumeHex(control.proof, proof)) {
+                    output.Clear();
+                    return false;
+                }
+                output.active = true;
+                return true;
+            }
+
+            static bool DecodeFreshSessionResumeOffer(
+                const SessionResumeControl& control,
+                SessionResumeId& session_id,
+                SessionResumeNonce& server_nonce) noexcept {
+                session_id.fill(0);
+                server_nonce.fill(0);
+                return control.version == SessionResumeControl::ProtocolVersion &&
+                    control.action == SessionResumeAction::Offer &&
+                    control.capabilities == SessionResumeControl::CapabilityV1 &&
+                    control.generation == 0 && control.client_nonce.empty() &&
+                    control.candidate_binding.empty() && control.proof.empty() &&
+                    control.reason.empty() &&
+                    DecodeSessionResumeHex(control.session_id, session_id) &&
+                    DecodeSessionResumeHex(control.server_nonce, server_nonce);
+            }
+
+            static bool IsBareSessionResumeReject(
+                const SessionResumeControl& control) noexcept {
+                return control.version == SessionResumeControl::ProtocolVersion &&
+                    control.action == SessionResumeAction::Reject &&
+                    control.capabilities == 0 && control.session_id.empty() &&
+                    control.generation == 0 && control.client_nonce.empty() &&
+                    control.server_nonce.empty() && control.candidate_binding.empty() &&
+                    control.proof.empty() && !control.reason.empty();
+            }
+
+            static bool IsTerminalSessionResumeError(
+                ppp::diagnostics::ErrorCode error) noexcept {
+                return error == ppp::diagnostics::ErrorCode::ProtocolFrameInvalid ||
+                    error == ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid ||
+                    error == ppp::diagnostics::ErrorCode::ProtocolDecodeFailed ||
+                    error == ppp::diagnostics::ErrorCode::SessionAuthFailed;
+            }
 
             static bool P2PControlCandidateFromEndpoint(
                 const boost::asio::ip::udp::endpoint& endpoint,
@@ -445,12 +582,400 @@ namespace ppp {
                 return DoInformation(transmission, envelope, y);
             }
 
+            void VEthernetExchanger::ClearSessionResumeState() noexcept {
+                session_resume_pending_.Clear();
+                session_resume_root_.Clear();
+                session_resume_id_.fill(0);
+                session_resume_generation_ = 0;
+                session_resume_armed_ = false;
+            }
+
+            bool VEthernetExchanger::SendSessionResumeControl(
+                const ITransmissionPtr& transmission,
+                const SessionResumeTranscriptFields& fields,
+                const SessionResumeProof& proof,
+                YieldContext& y) noexcept {
+                SessionResumeControl control;
+                control.action = fields.action;
+                control.capabilities = fields.capabilities;
+                control.session_id = EncodeSessionResumeHex(fields.session_id);
+                control.generation = fields.generation;
+                control.client_nonce = EncodeSessionResumeHex(fields.client_nonce);
+                if (fields.action != SessionResumeAction::ResumeRequest &&
+                    fields.action != SessionResumeAction::GenerationSync) {
+                    control.server_nonce = EncodeSessionResumeHex(fields.server_nonce);
+                }
+                if (fields.action != SessionResumeAction::Accepted) {
+                    control.candidate_binding = EncodeSessionResumeHex(fields.candidate_binding);
+                }
+                control.proof = EncodeSessionResumeHex(proof);
+                if (!control.Valid()) {
+                    return ppp::diagnostics::SetLastError(
+                        ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
+                }
+
+                InformationEnvelope envelope;
+                envelope.Base.Clear();
+                envelope.Extensions.SessionResume = control;
+                envelope.ExtendedJson = envelope.Extensions.ToJson();
+                return DoInformation(transmission, envelope, y);
+            }
+
+            bool VEthernetExchanger::AcceptFreshSessionResumeOffer(
+                const ITransmissionPtr& transmission,
+                const InformationEnvelope& offer,
+                YieldContext& y) noexcept {
+                auto ssl = std::dynamic_pointer_cast<ISslWebsocketTransmission>(transmission);
+                SessionResumeId offered_id{};
+                SessionResumeArrayCleanser offered_id_cleanser(offered_id);
+                SessionResumeNonce server_nonce{};
+                SessionResumeArrayCleanser server_nonce_cleanser(server_nonce);
+                SessionResumeId expected_id{};
+                ppp::p2p::Int128ToBytes(GetId(), expected_id.data());
+                if (!ssl || !ssl->HasAuthenticatedSessionExporter() ||
+                    !DecodeFreshSessionResumeOffer(
+                        offer.Extensions.SessionResume, offered_id, server_nonce) ||
+                    offered_id != expected_id) {
+                    ClearSessionResumeState();
+                    return ppp::diagnostics::SetLastError(
+                        ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                }
+
+                SessionResumeExporter exporter =
+                    [ssl](const char* label, const std::uint8_t* context,
+                        std::size_t context_length, std::uint8_t* output,
+                        std::size_t output_length) noexcept -> bool {
+                        return ssl->ExportAuthenticatedSessionKey(
+                            label, context, context_length, output, output_length);
+                    };
+                SessionResumeSecret candidate_root;
+                if (!ppp::app::protocol::DeriveSessionResumeRetainedRoot(
+                        exporter, expected_id, candidate_root)) {
+                    ClearSessionResumeState();
+                    return ppp::diagnostics::SetLastError(
+                        ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                }
+
+                session_resume_pending_.Clear();
+                session_resume_pending_.active = true;
+                session_resume_pending_.fields.action = SessionResumeAction::Accepted;
+                session_resume_pending_.fields.capabilities =
+                    SessionResumeControl::CapabilityV1;
+                session_resume_pending_.fields.session_id = expected_id;
+                session_resume_pending_.fields.server_nonce = server_nonce;
+                if (!ppp::app::protocol::GenerateSessionResumeNonce(
+                        session_resume_pending_.fields.client_nonce) ||
+                    !ppp::app::protocol::ComputeSessionResumeProof(
+                        candidate_root, session_resume_pending_.fields,
+                        session_resume_pending_.proof)) {
+                    ClearSessionResumeState();
+                    return ppp::diagnostics::SetLastError(
+                        ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                }
+
+                const bool sent = SendSessionResumeControl(
+                    transmission, session_resume_pending_.fields,
+                    session_resume_pending_.proof, y);
+                session_resume_pending_.Clear();
+                if (!sent) {
+                    ClearSessionResumeState();
+                    return false;
+                }
+
+                session_resume_root_ = std::move(candidate_root);
+                session_resume_id_ = expected_id;
+                session_resume_generation_ = 1;
+                session_resume_armed_ = true;
+                return true;
+            }
+
+            VEthernetExchanger::SessionResumeNegotiationResult
+            VEthernetExchanger::NegotiateSessionResume(
+                const ITransmissionPtr& transmission,
+                InformationEnvelope& initial_information,
+                bool& has_initial_information,
+                YieldContext& y) noexcept {
+                has_initial_information = false;
+                AppConfigurationPtr configuration = GetConfiguration();
+                auto ssl = std::dynamic_pointer_cast<ISslWebsocketTransmission>(transmission);
+                const ClientSessionResumePreamble preamble =
+                    SelectClientSessionResumePreamble(configuration &&
+                        configuration->client.session_resume.enabled,
+                        switcher_ && switcher_->IsVNet(),
+                        ssl && ssl->HasAuthenticatedSessionExporter(),
+                        session_resume_armed_, session_resume_root_.IsSet());
+                if (preamble == ClientSessionResumePreamble::Legacy) {
+                    ClearSessionResumeState();
+                    return SessionResumeNegotiationResult::Fresh;
+                }
+
+                SessionResumeId expected_id{};
+                ppp::p2p::Int128ToBytes(GetId(), expected_id.data());
+                if (!session_resume_armed_ || !session_resume_root_.IsSet()) {
+                    ClearSessionResumeState();
+                    if (!ReadInformation(transmission, initial_information, y)) {
+                        ClearSessionResumeState();
+                        return SessionResumeNegotiationResult::Failed;
+                    }
+                    has_initial_information = true;
+
+                    SessionResumeId offered_id{};
+                    SessionResumeArrayCleanser offered_id_cleanser(offered_id);
+                    SessionResumeNonce server_nonce{};
+                    SessionResumeArrayCleanser server_nonce_cleanser(server_nonce);
+                    if (!initial_information.Extensions.SessionResume.HasAny() ||
+                        !DecodeFreshSessionResumeOffer(
+                            initial_information.Extensions.SessionResume,
+                            offered_id, server_nonce) || offered_id != expected_id) {
+                        ClearSessionResumeState();
+                        return SessionResumeNegotiationResult::Fresh;
+                    }
+                    if (!AcceptFreshSessionResumeOffer(
+                            transmission, initial_information, y)) {
+                        return SessionResumeNegotiationResult::Failed;
+                    }
+                    return SessionResumeNegotiationResult::Fresh;
+                }
+
+                if (session_resume_id_ != expected_id) {
+                    ClearSessionResumeState();
+                    return SessionResumeNegotiationResult::Fresh;
+                }
+
+                SessionResumeExporter exporter =
+                    [ssl](const char* label, const std::uint8_t* context,
+                        std::size_t context_length, std::uint8_t* output,
+                        std::size_t output_length) noexcept -> bool {
+                        return ssl->ExportAuthenticatedSessionKey(
+                            label, context, context_length, output, output_length);
+                    };
+                SessionResumeCandidateBinding candidate_binding{};
+                SessionResumeArrayCleanser candidate_binding_cleanser(candidate_binding);
+                if (!ppp::app::protocol::DeriveSessionResumeCandidateBinding(
+                        exporter, expected_id, candidate_binding)) {
+                    ClearSessionResumeState();
+                    return ppp::diagnostics::SetLastError(
+                        ppp::diagnostics::ErrorCode::SessionAuthFailed,
+                        SessionResumeNegotiationResult::Failed);
+                }
+
+                const auto terminal_failure = [this](
+                    ppp::diagnostics::ErrorCode error) noexcept {
+                    ClearSessionResumeState();
+                    ppp::diagnostics::SetLastErrorCode(error);
+                    return SessionResumeNegotiationResult::Failed;
+                };
+                unsigned int generation_sync_count = 0;
+                for (;;) {
+                    session_resume_pending_.Clear();
+                    session_resume_pending_.active = true;
+                    session_resume_pending_.fields.action =
+                        SessionResumeAction::ResumeRequest;
+                    session_resume_pending_.fields.capabilities =
+                        SessionResumeControl::CapabilityV1;
+                    session_resume_pending_.fields.session_id = expected_id;
+                    session_resume_pending_.fields.generation =
+                        session_resume_generation_;
+                    session_resume_pending_.fields.candidate_binding =
+                        candidate_binding;
+                    if (!ppp::app::protocol::GenerateSessionResumeNonce(
+                            session_resume_pending_.fields.client_nonce) ||
+                        !ppp::app::protocol::ComputeSessionResumeProof(
+                            session_resume_root_, session_resume_pending_.fields,
+                            session_resume_pending_.proof)) {
+                        return terminal_failure(
+                            ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                    }
+                    if (!SendSessionResumeControl(
+                            transmission, session_resume_pending_.fields,
+                            session_resume_pending_.proof, y)) {
+                        session_resume_pending_.Clear();
+                        return SessionResumeNegotiationResult::Failed;
+                    }
+
+                    InformationEnvelope response;
+                    if (!ReadInformation(transmission, response, y)) {
+                        session_resume_pending_.Clear();
+                        if (IsTerminalSessionResumeError(
+                                ppp::diagnostics::GetLastErrorCode())) {
+                            ClearSessionResumeState();
+                        }
+                        return SessionResumeNegotiationResult::Failed;
+                    }
+                    const SessionResumeControl& control =
+                        response.Extensions.SessionResume;
+                    if (!control.HasAny()) {
+                        session_resume_pending_.Clear();
+                        ClearSessionResumeState();
+                        initial_information = response;
+                        has_initial_information = true;
+                        return SessionResumeNegotiationResult::Fresh;
+                    }
+
+                    if (control.action == SessionResumeAction::Offer ||
+                        IsBareSessionResumeReject(control)) {
+                        const bool rejected = IsBareSessionResumeReject(control);
+                        session_resume_pending_.Clear();
+                        ClearSessionResumeState();
+                        if (rejected) {
+                            if (!ReadInformation(
+                                    transmission, response, y)) {
+                                return SessionResumeNegotiationResult::Failed;
+                            }
+                            if (!response.Extensions.SessionResume.HasAny()) {
+                                initial_information = response;
+                                has_initial_information = true;
+                                return SessionResumeNegotiationResult::Fresh;
+                            }
+                        }
+
+                        SessionResumeId offered_id{};
+                        SessionResumeArrayCleanser offered_id_cleanser(offered_id);
+                        SessionResumeNonce server_nonce{};
+                        SessionResumeArrayCleanser server_nonce_cleanser(server_nonce);
+                        if (!DecodeFreshSessionResumeOffer(
+                                response.Extensions.SessionResume,
+                                offered_id, server_nonce) ||
+                            offered_id != expected_id) {
+                            return terminal_failure(
+                                ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                        }
+                        initial_information = response;
+                        has_initial_information = true;
+                        if (!AcceptFreshSessionResumeOffer(
+                                transmission, response, y)) {
+                            return SessionResumeNegotiationResult::Failed;
+                        }
+                        return SessionResumeNegotiationResult::Fresh;
+                    }
+
+                    SessionResumePendingAttempt authenticated_response;
+                    if (!DecodeAuthenticatedSessionResumeControl(
+                            control, authenticated_response)) {
+                        return terminal_failure(
+                            ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                    }
+                    const SessionResumeTranscriptFields& request =
+                        session_resume_pending_.fields;
+                    const SessionResumeTranscriptFields& received =
+                        authenticated_response.fields;
+                    const bool same_request =
+                        received.session_id == request.session_id &&
+                        received.client_nonce == request.client_nonce &&
+                        received.candidate_binding == request.candidate_binding;
+
+                    if (received.action == SessionResumeAction::GenerationSync) {
+                        if (!same_request || generation_sync_count != 0 ||
+                            !ppp::app::protocol::VerifySessionResumeProof(
+                                session_resume_root_, received,
+                                authenticated_response.proof)) {
+                            return terminal_failure(
+                                ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                        }
+                        ++generation_sync_count;
+                        session_resume_generation_ = received.generation;
+                        session_resume_pending_.Clear();
+                        continue;
+                    }
+
+                    if (received.action == SessionResumeAction::Reject) {
+                        const bool authenticated = same_request &&
+                            received.generation == request.generation &&
+                            ppp::app::protocol::VerifySessionResumeProof(
+                                session_resume_root_, received,
+                                authenticated_response.proof);
+                        (void)authenticated;
+                        return terminal_failure(
+                            ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                    }
+
+                    if (received.action != SessionResumeAction::ResumeAccept ||
+                        !same_request || received.generation != request.generation ||
+                        !ppp::app::protocol::VerifySessionResumeProof(
+                            session_resume_root_, received,
+                            authenticated_response.proof) ||
+                        request.generation ==
+                            std::numeric_limits<std::uint64_t>::max()) {
+                        return terminal_failure(
+                            ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                    }
+
+                    const std::uint64_t request_generation = request.generation;
+                    session_resume_pending_.Clear();
+                    session_resume_pending_.active = true;
+                    session_resume_pending_.fields = received;
+                    session_resume_pending_.fields.action =
+                        SessionResumeAction::ResumeConfirm;
+                    if (!ppp::app::protocol::ComputeSessionResumeProof(
+                            session_resume_root_, session_resume_pending_.fields,
+                            session_resume_pending_.proof)) {
+                        return terminal_failure(
+                            ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                    }
+                    if (!SendSessionResumeControl(
+                            transmission, session_resume_pending_.fields,
+                            session_resume_pending_.proof, y)) {
+                        session_resume_pending_.Clear();
+                        return SessionResumeNegotiationResult::Failed;
+                    }
+
+                    InformationEnvelope committed_envelope;
+                    if (!ReadInformation(
+                            transmission, committed_envelope, y)) {
+                        session_resume_pending_.Clear();
+                        if (IsTerminalSessionResumeError(
+                                ppp::diagnostics::GetLastErrorCode())) {
+                            ClearSessionResumeState();
+                        }
+                        return SessionResumeNegotiationResult::Failed;
+                    }
+                    SessionResumePendingAttempt committed;
+                    if (!DecodeAuthenticatedSessionResumeControl(
+                            committed_envelope.Extensions.SessionResume,
+                            committed) ||
+                        committed.fields.action !=
+                            SessionResumeAction::ResumeCommitted ||
+                        committed.fields.session_id !=
+                            session_resume_pending_.fields.session_id ||
+                        committed.fields.client_nonce !=
+                            session_resume_pending_.fields.client_nonce ||
+                        committed.fields.server_nonce !=
+                            session_resume_pending_.fields.server_nonce ||
+                        committed.fields.candidate_binding !=
+                            session_resume_pending_.fields.candidate_binding ||
+                        committed.fields.generation != request_generation + 1 ||
+                        !ppp::app::protocol::VerifySessionResumeProof(
+                            session_resume_root_, committed.fields,
+                            committed.proof)) {
+                        return terminal_failure(
+                            ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                    }
+
+                    session_resume_generation_ = committed.fields.generation;
+                    session_resume_armed_ = true;
+                    session_resume_pending_.Clear();
+                    return SessionResumeNegotiationResult::Resumed;
+                }
+            }
+
+            bool VEthernetExchanger::ApplyPreDataInformation(
+                const ITransmissionPtr& transmission,
+                const InformationEnvelope& information,
+                YieldContext& y) noexcept {
+                InformationEnvelope ordinary = information;
+                ordinary.Extensions.SessionResume.Clear();
+                ordinary.ExtendedJson = ordinary.Extensions.HasAny()
+                    ? ordinary.Extensions.ToJson() : ppp::string();
+                return OnInformation(transmission, ordinary, y);
+            }
+
             /** @brief Disposes and releases all owned runtime objects. */
             void VEthernetExchanger::Finalize() noexcept {
                 /** @brief One-shot guard: only the first caller proceeds with cleanup. */
                 if (disposed_.exchange(true, std::memory_order_acq_rel)) {
                     return;
                 }
+                ClearSessionResumeState();
                 {
                     std::lock_guard<std::mutex> scope(runtime_state_mutex_);
                     p2p_state_.store(ppp::p2p::P2PState::Disabled, std::memory_order_relaxed);
@@ -499,10 +1024,16 @@ namespace ppp {
             void VEthernetExchanger::Dispose() noexcept {
                 auto self = shared_from_this();
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
-                boost::asio::dispatch(*context,
-                    [self, this, context]() noexcept {
-                        Finalize();
-                    });
+                StrandPtr strand = owner_strand_;
+                auto finalize = [self, this, context, strand]() noexcept {
+                    Finalize();
+                };
+                if (strand) {
+                    boost::asio::dispatch(*strand, std::move(finalize));
+                }
+                else {
+                    boost::asio::dispatch(*context, std::move(finalize));
+                }
             }
 
             template <typename TTransmission>
@@ -752,11 +1283,47 @@ namespace ppp {
                 ppp::telemetry::Count("client_exchanger.connect.attempt", 1);
                 ppp::telemetry::Log(Level::kInfo, "client_exchanger", "tcp connecting: %s:%d address=%s", hostname.c_str(), remotePort, remoteIP.to_string().c_str());
 
+                AppConfigurationPtr configuration = GetConfiguration();
+                if (NULLPTR == configuration) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::AppConfigurationMissing, VEthernetExchanger::ITransmissionPtr(NULLPTR));
+                }
+
+                static constexpr int ConnectPending = 0;
+                static constexpr int ConnectCompleted = 1;
+                static constexpr int ConnectTimedOut = 2;
+                std::shared_ptr<std::atomic_int> connect_state = make_shared_object<std::atomic_int>(ConnectPending);
+                std::shared_ptr<boost::asio::steady_timer> connect_timer = strand
+                    ? make_shared_object<boost::asio::steady_timer>(*strand)
+                    : make_shared_object<boost::asio::steady_timer>(*context);
+                if (NULLPTR == connect_state || NULLPTR == connect_timer) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed, VEthernetExchanger::ITransmissionPtr(NULLPTR));
+                }
+
+                const int64_t timeout_ms = std::max<int64_t>(1,
+                    static_cast<int64_t>(configuration->tcp.connect.timeout) * 1000);
+                connect_timer->expires_after(std::chrono::milliseconds(timeout_ms));
+                connect_timer->async_wait(
+                    [socket, connect_state](const boost::system::error_code& ec) noexcept {
+                        int expected = ConnectPending;
+                        if (ec == boost::system::errc::success &&
+                            connect_state->compare_exchange_strong(expected, ConnectTimedOut, std::memory_order_acq_rel)) {
+                            Socket::Closesocket(socket);
+                        }
+                    });
+
                 bool ok = ppp::coroutines::asio::async_connect(*socket, remoteEP, y);
-                if (!ok) {
+                int expected = ConnectPending;
+                const bool timed_out = !connect_state->compare_exchange_strong(
+                    expected, ConnectCompleted, std::memory_order_acq_rel) && expected == ConnectTimedOut;
+                boost::system::error_code cancel_ec;
+                connect_timer->cancel(cancel_ec);
+                if (!ok || timed_out) {
+                    const ppp::diagnostics::ErrorCode error = timed_out
+                        ? ppp::diagnostics::ErrorCode::TcpConnectTimeout
+                        : ppp::diagnostics::ErrorCode::TcpConnectFailed;
                     ppp::telemetry::Count("client_exchanger.connect.fail.tcp", 1);
-                    ppp::telemetry::Log(Level::kInfo, "client_exchanger", "tcp connect failed: %s:%d address=%s error=%d", hostname.c_str(), remotePort, remoteIP.to_string().c_str(), (int)ppp::diagnostics::ErrorCode::TcpConnectFailed);
-                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TcpConnectFailed, VEthernetExchanger::ITransmissionPtr(NULLPTR));
+                    ppp::telemetry::Log(Level::kInfo, "client_exchanger", "tcp connect failed: %s:%d address=%s error=%d", hostname.c_str(), remotePort, remoteIP.to_string().c_str(), (int)error);
+                    return ppp::diagnostics::SetLastError(error, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
                 ppp::telemetry::Log(Level::kInfo, "client_exchanger", "tcp connected: %s:%d role=%s", hostname.c_str(), remotePort, TransmissionRoleName(role));
@@ -781,10 +1348,17 @@ namespace ppp {
 
                 auto self = shared_from_this();
                 auto allocator = configuration->GetBufferAllocator();
+                StrandPtr strand = make_shared_object<Executors::Strand>(
+                    boost::asio::make_strand(*context));
+                if (!strand) {
+                    return ppp::diagnostics::SetLastError(
+                        ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                }
+                owner_strand_ = strand;
 
-                return YieldContext::Spawn(allocator.get(), *context,
-                    [self, this, context](YieldContext& y) noexcept {
-                        Loopback(context, y);
+                return YieldContext::Spawn(allocator.get(), *context, strand.get(),
+                    [self, this, context, strand](YieldContext& y) noexcept {
+                        Loopback(context, strand, y);
                     });
             }
 
@@ -1210,7 +1784,7 @@ namespace ppp {
 #endif
 
             /** @brief Runs connect-handshake-run-reconnect loop until disposed. */
-            bool VEthernetExchanger::Loopback(const ContextPtr& context, YieldContext& y) noexcept {
+            bool VEthernetExchanger::Loopback(const ContextPtr& context, const StrandPtr& strand, YieldContext& y) noexcept {
                 AppConfigurationPtr configuration = GetConfiguration();
                 if (!configuration) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::AppConfigurationMissing);
@@ -1220,82 +1794,204 @@ namespace ppp {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed);
                 }
 #endif
+                const uint64_t base_delay_ms = static_cast<uint64_t>(configuration->client.reconnections.timeout) * 1000;
+                const uint64_t max_delay_ms = static_cast<uint64_t>(configuration->client.reconnections.max_delay) * 1000;
+                ClientReconnectionPolicy reconnection_policy(
+                    base_delay_ms, max_delay_ms,
+                    static_cast<uint32_t>(configuration->client.reconnections.jitter_percent));
+
                 bool run_once = false;
-                /** @brief Main lifecycle loop for connection establishment and reconnection. */
                 while (!disposed_.load(std::memory_order_acquire)) {
-                    ExchangeToConnectingState(); {
-                        ITransmissionPtr transmission = OpenTransmission(context, y, ppp::transmissions::TcpTransmissionRole::Main);
-                        if (transmission) {
-                            bool established = transmission->HandshakeServer(y, GetId(), true) && EchoLanToRemoteExchanger(transmission, y) > -1;
-                            if (established) {
-                                transmission_ = transmission;
-                                ExchangeToEstablishState(); {
-                                    ppp::telemetry::Count("client_exchanger.connect", 1);
-                                    ppp::telemetry::Log(Level::kInfo, "client_exchanger", "exchanger connected");
-#if !defined(_ANDROID) && !defined(_IPHONE)
-                                    if (std::shared_ptr<VEthernetNetworkSwitcher> switcher = switcher_; NULLPTR != switcher) {
-                                        if (!switcher->TryApplyHostedNetworkRoutes()) {
-                                            ppp::telemetry::Log(Level::kInfo, "client_exchanger", "route setup failed after exchanger connected");
-                                            ppp::telemetry::Count("client_exchanger.route_setup.fail", 1);
-                                        }
-                                    }
-#endif
-                                    if (!SendRequestedIPv6Configuration(transmission, y)) {
-                                        transmission->Dispose();
-                                        continue;
-                                    }
-                                    RegisterAllMappingPorts();
-                                    ppp::telemetry::Log(Level::kInfo, "protocol", "session established role=main");
-                                    bool main_run_ok = false;
-                                    if (static_echo_.StaticEchoAllocatedToRemoteExchanger(y) && Run(transmission, y)) {
-                                        main_run_ok = true;
-                                        run_once = true;
-                                        static_echo_.StaticEchoClean();
-                                    }
-                                    ppp::telemetry::Log(Level::kInfo, "protocol",
-                                        "session disposed role=main reason=loop_end ok=%d error=%d",
-                                        main_run_ok ? 1 : 0,
-                                        (int)ppp::diagnostics::GetLastErrorCode());
-
-                                    /**
-                                     * @brief Link telemetry: the connection was established but has now ended.
-                                     *
-                                     * When Run() returns, the link has dropped — this is an unexpected
-                                     * interruption from the tunnel's perspective (the underlying transport
-                                     * returned EOF or an error).  Record as a fault.
-                                     *
-                                     * Note: Clean FIN with 0-byte payload that leads to Run() returning
-                                     * is still counted as a fault here because the tunnel link itself was
-                                     * interrupted, not a single TCP connection within the tunnel.
-                                     */
-                                    link_telemetry_.RecordFault();
-                                    ppp::diagnostics::LinkTelemetryGlobal::GetInstance().GetTotal().RecordFault();
-
-                                    ppp::telemetry::Count("client_exchanger.disconnect", 1);
-                                    ppp::telemetry::Log(Level::kInfo, "client_exchanger", "exchanger disconnecting");
-                                    UnregisterAllMappingPorts();
-                                }
-                                transmission_.reset();
+                    ExchangeToConnectingState();
 #if defined(_IPHONE)
-                                ResetIosChildTransmissionSlots("main_transmission_end");
+                    bool session_established = false;
 #endif
-                            }
-                            else {
-                                ppp::telemetry::Count("client_exchanger.connect.fail.handshake", 1);
-                                ppp::telemetry::Log(Level::kInfo, "client_exchanger", "exchanger handshake failed error=%d", (int)ppp::diagnostics::GetLastErrorCode());
-                            }
-
-                            transmission->Dispose();
+                    bool mappings_registered = false;
+                    ITransmissionPtr transmission = OpenTransmission(
+                        context, strand, y, ppp::transmissions::TcpTransmissionRole::Main);
+                    if (NULLPTR == transmission) {
+                        server_url_.port = 0;
+                        ppp::telemetry::Count("client_exchanger.connect.fail.open_transmission", 1);
+                        ppp::telemetry::Log(Level::kInfo, "client_exchanger", "open transmission failed error=%d", (int)ppp::diagnostics::GetLastErrorCode());
+                    }
+                    else {
+                        static constexpr int HandshakePending = 0;
+                        static constexpr int HandshakeCompleted = 1;
+                        static constexpr int HandshakeTimedOut = 2;
+                        std::shared_ptr<std::atomic_int> handshake_state =
+                            make_shared_object<std::atomic_int>(HandshakePending);
+                        std::shared_ptr<boost::asio::steady_timer> handshake_timer =
+                            make_shared_object<boost::asio::steady_timer>(*strand);
+                        bool established = false;
+                        if (NULLPTR == handshake_state || NULLPTR == handshake_timer) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         }
                         else {
-                            ppp::telemetry::Count("client_exchanger.connect.fail.open_transmission", 1);
-                            ppp::telemetry::Log(Level::kInfo, "client_exchanger", "open transmission failed error=%d", (int)ppp::diagnostics::GetLastErrorCode());
+                            const int64_t handshake_timeout_ms = std::max<int64_t>(1,
+                                static_cast<int64_t>(configuration->tcp.connect.timeout) * 1000);
+                            handshake_timer->expires_after(std::chrono::milliseconds(handshake_timeout_ms));
+                            handshake_timer->async_wait(
+                                [transmission, handshake_state](const boost::system::error_code& ec) noexcept {
+                                    int expected = HandshakePending;
+                                    if (ec == boost::system::errc::success &&
+                                        handshake_state->compare_exchange_strong(expected, HandshakeTimedOut, std::memory_order_acq_rel)) {
+                                        transmission->Dispose();
+                                    }
+                                });
+
+                            InformationEnvelope initial_information;
+                            bool has_initial_information = false;
+                            bool sent_fresh_probe = false;
+                            SessionResumeNegotiationResult negotiation =
+                                SessionResumeNegotiationResult::Fresh;
+                            established = transmission->HandshakeServer(y, GetId(), true);
+                            if (established) {
+                                auto ssl = std::dynamic_pointer_cast<ISslWebsocketTransmission>(
+                                    transmission);
+                                const ClientSessionResumePreamble preamble =
+                                    SelectClientSessionResumePreamble(
+                                        configuration->client.session_resume.enabled,
+                                        switcher_->IsVNet(),
+                                        ssl && ssl->HasAuthenticatedSessionExporter(),
+                                        session_resume_armed_, session_resume_root_.IsSet());
+                                if (preamble == ClientSessionResumePreamble::FreshProbe) {
+                                    established = EchoLanToRemoteExchanger(
+                                        transmission, y) > -1;
+                                    sent_fresh_probe = established;
+                                }
+                            }
+                            if (established) {
+                                negotiation = NegotiateSessionResume(transmission,
+                                    initial_information,
+                                    has_initial_information, y);
+                                established = negotiation !=
+                                    SessionResumeNegotiationResult::Failed;
+                            }
+                            if (established) {
+                                if (negotiation == SessionResumeNegotiationResult::Resumed) {
+                                    established = datagram_manager_->RebindTransmission(transmission);
+                                    if (!established) {
+                                        ppp::diagnostics::SetLastErrorCode(
+                                            ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                                    }
+                                }
+                                else {
+                                    // A fresh session cannot inherit server-side UDP flow state.
+                                    // Keep local handlers registered, but discard retained ports.
+                                    datagram_manager_->ResetPorts();
+                                }
+                            }
+                            if (established && has_initial_information) {
+                                established = ApplyPreDataInformation(
+                                    transmission, initial_information, y);
+                            }
+                            if (established && !sent_fresh_probe) {
+                                established = EchoLanToRemoteExchanger(transmission, y) > -1;
+                            }
+
+                            int expected = HandshakePending;
+                            const bool handshake_timed_out = !handshake_state->compare_exchange_strong(
+                                expected, HandshakeCompleted, std::memory_order_acq_rel) && expected == HandshakeTimedOut;
+                            boost::system::error_code cancel_ec;
+                            handshake_timer->cancel(cancel_ec);
+                            if (handshake_timed_out) {
+                                established = false;
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketTimeout);
+                            }
+                        }
+
+                        if (!established) {
+                            if (IsTerminalSessionResumeError(
+                                    ppp::diagnostics::GetLastErrorCode())) {
+                                ClearSessionResumeState();
+                            }
+                            server_url_.port = 0;
+                            ppp::telemetry::Count("client_exchanger.connect.fail.handshake", 1);
+                            ppp::telemetry::Log(Level::kInfo, "client_exchanger", "exchanger handshake failed error=%d", (int)ppp::diagnostics::GetLastErrorCode());
+                        }
+                        else {
+#if defined(_IPHONE)
+                            session_established = true;
+#endif
+                            transmission_ = transmission;
+                            ExchangeToEstablishState();
+                            ppp::telemetry::Count("client_exchanger.connect", 1);
+                            ppp::telemetry::Log(Level::kInfo, "client_exchanger", "exchanger connected");
+#if !defined(_ANDROID) && !defined(_IPHONE)
+                            if (std::shared_ptr<VEthernetNetworkSwitcher> switcher = switcher_; NULLPTR != switcher) {
+                                if (!switcher->TryApplyHostedNetworkRoutes()) {
+                                    ppp::telemetry::Log(Level::kInfo, "client_exchanger", "route setup failed after exchanger connected");
+                                    ppp::telemetry::Count("client_exchanger.route_setup.fail", 1);
+                                }
+                            }
+#endif
+                            bool main_run_ok = false;
+                            if (SendRequestedIPv6Configuration(transmission, y)) {
+                                RegisterAllMappingPorts();
+                                mappings_registered = true;
+                                ppp::telemetry::Log(Level::kInfo, "protocol", "session established role=main");
+                                if (static_echo_.StaticEchoAllocatedToRemoteExchanger(y)) {
+                                    reconnection_policy.Reset();
+                                    if (Run(transmission, y)) {
+                                        main_run_ok = true;
+                                        run_once = true;
+                                    }
+                                }
+                            }
+                            if (IsTerminalSessionResumeError(
+                                    ppp::diagnostics::GetLastErrorCode())) {
+                                ClearSessionResumeState();
+                            }
+                            ppp::telemetry::Log(Level::kInfo, "protocol",
+                                "session disposed role=main reason=loop_end ok=%d error=%d",
+                                main_run_ok ? 1 : 0,
+                                (int)ppp::diagnostics::GetLastErrorCode());
+
+                            link_telemetry_.RecordFault();
+                            ppp::diagnostics::LinkTelemetryGlobal::GetInstance().GetTotal().RecordFault();
+                            ppp::telemetry::Count("client_exchanger.disconnect", 1);
+                            ppp::telemetry::Log(Level::kInfo, "client_exchanger", "exchanger disconnecting");
                         }
                     }
-                    ExchangeToReconnectingState();
 
-                    int64_t reconnection_timeout = static_cast<int64_t>(configuration->client.reconnections.timeout) * 1000;
-                    Sleep(reconnection_timeout, context, y);
+                    if (!disposed_.load(std::memory_order_acquire)) {
+                        ExchangeToReconnectingState();
+                    }
+
+                    // L3 roaming retains UDP flow state only. VMUX and all other
+                    // carrier-bound state must be closed before reconnect can publish.
+                    std::shared_ptr<vmux::vmux_net> mux = mux_coordinator_->Take();
+                    mux_vlan_ = 0;
+                    if (NULLPTR != mux) {
+                        mux->close_exec();
+                    }
+                    datagram_manager_->RebindTransmission(NULLPTR);
+                    static_echo_.StaticEchoClean();
+                    if (mappings_registered) {
+                        UnregisterAllMappingPorts();
+                    }
+                    if (transmission_ == transmission) {
+                        transmission_.reset();
+                    }
+#if defined(_IPHONE)
+                    if (session_established) {
+                        ResetIosChildTransmissionSlots("main_transmission_end");
+                    }
+#endif
+                    if (NULLPTR != transmission) {
+                        transmission->Dispose();
+                    }
+
+                    if (disposed_.load(std::memory_order_acquire)) {
+                        break;
+                    }
+                    const uint64_t entropy =
+                        (static_cast<uint64_t>(static_cast<uint32_t>(RandomNext())) << 32) |
+                        static_cast<uint32_t>(RandomNext());
+                    const uint64_t delay_ms = reconnection_policy.OnFailure(entropy);
+                    if (!Sleep(static_cast<int64_t>(delay_ms), context, y)) {
+                        break;
+                    }
                 }
                 return run_once;
             }
@@ -1755,7 +2451,9 @@ namespace ppp {
                     p2p_state_.store(configured_p2p_state_, std::memory_order_relaxed);
                 }
                 ResetP2PCandidateTransport();
-                reconnection_count_++;
+                if (reconnection_count_ < std::numeric_limits<int>::max()) {
+                    ++reconnection_count_;
+                }
 #if defined(_IPHONE)
                 ResetIosChildTransmissionSlots("reconnecting");
 #endif

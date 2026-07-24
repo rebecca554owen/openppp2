@@ -1,7 +1,7 @@
 # Configuration Reference
 > Status: Active
 > Type: Reference
-> Last verified: 8c8a888
+> Last verified: 82643dc
 > Parent index: [Reference index](README.md)
 > Peer link: [中文](CONFIGURATION_CN.md)
 
@@ -42,6 +42,8 @@ Selected canonical structures:
 | `websocket.ssl` | `certificate-file`, `certificate-key-file`, `certificate-chain-file`, `certificate-key-password`, `ciphersuites`, `verify-peer`. |
 | `mux` | `mode`, `turbo`, `flow`, `tx`, and optional `debug.key`; nested field spelling follows `ToJson()`. |
 | `server.ipv6` | `mode`, `cidr`, `gateway`, `dns1`, `dns2`, `lease-time`, `static-addresses`; the CIDR carries its prefix length. |
+| `server.session_resume` | `enabled` and `grace_ms`; server master switch and suspended-session grace period. |
+| `client.session_resume` | `enabled`; client master switch for authenticated L3 roaming. |
 | `key` | `kf`, `kh`, `kl`, `kx`, `sb`, cipher names/keys, and transform flags. |
 | `client` | mappings, routes, proxy settings, reconnect timeout, identity, server, and bandwidth. |
 
@@ -61,6 +63,8 @@ For compatibility, `ToJson()` also emits `websocket.verify-peer` alongside the c
 | `websocket.listen.ws` / `websocket.listen.wss` | `0` / `0` (disabled) |
 | `websocket.ssl.verify-peer` | `true` |
 | `websocket.ssl.ciphersuites` | `GetDefaultCipherSuites()` |
+| `client.session_resume.enabled` / `server.session_resume.enabled` | `false` / `false` |
+| `server.session_resume.grace_ms` | `60000` milliseconds |
 | `key.kf` | `154543927` |
 | `key.kh` | `12` |
 | `key.kl` | `10` |
@@ -73,6 +77,12 @@ For compatibility, `ToJson()` also emits `websocket.verify-peer` alongside the c
 | `vbgp.update-interval` | `3600` seconds |
 
 `plaintext=true` keeps the base94 envelope active after handshake, and the startup security diagnostic explicitly reports packets transmitted without encryption. It is unsafe for untrusted networks. Set it to `false` and replace both default keys before any real deployment; both peers must also agree on the framing-related key flags.
+
+## Authenticated L3 session roaming
+
+`client.session_resume.enabled` and `server.session_resume.enabled` are independent master switches and both default to false. Roaming activates only when both peers enable and negotiate capability v1 over WSS and the concrete `ISslWebsocketTransmission` exposes an authenticated TLS session exporter. Plain TCP, plain WebSocket, CDN paths, WSS without the exporter, and mixed capability states fail closed to ordinary fresh-session behavior.
+
+`server.session_resume.grace_ms` bounds how long the server retains only L3 session/IP/NAT/UDP-manager state after an eligible carrier failure. FRP mappings and VMUX are still closed. The retained authentication root is process-local and never serialized; a server restart therefore forces fresh authentication. When roaming is enabled, the WSS listener is pinned to the switcher's owner `io_context`, which avoids cross-executor handoff but may reduce accept/handshake parallelism. See [Authenticated L3 session roaming](../design/session-recovery/l3-roaming.md) for the protocol, threat model, and rollout limits.
 
 ## Security-sensitive example fragment
 

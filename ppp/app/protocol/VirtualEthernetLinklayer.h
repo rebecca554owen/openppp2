@@ -11,9 +11,12 @@ namespace ppp::configurations { class AppConfiguration; }
 
 #include <ppp/Int128.h>
 #include <ppp/net/Firewall.h>
+#include <ppp/net/Ipep.h>
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/transmissions/ITransmission.h>
 #include <ppp/app/protocol/VirtualEthernetInformation.h>
+
+#include <cstring>
 
 namespace ppp {
     namespace app {
@@ -137,6 +140,62 @@ namespace ppp {
                  * @return `true` when at least one packet is processed successfully.
                  */
                 virtual bool                                                Run(const ITransmissionPtr& transmission, YieldContext& y) noexcept;
+                /**
+                 * @brief Strictly decodes one complete INFO frame without dispatching it.
+                 * @param packet Complete link-layer frame, including its action byte.
+                 * @param packet_length Complete frame length.
+                 * @param information Receives the base information and parsed extensions.
+                 * @return `true` only for a complete INFO frame with valid extension JSON.
+                 */
+                static bool                                                 DecodeInformation(const Byte* packet, int packet_length, InformationEnvelope& information) noexcept {
+                    InformationEnvelope decoded;
+                    const int fixed_length = 1 + static_cast<int>(sizeof(VirtualEthernetInformation));
+                    if (NULLPTR == packet || packet_length < fixed_length ||
+                        packet[0] != static_cast<Byte>(PacketAction_INFO)) {
+                        return false;
+                    }
+
+                    std::memcpy(&decoded.Base, packet + 1, sizeof(decoded.Base));
+                    decoded.Base.BandwidthQoS = ppp::net::Ipep::NetworkToHostOrder(decoded.Base.BandwidthQoS);
+                    decoded.Base.ExpiredTime = ntohl(decoded.Base.ExpiredTime);
+                    decoded.Base.IncomingTraffic = ppp::net::Ipep::NetworkToHostOrder(decoded.Base.IncomingTraffic);
+                    decoded.Base.OutgoingTraffic = ppp::net::Ipep::NetworkToHostOrder(decoded.Base.OutgoingTraffic);
+
+                    const int extension_length = packet_length - fixed_length;
+                    if (extension_length > 0) {
+                        decoded.ExtendedJson.assign(
+                            reinterpret_cast<const char*>(packet + fixed_length), extension_length);
+                        try {
+                            Json::CharReaderBuilder builder;
+                            Json::CharReaderBuilder::strictMode(&builder.settings_);
+                            builder["collectComments"] = false;
+                            std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+                            Json::Value json;
+                            Json::String errors;
+                            if (!reader || !reader->parse(
+                                    decoded.ExtendedJson.data(),
+                                    decoded.ExtendedJson.data() + decoded.ExtendedJson.size(),
+                                    &json, &errors) ||
+                                !json.isObject() ||
+                                !VirtualEthernetInformationExtensions::FromJson(decoded.Extensions, json)) {
+                                return false;
+                            }
+                        }
+                        catch (...) {
+                            return false;
+                        }
+                    }
+
+                    information = std::move(decoded);
+                    return true;
+                }
+                /**
+                 * @brief Reads and strictly decodes exactly one INFO frame without dispatch.
+                 * @param transmission Pre-data transport channel.
+                 * @param information Receives the decoded INFO envelope.
+                 * @param y Coroutine yield context.
+                 */
+                static bool                                                 ReadInformation(const ITransmissionPtr& transmission, InformationEnvelope& information, YieldContext& y) noexcept;
                 /** @brief Generates a protocol connection ID in 24-bit range. */
                 static int                                                  NewId() noexcept;
 

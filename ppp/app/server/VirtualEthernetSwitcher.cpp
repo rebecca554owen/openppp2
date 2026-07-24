@@ -15,6 +15,9 @@
 #include <ppp/io/MemoryStream.h>
 #include <ppp/io/File.h>
 #include <ppp/app/protocol/VirtualEthernetTcpMss.h>
+#include <ppp/app/protocol/SessionResumeAuthenticator.h>
+#include <ppp/app/server/SessionResumeEstablishTransaction.h>
+#include <ppp/app/server/SessionResumeFallbackDecision.h>
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/net/packet/UdpFrame.h>
 #include <ppp/net/packet/IcmpFrame.h>
@@ -55,6 +58,72 @@ using ppp::coroutines::YieldContext;
 using ppp::collections::Dictionary;
 using ppp::telemetry::Level;
 
+static bool BuildSessionResumeId(const ppp::Int128& id,
+    ppp::app::protocol::SessionResumeId& output) noexcept {
+    ppp::string guid = ppp::auxiliary::StringAuxiliary::Int128ToGuidString(id);
+    ppp::string canonical;
+    canonical.reserve(ppp::app::protocol::SessionResumeIdSize * 2);
+    for (char value : guid) {
+        if (value != '-') {
+            canonical.push_back(value);
+        }
+    }
+    if (canonical.size() != output.size() * 2) {
+        output.fill(0);
+        return false;
+    }
+
+    auto nibble = [](char value, std::uint8_t& decoded) noexcept {
+        if (value >= '0' && value <= '9') {
+            decoded = static_cast<std::uint8_t>(value - '0');
+            return true;
+        }
+        if (value >= 'a' && value <= 'f') {
+            decoded = static_cast<std::uint8_t>(value - 'a' + 10);
+            return true;
+        }
+        return false;
+    };
+
+    for (std::size_t i = 0; i < output.size(); ++i) {
+        std::uint8_t high = 0;
+        std::uint8_t low = 0;
+        if (!nibble(canonical[i * 2], high) || !nibble(canonical[i * 2 + 1], low)) {
+            output.fill(0);
+            return false;
+        }
+        output[i] = static_cast<std::uint8_t>((high << 4) | low);
+    }
+    return true;
+}
+
+static bool DeriveSessionResumeCandidateBinding(
+    const std::shared_ptr<ppp::transmissions::ITransmission>& transmission,
+    const ppp::Int128& session_id,
+    ppp::app::protocol::SessionResumeCandidateBinding& candidate) noexcept {
+    if (!transmission ||
+        !std::dynamic_pointer_cast<ppp::transmissions::ISslWebsocketTransmission>(transmission) ||
+        !transmission->HasAuthenticatedSessionExporter()) {
+        candidate.fill(0);
+        return false;
+    }
+
+    ppp::app::protocol::SessionResumeId binary_session_id{};
+    if (!BuildSessionResumeId(session_id, binary_session_id)) {
+        candidate.fill(0);
+        return false;
+    }
+
+    ppp::app::protocol::SessionResumeExporter exporter =
+        [transmission](const char* label, const std::uint8_t* context,
+            std::size_t context_length, std::uint8_t* output,
+            std::size_t output_length) noexcept {
+                return transmission->ExportAuthenticatedSessionKey(
+                    label, context, context_length, output, output_length);
+            };
+    return ppp::app::protocol::DeriveSessionResumeCandidateBinding(
+        exporter, binary_session_id, candidate);
+}
 
 /**
  * @brief Tests whether an IPv6 address is in the global unicast range.
@@ -1408,6 +1477,12 @@ namespace ppp {
                         continue;
                     }
 
+                    Socket::GetContextCallback pinned_context;
+                    if (categories == NetworkAcceptorCategories_WebSocketSSL &&
+                        configuration_->server.session_resume.enabled) {
+                        pinned_context = [this]() noexcept { return context_; };
+                    }
+
                     bool bok = Socket::AcceptLoopbackAsync(acceptor,
                         [self, this, acceptor, categories](const Socket::AsioContext& context, const Socket::AsioTcpSocket& socket) noexcept {
                             if (NULLPTR == socket || !socket->is_open()) {
@@ -1426,7 +1501,7 @@ namespace ppp {
 
                             ppp::net::Socket::SetWindowSizeIfNotZero(socket->native_handle(), configuration_->tcp.cwnd, configuration_->tcp.rwnd);
                             return !disposed_ && Accept(context, socket, categories);
-                        });
+                        }, pinned_context);
 
                     if (bok) {
                         bany = true;
@@ -1635,7 +1710,7 @@ namespace ppp {
                  */
                 {
                     SynchronizedObjectScope scope(syncobj_);
-                    if (disposed_) {
+                    if (disposed_ || exchangers_.find(session_id) != exchangers_.end()) {
                         return NULLPTR;
                     }
                 }
@@ -1661,31 +1736,31 @@ namespace ppp {
                 }
 
                 /**
-                 * @brief Phase 3 — re-acquire lock to insert the opened exchanger.
+                 * @brief Phase 3 — re-acquire lock and publish only into an empty slot.
                  *
-                 *        Re-check disposed_ inside the lock: the switcher might have
-                 *        been torn down in the window between phase 1 and phase 3.
-                 *        Any exchanger previously mapped to the same session_id is
-                 *        moved out and disposed after the lock is released (safe pattern).
+                 *        Re-check both disposed_ and session identity after the unlocked
+                 *        construction window. An active or suspended exchanger is never
+                 *        replaced by a racing connection.
                  */
-                VirtualEthernetExchangerPtr oldExchanger;
+                bool rejected = false;
                 {
                     SynchronizedObjectScope scope(syncobj_);
-                    if (disposed_) {
-                        IDisposable::Dispose(newExchanger);
-                        return NULLPTR;
+                    if (disposed_ || exchangers_.find(session_id) != exchangers_.end()) {
+                        rejected = true;
                     }
+                    else {
+                        exchangers_.emplace(session_id, newExchanger);
+                        ppp::telemetry::Gauge("server.exchanger_count", (int64_t)exchangers_.size());
+                    }
+                }
 
-                    VirtualEthernetExchangerPtr& slot = exchangers_[session_id];
-                    oldExchanger = std::move(slot);
-                    slot         = newExchanger;
-                    ppp::telemetry::Gauge("server.exchanger_count", (int64_t)exchangers_.size());
+                if (rejected) {
+                    IDisposable::Dispose(newExchanger);
+                    return NULLPTR;
                 }
 
                 ppp::telemetry::Count("server.exchanger.add", 1);
                 ppp::telemetry::Log(Level::kInfo, "server", "exchanger added");
-
-                IDisposable::Dispose(oldExchanger);
                 return newExchanger;
             }
 
@@ -1710,7 +1785,7 @@ namespace ppp {
              * @param session_id Session identifier.
              * @param i Optional managed-server information payload.
              * @param y Coroutine context for protocol exchange.
-             * @return true if establishment and run succeed; otherwise false.
+             * @return true if the carrier lifecycle is accepted or suspended; false on terminal failure.
              */
             bool VirtualEthernetSwitcher::Establish(const ITransmissionPtr& transmission, const Int128& session_id, const VirtualEthernetInformationPtr& i, YieldContext& y) noexcept {
                 ppp::string session_guid = auxiliary::StringAuxiliary::Int128ToGuidString(session_id);
@@ -1728,87 +1803,286 @@ namespace ppp {
                     return false;
                 }
 
-                VirtualEthernetExchangerPtr channel = AddNewExchanger(transmission, session_id);
-                if (NULLPTR == channel) {
-                    return false;
+                bool fresh = false;
+                VirtualEthernetExchangerPtr channel = GetExchanger(session_id);
+                if (NULLPTR != channel) {
+                    ppp::app::protocol::SessionResumePendingAttempt candidate_material;
+                    ppp::app::protocol::SessionResumeCandidateBinding& candidate =
+                        candidate_material.fields.candidate_binding;
+                    const bool resume_enabled =
+                        configuration_->server.session_resume.enabled;
+                    const bool candidate_available = resume_enabled &&
+                        DeriveSessionResumeCandidateBinding(
+                            transmission, session_id, candidate);
+                    if (!candidate_available) {
+                        const SessionResumeFallbackReason fallback_reason = resume_enabled
+                            ? SessionResumeFallbackReason::IneligibleCarrier
+                            : SessionResumeFallbackReason::ResumeDisabled;
+                        ppp::telemetry::Count("server.session.resume_rejected", 1);
+                        if (DecideSessionResumeFallback(fallback_reason) !=
+                            SessionResumeFallbackDecision::Fresh) {
+                            return false;
+                        }
+
+                        /**
+                         * Session resume is explicitly disabled, so preserve the
+                         * pre-resume behavior and replace the existing exchanger.
+                         * When resume is enabled, an ineligible carrier must never
+                         * reach this path or claim the session by ID alone.
+                         */
+                        VirtualEthernetExchangerPtr removed = DeleteExchanger(channel.get());
+                        if (NULLPTR == removed) {
+                            return false;
+                        }
+                        removed->Finalize();
+
+                        channel = AddNewExchanger(transmission, session_id);
+                        if (NULLPTR == channel) {
+                            return false;
+                        }
+                        fresh = true;
+
+                        ppp::telemetry::Gauge("server.active_sessions", (int64_t)exchangers_.size());
+                        ppp::telemetry::Count("server.session.accepted", 1);
+                        ppp::telemetry::Log(Level::kInfo, "server", "session accepted (fresh, resume disabled)");
+                    }
+
+                    auto read_resume_control = [&](ppp::app::protocol::SessionResumeControl& control) noexcept {
+                        InformationEnvelope envelope;
+                        if (!ppp::app::protocol::VirtualEthernetLinklayer::ReadInformation(
+                                transmission, envelope, y)) {
+                            return false;
+                        }
+                        VirtualEthernetInformationExtensions extensions = envelope.Extensions;
+                        control = extensions.SessionResume;
+                        extensions.SessionResume.Clear();
+                        return control.HasAny() && !extensions.HasAny();
+                    };
+                    auto send_resume_control = [&](const ppp::app::protocol::SessionResumeControl& control) noexcept {
+                        if (!control.Valid()) {
+                            return false;
+                        }
+
+                        InformationEnvelope envelope;
+                        envelope.Base.Clear();
+                        envelope.Base.BandwidthQoS = 0;
+                        envelope.Base.IncomingTraffic = std::numeric_limits<UInt64>::max();
+                        envelope.Base.OutgoingTraffic = std::numeric_limits<UInt64>::max();
+                        envelope.Base.ExpiredTime = std::numeric_limits<UInt32>::max();
+                        envelope.Extensions.Clear();
+                        envelope.Extensions.SessionResume = control;
+                        envelope.ExtendedJson = envelope.Extensions.ToJson();
+                        return channel->DoInformation(transmission, envelope, y);
+                    };
+
+                    bool resumed = false;
+                    SessionResumeFallbackReason fallback_reason =
+                        SessionResumeFallbackReason::OtherResumeFailure;
+                    if (!fresh) {
+                        using ReadResumeControl = decltype(read_resume_control);
+                        using SendResumeControl = decltype(send_resume_control);
+                        class EstablishResumeOperations final :
+                            public SessionResumeEstablishOperations {
+                        public:
+                            EstablishResumeOperations(
+                                ReadResumeControl& read_control,
+                                SendResumeControl& send_control,
+                                VirtualEthernetExchangerPtr& channel,
+                                const ITransmissionPtr& transmission,
+                                const ppp::app::protocol::SessionResumeCandidateBinding& candidate) noexcept
+                                : read_control_(read_control)
+                                , send_control_(send_control)
+                                , channel_(channel)
+                                , transmission_(transmission)
+                                , candidate_(candidate) {
+                            }
+
+                            bool ReadControl(Control& control) noexcept override {
+                                return read_control_(control);
+                            }
+
+                            bool SendControl(const Control& control) noexcept override {
+                                return send_control_(control);
+                            }
+
+                            SessionResumeTransactionBeginStatus Begin(
+                                const Control& request,
+                                std::uint64_t& reservation_token,
+                                Control& response) noexcept override {
+                                const VirtualEthernetExchanger::ResumeBeginStatus status =
+                                    channel_->BeginResume(transmission_, request,
+                                        candidate_, Executors::GetTickCount(),
+                                        reservation_token, response);
+                                if (status == VirtualEthernetExchanger::ResumeBeginStatus::Reserved) {
+                                    return SessionResumeTransactionBeginStatus::Accepted;
+                                }
+                                if (status == VirtualEthernetExchanger::ResumeBeginStatus::GenerationSync) {
+                                    return SessionResumeTransactionBeginStatus::GenerationSync;
+                                }
+                                return SessionResumeTransactionBeginStatus::Rejected;
+                            }
+
+                            bool Commit(const Control& confirm,
+                                std::uint64_t reservation_token,
+                                Control& committed) noexcept override {
+                                return channel_->CommitResume(transmission_, confirm,
+                                    candidate_, reservation_token,
+                                    Executors::GetTickCount(), committed);
+                            }
+
+                            bool Publish(
+                                std::uint64_t reservation_token) noexcept override {
+                                return channel_->PublishCommittedResume(transmission_,
+                                    reservation_token, Executors::GetTickCount());
+                            }
+
+                            void Cancel(
+                                std::uint64_t reservation_token) noexcept override {
+                                channel_->CancelResume(transmission_, reservation_token);
+                            }
+
+                        private:
+                            ReadResumeControl& read_control_;
+                            SendResumeControl& send_control_;
+                            VirtualEthernetExchangerPtr& channel_;
+                            const ITransmissionPtr& transmission_;
+                            const ppp::app::protocol::SessionResumeCandidateBinding& candidate_;
+                        } operations(read_resume_control, send_resume_control,
+                            channel, transmission, candidate);
+
+                        const SessionResumeTransactionResult transaction =
+                            RunSessionResumeEstablishTransaction(operations);
+                        resumed = transaction.outcome ==
+                            SessionResumeTransactionOutcome::Resumed;
+                        fallback_reason = transaction.fallback_reason;
+                        if (transaction.outcome ==
+                            SessionResumeTransactionOutcome::PreserveSuspended) {
+                            return true;
+                        }
+                        if (transaction.outcome ==
+                            SessionResumeTransactionOutcome::Fatal) {
+                            return false;
+                        }
+                    }
+
+                    if (!resumed && !fresh) {
+                        ppp::telemetry::Count("server.session.resume_rejected", 1);
+                        if (DecideSessionResumeFallback(fallback_reason) !=
+                            SessionResumeFallbackDecision::Fresh) {
+                            return false;
+                        }
+
+                        ppp::app::protocol::SessionResumeControl reject;
+                        reject.action = ppp::app::protocol::SessionResumeAction::Reject;
+                        reject.reason = "session-unavailable";
+                        if (!send_resume_control(reject)) {
+                            return false;
+                        }
+
+                        VirtualEthernetExchangerPtr removed = DeleteExchanger(channel.get());
+                        if (NULLPTR == removed) {
+                            return false;
+                        }
+                        removed->Finalize();
+
+                        channel = AddNewExchanger(transmission, session_id);
+                        if (NULLPTR == channel) {
+                            return false;
+                        }
+                        fresh = true;
+
+                        ppp::telemetry::Gauge("server.active_sessions", (int64_t)exchangers_.size());
+                        ppp::telemetry::Count("server.session.accepted", 1);
+                        ppp::telemetry::Log(Level::kInfo, "server", "session accepted");
+                    }
                 }
+                else {
+                    channel = AddNewExchanger(transmission, session_id);
+                    if (NULLPTR == channel) {
+                        return false;
+                    }
+                    fresh = true;
 
-                ppp::telemetry::Gauge("server.active_sessions", (int64_t)exchangers_.size());
-                ppp::telemetry::Count("server.session.accepted", 1);
-                ppp::telemetry::Log(Level::kInfo, "server", "session accepted");
-
-                VirtualEthernetInformation fallback_information;
-                const VirtualEthernetInformation* established_information = i.get();
-                if (NULLPTR == established_information && IsIPv6ServerEnabled() && configuration_->server.backend.empty()) {
-                    fallback_information.Clear();
-                    fallback_information.BandwidthQoS = 0;
-                    fallback_information.IncomingTraffic = std::numeric_limits<UInt64>::max();
-                    fallback_information.OutgoingTraffic = std::numeric_limits<UInt64>::max();
-                    fallback_information.ExpiredTime = std::numeric_limits<UInt32>::max();
-                    established_information = &fallback_information;
-                    const char* reason = "no-managed-backend";
-                }
-
-                if (NULLPTR == established_information && !configuration_->server.backend.empty()) {
-                    DeleteExchanger(channel.get());
-                    return false;
+                    ppp::telemetry::Gauge("server.active_sessions", (int64_t)exchangers_.size());
+                    ppp::telemetry::Count("server.session.accepted", 1);
+                    ppp::telemetry::Log(Level::kInfo, "server", "session accepted");
                 }
 
                 bool run = true;
-                if (NULLPTR != established_information) {
-                    InformationEnvelope envelope = BuildInformationEnvelope(session_id, *established_information);
-                    if (envelope.Extensions.AssignedIPv6Address.is_v6() && !AddIPv6Exchanger(session_id, envelope.Extensions)) {
-                        RevokeIPv6Lease(session_id);
-                        DeleteIPv6Exchanger(session_id);
-                        envelope.Extensions.AssignedIPv6Address = boost::asio::ip::address();
-                        envelope.Extensions.AssignedIPv6Gateway = boost::asio::ip::address();
-                        envelope.Extensions.AssignedIPv6RoutePrefix = boost::asio::ip::address();
-                        envelope.Extensions.AssignedIPv6RoutePrefixLength = 0;
-                        envelope.Extensions.AssignedIPv6Dns1 = boost::asio::ip::address();
-                        envelope.Extensions.AssignedIPv6Dns2 = boost::asio::ip::address();
-                        envelope.Extensions.AssignedIPv6Flags = 0;
-                        envelope.Extensions.IPv6StatusCode = VirtualEthernetInformationExtensions::IPv6Status_Failed;
-                        envelope.Extensions.IPv6StatusMessage = "server-ipv6-dataplane-install-failed";
+                if (fresh) {
+                    VirtualEthernetInformation fallback_information;
+                    const VirtualEthernetInformation* established_information = i.get();
+                    if (NULLPTR == established_information && configuration_->server.backend.empty() &&
+                        IsIPv6ServerEnabled()) {
+                        fallback_information.Clear();
+                        fallback_information.BandwidthQoS = 0;
+                        fallback_information.IncomingTraffic = std::numeric_limits<UInt64>::max();
+                        fallback_information.OutgoingTraffic = std::numeric_limits<UInt64>::max();
+                        fallback_information.ExpiredTime = std::numeric_limits<UInt32>::max();
+                        established_information = &fallback_information;
                     }
 
-                    // Fill ClientExitIP from the client's remote TCP endpoint.
-                    // The client uses this value (priority-2) for EDNS Client Subnet
-                    // when dns.ecs.override_ip is not configured.  GetRemoteEndPoint()
-                    // returns the peer address of the underlying socket; it is
-                    // "usually correct" but may differ from the real DNS exit IP in
-                    // multi-WAN, proxy-chain, or transparent-proxy scenarios.
-                    {
+                    if (NULLPTR == established_information && !configuration_->server.backend.empty()) {
+                        DeleteExchanger(channel.get());
+                        return false;
+                    }
+
+                    if (NULLPTR != established_information) {
+                        InformationEnvelope envelope = BuildInformationEnvelope(session_id, *established_information);
+                        if (envelope.Extensions.AssignedIPv6Address.is_v6() && !AddIPv6Exchanger(session_id, envelope.Extensions)) {
+                            RevokeIPv6Lease(session_id);
+                            DeleteIPv6Exchanger(session_id);
+                            envelope.Extensions.AssignedIPv6Address = boost::asio::ip::address();
+                            envelope.Extensions.AssignedIPv6Gateway = boost::asio::ip::address();
+                            envelope.Extensions.AssignedIPv6RoutePrefix = boost::asio::ip::address();
+                            envelope.Extensions.AssignedIPv6RoutePrefixLength = 0;
+                            envelope.Extensions.AssignedIPv6Dns1 = boost::asio::ip::address();
+                            envelope.Extensions.AssignedIPv6Dns2 = boost::asio::ip::address();
+                            envelope.Extensions.AssignedIPv6Flags = 0;
+                            envelope.Extensions.IPv6StatusCode = VirtualEthernetInformationExtensions::IPv6Status_Failed;
+                            envelope.Extensions.IPv6StatusMessage = "server-ipv6-dataplane-install-failed";
+                        }
+
                         boost::asio::ip::tcp::endpoint remote_ep = transmission->GetRemoteEndPoint();
                         boost::asio::ip::address remote_addr = remote_ep.address();
                         if (!remote_addr.is_unspecified()) {
                             envelope.Extensions.ClientExitIP = remote_addr;
                         }
-                    }
 
-                    // Refresh ExtendedJson so the serialized payload reflects both
-                    // the IPv6 extensions (possibly mutated above) and the newly
-                    // populated ClientExitIP.
-                    envelope.ExtendedJson = envelope.Extensions.ToJson();
+                        ppp::app::protocol::SessionResumeControl offer;
+                        if (channel->PrepareFreshResumeOffer(transmission, offer)) {
+                            envelope.Extensions.SessionResume = offer;
+                        }
+                        envelope.ExtendedJson = envelope.Extensions.ToJson();
 
-                    run = channel->DoInformation(transmission, envelope, y);
-                    if (run) {
-                        // Use Unix wall-clock time (time(NULL)) to compare against the server-issued
-                        // ExpiredTime Unix timestamp.  GetTickCount() is monotonic and must not be used here.
-                        run = VirtualEthernetInformation::Valid(const_cast<VirtualEthernetInformation*>(established_information), (UInt32)time(NULL));
+                        run = channel->DoInformation(transmission, envelope, y);
+                        if (run) {
+                            run = VirtualEthernetInformation::Valid(
+                                const_cast<VirtualEthernetInformation*>(established_information), (UInt32)time(NULL));
+                        }
                     }
                 }
 
-                if (run) {
-                    VirtualEthernetLoggerPtr logger = GetLogger();
-                    if (NULLPTR != logger) {
-                        logger->Vpn(session_id, transmission);
-                    }
-
-                    run = channel->Run(transmission, y);
+                if (!run) {
+                    DeleteExchanger(channel.get());
+                    return false;
                 }
 
-                DeleteExchanger(channel.get());
-                return run;
+                VirtualEthernetLoggerPtr logger = GetLogger();
+                if (NULLPTR != logger) {
+                    logger->Vpn(session_id, transmission);
+                }
+
+                const std::uint64_t generation = channel->GetCarrierGeneration();
+                run = channel->Run(transmission, y);
+                const ppp::diagnostics::ErrorCode run_error = ppp::diagnostics::GetLastErrorCode();
+                VirtualEthernetExchanger::CarrierStopResult stop =
+                    channel->OnCarrierStopped(transmission, generation, run_error, Executors::GetTickCount());
+                if (stop == VirtualEthernetExchanger::CarrierStopResult::Terminal) {
+                    DeleteExchanger(channel.get());
+                    return run;
+                }
+                return true;
             }
 
             /**

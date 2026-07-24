@@ -562,6 +562,25 @@ namespace ppp {
                 return ok;
             }
 
+            /** @brief Reads one complete INFO frame for pre-data proof exchanges. */
+            bool VirtualEthernetLinklayer::ReadInformation(const ITransmissionPtr& transmission, InformationEnvelope& information, YieldContext& y) noexcept {
+                if (NULLPTR == transmission) {
+                    return global::PACKET_Fail(ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                }
+
+                int packet_length = 0;
+                std::shared_ptr<Byte> packet = transmission->Read(y, packet_length);
+                if (NULLPTR == packet) {
+                    return false;
+                }
+
+                if (!DecodeInformation(packet.get(), packet_length, information)) {
+                    return global::PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+                }
+
+                return true;
+            }
+
 #pragma pack(push, 1)   // ensure packed structures for wire compatibility
             // MUX request structure (includes action byte)
             typedef struct
@@ -785,37 +804,22 @@ namespace ppp {
                     }
                 }
                 elif (packet_action == PacketAction_INFO) {           // Virtual Ethernet information
-                    if (packet_length >= static_cast<int>(sizeof(VirtualEthernetInformation))) {
-                        ppp::string session_guid = ppp::auxiliary::StringAuxiliary::Int128ToGuidString(id_);
-                        ppp::telemetry::SpanScope span("protocol.auth", session_guid.c_str());
+                    ppp::string session_guid = ppp::auxiliary::StringAuxiliary::Int128ToGuidString(id_);
+                    ppp::telemetry::SpanScope span("protocol.auth", session_guid.c_str());
 
-                        InformationEnvelope info;
-                        info.Base = *reinterpret_cast<VirtualEthernetInformation*>(p);
-
-                        // convert from network byte order to host byte order
-                        info.Base.BandwidthQoS    = ppp::net::Ipep::NetworkToHostOrder(info.Base.BandwidthQoS);
-                        info.Base.ExpiredTime     = ntohl(info.Base.ExpiredTime);
-                        info.Base.IncomingTraffic = ppp::net::Ipep::NetworkToHostOrder(info.Base.IncomingTraffic);
-                        info.Base.OutgoingTraffic = ppp::net::Ipep::NetworkToHostOrder(info.Base.OutgoingTraffic);
-
-                        p += sizeof(VirtualEthernetInformation);
-                        packet_length -= sizeof(VirtualEthernetInformation);
-                        if (packet_length > 0) {
-                            info.ExtendedJson.assign(reinterpret_cast<char*>(p), packet_length);
-                            VirtualEthernetInformationExtensions::FromJson(info.Extensions, info.ExtendedJson);
-                        }
-
-                        ppp::telemetry::Log(Level::kDebug, "protocol", "INFO received bandwidth_qos=%lld incoming=%llu outgoing=%llu",
-                                            static_cast<long long>(info.Base.BandwidthQoS),
-                                            static_cast<unsigned long long>(info.Base.IncomingTraffic),
-                                            static_cast<unsigned long long>(info.Base.OutgoingTraffic));
-                        ppp::telemetry::Count("protocol.info.received", 1);
-                        ppp::telemetry::Count("protocol.auth.success", 1);
-                        ppp::telemetry::Count("protocol.bandwidth.received", 1);
-                        return OnInformation(transmission, static_cast<const InformationEnvelope&>(info), y);
-                    } else {
-                        return packet_length == 0;
+                    InformationEnvelope info;
+                    if (!DecodeInformation(p - 1, packet_length + 1, info)) {
+                        return global::PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     }
+
+                    ppp::telemetry::Log(Level::kDebug, "protocol", "INFO received bandwidth_qos=%lld incoming=%llu outgoing=%llu",
+                                        static_cast<long long>(info.Base.BandwidthQoS),
+                                        static_cast<unsigned long long>(info.Base.IncomingTraffic),
+                                        static_cast<unsigned long long>(info.Base.OutgoingTraffic));
+                    ppp::telemetry::Count("protocol.info.received", 1);
+                    ppp::telemetry::Count("protocol.auth.success", 1);
+                    ppp::telemetry::Count("protocol.bandwidth.received", 1);
+                    return OnInformation(transmission, static_cast<const InformationEnvelope&>(info), y);
                 }
                 elif (packet_action == PacketAction_FRP_ENTRY) {      // FRP entry registration
                     if (packet_length > 0) {

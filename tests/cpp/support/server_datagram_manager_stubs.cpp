@@ -21,7 +21,7 @@ namespace ppp {
                 namespace test {
 
                     void ServerDatagramPortSpy::Reset() noexcept {
-                        construct = destruct = dispose = open = sendto = 0;
+                        construct = destruct = dispose = open = sendto = rebind = 0;
                     }
 
                     ServerDatagramPortSpy& ServerDatagramPortSpyInstance() noexcept {
@@ -74,6 +74,12 @@ namespace ppp {
 
             bool VirtualEthernetDatagramPort::Open() noexcept {
                 udp::test::ServerDatagramPortSpyInstance().open++;
+                return true;
+            }
+
+            bool VirtualEthernetDatagramPort::RebindTransmission(const ITransmissionPtr& transmission) noexcept {
+                transmission_ = transmission;
+                udp::test::ServerDatagramPortSpyInstance().rebind++;
                 return true;
             }
 
