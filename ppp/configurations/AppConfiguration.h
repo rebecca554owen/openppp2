@@ -247,6 +247,10 @@ namespace ppp {
                     bool                                                    distribute; ///< Push route snapshots to all connected clients.
                     ppp::vector<PeerPrefixRouteConfiguration>               allowed_routes; ///< Fail-closed per-client announce allowlist (guid+network+prefix).
                 }                                                           peer_routing;
+                struct {
+                    bool                                                    enabled;    ///< Permit same-process recovery of suspended authenticated sessions.
+                    int64_t                                                 grace_ms;   ///< Maximum carrier outage grace period in milliseconds.
+                }                                                           session_resume;
             }                                                               server;         ///< Server-mode specific parameters.
             struct {
                 ppp::string                                                 guid;           ///< Client GUID string used for authentication and session tracking.
@@ -254,8 +258,13 @@ namespace ppp {
                 ppp::string                                                 server_proxy;   ///< HTTP/SOCKS proxy address used to reach the VPN server; empty = direct.
                 int64_t                                                     bandwidth;      ///< Client-side bandwidth cap in bits per second; 0 = unlimited.
                 struct {
-                    int                                                     timeout;        ///< Seconds to wait before attempting a reconnection after disconnect.
+                    int                                                     timeout;        ///< Base seconds to wait before attempting a reconnection.
+                    int                                                     max_delay;      ///< Maximum exponential reconnect delay in seconds.
+                    int                                                     jitter_percent; ///< Symmetric reconnect-delay jitter percentage (0..100).
                 }                                                           reconnections;
+                struct {
+                    bool                                                    enabled;        ///< Enable authenticated L3 session roaming on the client.
+                }                                                           session_resume;
 #if defined(_WIN32)
                 struct {
                     bool                                                    tcp;            ///< Enable Paper Airplane TCP acceleration driver on Windows when true.

@@ -51,6 +51,9 @@ namespace ppp {
                                            const boost::asio::ip::udp::endpoint& destination,
                                            ppp::Byte* packet, int packet_length, bool fin) noexcept;
 
+                    /** @brief Rebind every retained UDP socket to the current carrier (or null on suspend). */
+                    void RebindTransmission(const ITransmissionPtr& transmission) noexcept;
+
                     /** @brief NAT-timeout sweep: dispose aging ports (single-thread, delegates to Dictionary). */
                     void Tick(UInt64 now) noexcept;
 

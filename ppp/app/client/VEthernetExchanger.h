@@ -38,6 +38,7 @@
 #include <atomic>
 #include <mutex>
 #include <ppp/app/protocol/VirtualEthernetLinklayer.h>
+#include <ppp/app/protocol/SessionResumeAuthenticator.h>
 #include <ppp/configurations/AppConfigurationFwd.h>
 #include <ppp/configurations/MappingConfiguration.h>
 #include <ppp/app/protocol/VirtualEthernetMappingPort.h>
@@ -62,6 +63,7 @@
 #include <ppp/transmissions/ITcpipTransmission.h>
 #include <ppp/app/client/ExchangerStaticEchoChannel.h>
 #include <ppp/app/client/ClientKeepAlivePolicy.h>
+#include <ppp/app/client/ClientReconnectionPolicy.h>
 #include <ppp/app/client/udp/UdpRelayHost.h>
 #include <ppp/app/client/dns/IDnsTunnelTransport.h>
 
@@ -663,11 +665,12 @@ namespace ppp {
                  * @brief Executes the main connect → handshake → data-loop → reconnect coroutine.
                  *
                  * @param context  IO context that drives the coroutine.
+                 * @param strand   Serial executor shared by the main carrier and negotiation timer.
                  * @param y        Coroutine yield context.
                  * @return true if the loop ran to completion normally; false on unrecoverable error.
                  * @note This is the entry point spawned by Open(). It loops until disposed_.
                  */
-                virtual bool                                                            Loopback(const ContextPtr& context, YieldContext& y) noexcept;
+                virtual bool                                                            Loopback(const ContextPtr& context, const StrandPtr& strand, YieldContext& y) noexcept;
 
                 /**
                  * @brief Handles a fully decoded inbound packet from the base linklayer.
@@ -692,6 +695,18 @@ namespace ppp {
                     StrandPtr strand;
                     return OpenTransmission(context, strand, y, role);
                 }
+
+                enum class SessionResumeNegotiationResult : std::uint8_t {
+                    Failed,
+                    Fresh,
+                    Resumed,
+                };
+
+                void                                                                    ClearSessionResumeState() noexcept;
+                bool                                                                    SendSessionResumeControl(const ITransmissionPtr& transmission, const ppp::app::protocol::SessionResumeTranscriptFields& fields, const ppp::app::protocol::SessionResumeProof& proof, YieldContext& y) noexcept;
+                bool                                                                    AcceptFreshSessionResumeOffer(const ITransmissionPtr& transmission, const InformationEnvelope& offer, YieldContext& y) noexcept;
+                SessionResumeNegotiationResult                                          NegotiateSessionResume(const ITransmissionPtr& transmission, InformationEnvelope& initial_information, bool& has_initial_information, YieldContext& y) noexcept;
+                bool                                                                    ApplyPreDataInformation(const ITransmissionPtr& transmission, const InformationEnvelope& information, YieldContext& y) noexcept;
 
                 /** @brief Releases all owned resources and marks the exchanger disposed. */
                 void                                                                    Finalize() noexcept;
@@ -1006,6 +1021,14 @@ namespace ppp {
                 std::unique_ptr<udp::ClientDatagramPortManager>                         datagram_manager_;
                 /** @brief Active transport channel; null when not established. */
                 ITransmissionPtr                                                        transmission_;
+                /** @brief Serial executor owning main carrier and resume state mutations. */
+                StrandPtr                                                               owner_strand_;
+                /** @brief Exporter-derived root retained across transient carrier loss. */
+                ppp::app::protocol::SessionResumeSecret                                 session_resume_root_;
+                ppp::app::protocol::SessionResumeId                                     session_resume_id_{};
+                std::uint64_t                                                           session_resume_generation_ = 0;
+                bool                                                                    session_resume_armed_ = false;
+                ppp::app::protocol::SessionResumePendingAttempt                         session_resume_pending_;
                 /** @brief Atomic network state for safe cross-thread reads. */
                 std::atomic<NetworkState>                                               network_state_      = NetworkState_Connecting;
                 /** @brief P2P state when no authenticated relay session is established. */

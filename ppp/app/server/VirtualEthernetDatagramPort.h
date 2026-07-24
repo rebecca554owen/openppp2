@@ -121,6 +121,9 @@ namespace ppp {
                  */
                 virtual bool                                            SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept;
 
+                /** @brief Rebinds replies to a replacement carrier, or null while suspended. */
+                virtual bool                                            RebindTransmission(const ITransmissionPtr& transmission) noexcept;
+
                 /**
                  * @brief Checks whether the port is disposed or has exceeded its activity timeout.
                  *

@@ -23,6 +23,8 @@ namespace ppp {
                         std::atomic<int> sendto{0};
                         std::atomic<int> onmessage{0};
                         std::atomic<int> finalize{0};
+                        std::atomic<int> rebind{0};
+                        std::atomic<const void*> transmission{nullptr};
 
                         void Reset() noexcept;
                     };

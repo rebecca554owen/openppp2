@@ -209,6 +209,53 @@ namespace ppp {
                 static bool                                         FromJson(P2PControlMessage& value, const Json::Value& json) noexcept;
             };
 
+            /** @brief Fixed v1 action codes used by JSON controls and authenticated transcripts. */
+            enum class SessionResumeAction : std::uint8_t {
+                None = 0,
+                Offer = 1,
+                Accepted = 2,
+                ResumeRequest = 3,
+                GenerationSync = 4,
+                ResumeAccept = 5,
+                ResumeConfirm = 6,
+                ResumeCommitted = 7,
+                Reject = 8,
+            };
+
+            /**
+             * @brief Strictly versioned L3 roaming control carried as trailing INFO JSON.
+             *
+             * Byte strings use canonical lowercase hexadecimal. Generation is stored as
+             * uint64_t in memory and serialized as a decimal string on the wire.
+             */
+            struct SessionResumeControl {
+                static constexpr std::uint8_t                        ProtocolVersion = 1;
+                static constexpr std::uint32_t                       CapabilityV1 = 1u << 0;
+                static constexpr std::size_t                         MaximumReasonLength = 64;
+                using Action = SessionResumeAction;
+
+                std::uint8_t                                        version = ProtocolVersion;
+                Action                                              action = Action::None;
+                std::uint32_t                                       capabilities = 0;
+                ppp::string                                         session_id;
+                std::uint64_t                                       generation = 0;
+                ppp::string                                         client_nonce;
+                ppp::string                                         server_nonce;
+                ppp::string                                         candidate_binding;
+                ppp::string                                         proof;
+                ppp::string                                         reason;
+
+                void                                                Clear() noexcept;
+                bool                                                HasAny() const noexcept;
+                bool                                                Valid() const noexcept;
+                void                                                ToJson(Json::Value& json) const noexcept;
+                ppp::string                                         ToJson() const noexcept;
+                static const char*                                  ActionToString(Action action) noexcept;
+                static bool                                         ActionFromString(const ppp::string& text, Action& action) noexcept;
+                static bool                                         FromJson(SessionResumeControl& value, const ppp::string& json) noexcept;
+                static bool                                         FromJson(SessionResumeControl& value, const Json::Value& json) noexcept;
+            };
+
             /**
              * @brief Holds optional IPv6 assignment and status extensions for a session.
              */
@@ -288,6 +335,9 @@ namespace ppp {
 
                 /** @brief Optional P2P control-plane message. */
                 P2PControlMessage                                   P2P;
+
+                /** @brief Optional authenticated L3 roaming control. */
+                SessionResumeControl                                SessionResume;
 
                 /** @brief Client prefix announcement for site-to-site gateway routing. */
                 PeerRouteAnnounceMessage                            PeerRouteAnnounce;

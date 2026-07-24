@@ -213,6 +213,51 @@ namespace ppp {
                     return removed;
                 }
 
+                bool ClientDatagramPortManager::RebindTransmission(
+                    const ITransmissionPtr& transmission) noexcept {
+                    ppp::vector<VEthernetDatagramPortPtr> datagrams;
+                    {
+                        std::lock_guard<std::mutex> scope(syncobj_);
+                        datagrams.reserve(datagrams_.size());
+                        for (auto&& kv : datagrams_) {
+                            if (NULLPTR != kv.second) {
+                                datagrams.emplace_back(kv.second);
+                            }
+                        }
+                    }
+
+                    for (auto&& datagram : datagrams) {
+                        if (!datagram->RebindTransmission(transmission)) {
+                            // Never leave a partially rebound flow table capable of using mixed carriers.
+                            for (auto&& retained : datagrams) {
+                                retained->RebindTransmission(NULLPTR);
+                            }
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+
+                void ClientDatagramPortManager::ResetPorts() noexcept {
+                    ppp::vector<VEthernetDatagramPortPtr> stale;
+                    {
+                        std::lock_guard<std::mutex> scope(syncobj_);
+                        stale.reserve(datagrams_.size());
+                        for (auto&& kv : datagrams_) {
+                            if (NULLPTR != kv.second) {
+                                stale.emplace_back(kv.second);
+                            }
+                        }
+                        datagrams_.clear();
+                    }
+
+                    for (auto&& datagram : stale) {
+                        datagram->MarkFinalize();
+                        datagram->RebindTransmission(NULLPTR);
+                        datagram->Dispose();
+                    }
+                }
+
                 void ClientDatagramPortManager::Tick(UInt64 now) noexcept {
                     // Phase 1: snapshot the table under the lock.
                     ppp::vector<std::pair<boost::asio::ip::udp::endpoint, VEthernetDatagramPortPtr>> candidates;

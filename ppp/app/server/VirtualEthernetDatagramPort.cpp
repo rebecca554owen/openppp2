@@ -135,6 +135,18 @@ namespace ppp {
                 return success;
             }
 
+            bool VirtualEthernetDatagramPort::RebindTransmission(const ITransmissionPtr& transmission) noexcept {
+                if (disposed_) {
+                    return false;
+                }
+                if (NULLPTR != transmission && transmission->GetContext() != context_) {
+                    return false;
+                }
+
+                transmission_ = transmission;
+                return true;
+            }
+
             /**
              * @brief Starts one asynchronous receive cycle for relay traffic.
              * @return True if receive operation is scheduled.
@@ -154,14 +166,10 @@ namespace ppp {
                 auto self = shared_from_this();
                 socket_.async_receive_from(boost::asio::buffer(buffer_.get(), PPP_BUFFER_SIZE), remoteEP_,
                     [self, this](const boost::system::error_code& ec, std::size_t sz) noexcept {
-                        bool disposing = true;
-                        /**
-                         * @brief Handles one datagram and decides whether to continue loopback.
-                         */
-                        while (ec == boost::system::errc::success) {
+                        bool disposing = ec != boost::system::errc::success;
+                        while (!disposing) {
                             int bytes_transferred = static_cast<int>(sz);
                             if (bytes_transferred < 1) {
-                                disposing = false;
                                 break;
                             }
 
@@ -180,13 +188,13 @@ namespace ppp {
                             boost::asio::ip::udp::endpoint remoteEP = Ipep::V6ToV4(remoteEP_);
                             if (ports_.do_send_to(transmission, sourceEP_, remoteEP, buffer_.get(), bytes_transferred, nullof<YieldContext>())) {
                                 Update();
-                                disposing = false;
                             }
                             else {
-                                transmission_.reset();
+                                if (transmission_ == transmission) {
+                                    transmission_.reset();
+                                }
                                 transmission->Dispose();
                             }
-
                             break;
                         }
 

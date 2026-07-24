@@ -365,6 +365,8 @@ namespace ppp {
             config.server.ipv4_pool.mask = "";
             config.server.peer_routing.enabled = false;
             config.server.peer_routing.distribute = true;
+            config.server.session_resume.enabled = false;
+            config.server.session_resume.grace_ms = 60000;
 
             config.client.mappings.clear();
             config.client.guid = StringAuxiliary::Int128ToGuidString(MAKE_OWORD(UINT64_MAX, UINT64_MAX));
@@ -372,6 +374,9 @@ namespace ppp {
             config.client.server_proxy = "";
             config.client.bandwidth = 0;
             config.client.reconnections.timeout = PPP_TCP_CONNECT_TIMEOUT;
+            config.client.reconnections.max_delay = 15;
+            config.client.reconnections.jitter_percent = 20;
+            config.client.session_resume.enabled = false;
             config.client.http_proxy.bind = "";
             config.client.http_proxy.port = PPP_DEFAULT_HTTP_PROXY_PORT;
             config.client.socks_proxy.bind = "";
@@ -818,9 +823,21 @@ namespace ppp {
                 config.client.guid = StringAuxiliary::Int128ToGuidString(MAKE_OWORD(UINT64_MAX, UINT64_MAX));
             }
 
+            if (config.server.session_resume.grace_ms < 1000) {
+                config.server.session_resume.grace_ms = 1000;
+            }
+            elif(config.server.session_resume.grace_ms > 3600000) {
+                config.server.session_resume.grace_ms = 3600000;
+            }
+
             if (config.client.reconnections.timeout < 1) {
                 config.client.reconnections.timeout = PPP_TCP_CONNECT_TIMEOUT;
             }
+            if (config.client.reconnections.max_delay < config.client.reconnections.timeout) {
+                config.client.reconnections.max_delay = config.client.reconnections.timeout;
+            }
+            config.client.reconnections.jitter_percent =
+                std::max(0, std::min(100, config.client.reconnections.jitter_percent));
 
             int* pts[] = {
                 &config.tcp.listen.port,
@@ -1829,6 +1846,11 @@ namespace ppp {
                 }
             }
 
+            AssignBoolIfPresent(config.server.session_resume.enabled,
+                json["server"]["session_resume"]["enabled"]);
+            AssignIfPresent(config.server.session_resume.grace_ms,
+                json["server"]["session_resume"]["grace_ms"]);
+
             LoadAllMappings(config, json["client"]["mappings"]);
             LoadAllRoutes(config.client.routes, json["client"]["routes"]);
             LoadAllPeerPrefixRoutes(config.client.peer_routes, json["client"]["peer-routes"]);
@@ -1836,6 +1858,12 @@ namespace ppp {
             AssignBoolIfPresent(config.client.peer_gateway_forward, json["client"]["peer-gateway-forward"]);
 
             config.client.reconnections.timeout = JsonAuxiliary::AsValue<int>(json["client"]["reconnections"]["timeout"]);
+            AssignIfPresent(config.client.reconnections.max_delay,
+                json["client"]["reconnections"]["max_delay"]);
+            AssignIfPresent(config.client.reconnections.jitter_percent,
+                json["client"]["reconnections"]["jitter_percent"]);
+            AssignBoolIfPresent(config.client.session_resume.enabled,
+                json["client"]["session_resume"]["enabled"]);
             config.client.guid = JsonAuxiliary::AsValue<ppp::string>(json["client"]["guid"]);
             config.client.server = JsonAuxiliary::AsValue<ppp::string>(json["client"]["server"]);
             config.client.server_proxy = JsonAuxiliary::AsValue<ppp::string>(json["client"]["server-proxy"]);
@@ -2206,6 +2234,8 @@ namespace ppp {
                 }
                 server["peer-routing"] = peer_routing;
             }
+            server["session_resume"]["enabled"] = config.server.session_resume.enabled;
+            server["session_resume"]["grace_ms"] = config.server.session_resume.grace_ms;
             root["server"] = server;
 
             // Set client structure
@@ -2263,6 +2293,9 @@ namespace ppp {
             client["socks-proxy"]["username"] = config.client.socks_proxy.username;
             client["proxy-only"] = config.client.proxy_only;
             client["reconnections"]["timeout"] = config.client.reconnections.timeout;
+            client["reconnections"]["max_delay"] = config.client.reconnections.max_delay;
+            client["reconnections"]["jitter_percent"] = config.client.reconnections.jitter_percent;
+            client["session_resume"]["enabled"] = config.client.session_resume.enabled;
             client["guid"] = config.client.guid;
             client["server"] = config.client.server;
             client["server-proxy"] = config.client.server_proxy;
