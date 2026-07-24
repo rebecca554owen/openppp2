@@ -261,6 +261,7 @@ openppp2_add_cpp_test(dns_controller_test SOURCES
     "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsSessionContext.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/dns/DnsResponseHandler.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
+target_link_libraries(dns_controller_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(route_state_test SOURCES
     route_state_test.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/route/RouteState.cpp")
@@ -385,3 +386,30 @@ openppp2_add_cpp_test(spinlock_test SOURCES
     "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
 target_link_libraries(spinlock_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(asynchronous_write_io_queue_test SOURCES
+    asynchronous_write_io_queue_test.cpp
+    support/yield_context_test_stubs.cpp
+    "${OPENPPP2_ROOT}/ppp/net/asio/IAsynchronousWriteIoQueue.cpp"
+    "${OPENPPP2_ROOT}/ppp/coroutines/YieldContext.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
+target_link_libraries(asynchronous_write_io_queue_test PRIVATE boost_context Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(protector_network_request_test SOURCES
+    protector_network_request_test.cpp)
+target_link_libraries(protector_network_request_test PRIVATE Threads::Threads)
+openppp2_add_cpp_test(transmission_qos_concurrency_test SOURCES
+    transmission_qos_concurrency_test.cpp
+    support/yield_context_test_stubs.cpp
+    "${OPENPPP2_ROOT}/ppp/transmissions/ITransmissionQoS.cpp"
+    "${OPENPPP2_ROOT}/ppp/coroutines/YieldContext.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
+target_link_libraries(transmission_qos_concurrency_test PRIVATE boost_context Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(vdns_request_lifecycle_test SOURCES
+    vdns_request_lifecycle_test.cpp)
+target_link_libraries(vdns_request_lifecycle_test PRIVATE Threads::Threads)
+openppp2_add_cpp_test(mapping_port_connect_reentrancy_test SOURCES
+    mapping_port_connect_reentrancy_test.cpp)
+target_link_libraries(mapping_port_connect_reentrancy_test PRIVATE Threads::Threads)

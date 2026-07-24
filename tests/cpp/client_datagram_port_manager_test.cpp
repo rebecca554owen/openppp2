@@ -8,6 +8,8 @@
 #include "support/datagram_manager_stubs.h"
 
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <thread>
 
 namespace udp_client = ppp::app::client::udp;
@@ -35,7 +37,8 @@ udp_client::UdpRelayHostPorts MakeFilledPorts() noexcept {
     ports.do_send_to = [](const udp_client::ITransmissionPtr&, const boost::asio::ip::udp::endpoint&,
                           const boost::asio::ip::udp::endpoint&, ppp::Byte*, int,
                           ppp::coroutines::YieldContext&) noexcept { return true; };
-    ports.release_port = [](const boost::asio::ip::udp::endpoint&) noexcept {};
+    ports.release_port = [](
+        const boost::asio::ip::udp::endpoint&, const ppp::app::client::VEthernetDatagramPort*) noexcept {};
     ports.emplace_timeout = [](int64_t, ppp::function<void()>) noexcept {};
     ports.get_transmission = []() noexcept {
         // Non-null aliasing handle: SendTo only null-checks it before handing it to create_port,
@@ -91,6 +94,103 @@ BOOST_AUTO_TEST_CASE(add_new_datagram_port_dedups_by_source) {
     BOOST_TEST(create_calls == 1);
 }
 
+BOOST_AUTO_TEST_CASE(concurrent_same_source_create_returns_one_winner) {
+    spy_ns::DatagramPortSpyInstance().Reset();
+    udp_client::UdpRelayHostPorts ports = MakeFilledPorts();
+    std::mutex mutex;
+    std::condition_variable entered_cv;
+    std::condition_variable release_cv;
+    int entered = 0;
+    bool release = false;
+    std::atomic<int> self_release_calls{0};
+    std::atomic<int> removed_winners{0};
+    udp_client::ClientDatagramPortManager* manager = nullptr;
+    ports.release_port = [&](const boost::asio::ip::udp::endpoint& source,
+                             const ppp::app::client::VEthernetDatagramPort* expected) noexcept {
+        ++self_release_calls;
+        if (manager->ReleaseDatagramPortIf(source, expected)) {
+            ++removed_winners;
+        }
+    };
+    ports.create_port = [&](const udp_client::ITransmissionPtr& transmission,
+                            const boost::asio::ip::udp::endpoint& source) noexcept {
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            ++entered;
+            entered_cv.notify_all();
+            release_cv.wait(lock, [&]() noexcept { return release; });
+        }
+        return std::make_shared<ppp::app::client::VEthernetDatagramPort>(
+            std::shared_ptr<ppp::app::client::VEthernetExchanger>(), ports, transmission, source);
+    };
+    udp_client::ClientDatagramPortManager m(ports);
+    manager = &m;
+    const auto src = Ep("10.0.0.2", 6000);
+    udp_client::VEthernetDatagramPortPtr first;
+    udp_client::VEthernetDatagramPortPtr second;
+
+    std::thread first_thread([&]() { first = m.AddNewDatagramPort({}, src); });
+    std::thread second_thread([&]() { second = m.AddNewDatagramPort({}, src); });
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        entered_cv.wait(lock, [&]() noexcept { return entered == 2; });
+        release = true;
+    }
+    release_cv.notify_all();
+    first_thread.join();
+    second_thread.join();
+
+    BOOST_TEST((first != nullptr));
+    BOOST_TEST((first == second));
+    BOOST_TEST((m.GetDatagramPort(src) == first));
+    BOOST_TEST(spy_ns::DatagramPortSpyInstance().construct == 2);
+    BOOST_TEST(spy_ns::DatagramPortSpyInstance().finalize == 1);
+    BOOST_TEST(spy_ns::DatagramPortSpyInstance().dispose == 1);
+    BOOST_TEST(self_release_calls.load() == 1);
+    BOOST_TEST(removed_winners.load() == 0);
+}
+
+BOOST_AUTO_TEST_CASE(release_closes_gate_while_create_is_blocked) {
+    spy_ns::DatagramPortSpyInstance().Reset();
+    udp_client::UdpRelayHostPorts ports = MakeFilledPorts();
+    std::mutex mutex;
+    std::condition_variable entered_cv;
+    std::condition_variable release_cv;
+    bool entered = false;
+    bool release = false;
+    ports.create_port = [&](const udp_client::ITransmissionPtr& transmission,
+                            const boost::asio::ip::udp::endpoint& source) noexcept {
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            entered = true;
+            entered_cv.notify_one();
+            release_cv.wait(lock, [&]() noexcept { return release; });
+        }
+        return MakeStubPort(transmission, source);
+    };
+    udp_client::ClientDatagramPortManager m(ports);
+    const auto src = Ep("10.0.0.12", 1600);
+    udp_client::VEthernetDatagramPortPtr result;
+    std::thread creator([&]() { result = m.AddNewDatagramPort({}, src); });
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        entered_cv.wait(lock, [&]() noexcept { return entered; });
+    }
+
+    m.Release();
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        release = true;
+    }
+    release_cv.notify_one();
+    creator.join();
+
+    BOOST_TEST((result == nullptr));
+    BOOST_TEST((m.GetDatagramPort(src) == nullptr));
+    BOOST_TEST(spy_ns::DatagramPortSpyInstance().finalize == 1);
+    BOOST_TEST(spy_ns::DatagramPortSpyInstance().dispose == 1);
+}
+
 BOOST_AUTO_TEST_CASE(get_and_release_roundtrip) {
     udp_client::ClientDatagramPortManager m(MakeFilledPorts());
 
@@ -107,9 +207,12 @@ BOOST_AUTO_TEST_CASE(get_and_release_roundtrip) {
 BOOST_AUTO_TEST_CASE(send_to_creates_port_and_forwards) {
     spy_ns::DatagramPortSpyInstance().Reset();
     udp_client::ClientDatagramPortManager m(MakeFilledPorts());
+    const auto source = Ep("10.0.0.3", 7000);
 
     unsigned char buf[4] = {1, 2, 3, 4};
-    BOOST_TEST(m.SendTo(Ep("10.0.0.3", 7000), Ep("8.8.8.8", 53), buf, static_cast<int>(sizeof(buf))));
+    const bool sent = m.SendTo(source, Ep("8.8.8.8", 53), buf, static_cast<int>(sizeof(buf)));
+    BOOST_TEST(sent);
+    BOOST_TEST((m.GetDatagramPort(source) != nullptr));
     BOOST_TEST(spy_ns::DatagramPortSpyInstance().sendto == 1);
 }
 
@@ -199,6 +302,9 @@ BOOST_AUTO_TEST_CASE(release_disposes_all_and_clears_tables) {
 
     BOOST_TEST((m.GetDatagramPort(Ep("10.0.0.9", 1300)) == nullptr));
     BOOST_TEST((m.GetDatagramPort(Ep("10.0.0.10", 1400)) == nullptr));
+    BOOST_TEST((m.AddNewDatagramPort({}, Ep("10.0.0.11", 1500)) == nullptr));
+    BOOST_TEST(!m.RegisterDatagramHandler(Ep("10.0.0.11", 1500),
+        [](const auto&, const auto&, void*, int) noexcept { return true; }));
     BOOST_TEST(spy_ns::DatagramPortSpyInstance().dispose == 2);
 }
 

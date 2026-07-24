@@ -6,6 +6,7 @@
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/IPEndPoint.h>
+#include <ppp/net/asio/VdnsRequestCompletion.h>
 #include <ppp/net/native/ip.h>
 #include <ppp/net/native/checksum.h>
 #include <ppp/diagnostics/Error.h>
@@ -353,7 +354,7 @@ namespace ppp {
 
                     Byte                                                                        packet[PPP_MAX_DNS_PACKET_BUFFER_SIZE]; // Temporary buffer
 
-                    std::atomic<bool>                                                           completed{ false }; // Prevents double completion
+                    VdnsRequestCompletion                                                       completion; // Arbitrates response/timeout/cancel
 
                     // -------------------------------------------------------------------------
                     // Constructor – creates an independent UDP socket (dual-stack).
@@ -397,28 +398,26 @@ namespace ppp {
                     // -------------------------------------------------------------------------
                     /** @brief Cancels timers/socket and suppresses callback invocation. */
                     void cancel() noexcept {
-                        bool expected = false;
-                        if (!completed.compare_exchange_strong(expected, true)) {
-                            return; // Already finished or cancelled
-                        }
-                        else {
-                            SynchronizedObjectScope lock(merge_timer_mutex);
-                            if (NULLPTR != merge_timer) {
-                                Socket::Cancel(*merge_timer);
-                                merge_timer.reset();
+                        completion.TryComplete(VdnsRequestCompletion::State::Cancelled, [this]() noexcept {
+                            {
+                                SynchronizedObjectScope lock(merge_timer_mutex);
+                                if (NULLPTR != merge_timer) {
+                                    Socket::Cancel(*merge_timer);
+                                    merge_timer.reset();
+                                }
                             }
-                        }
 
-                        // Cancel timeout timer – it will not fire after this point.
-                        timeout_timer.expires_after(std::chrono::seconds(0));
+                            // Cancel timeout timer – it will not fire after this point.
+                            timeout_timer.expires_after(std::chrono::seconds(0));
 
-                        Socket::Cancel(timeout_timer);
-                        if (NULLPTR != socket) {
-                            Socket::Closesocket(socket);
-                            socket.reset();
-                        }
-                        
-                        callback = NULLPTR; // Release callback to avoid any accidental invocation
+                            Socket::Cancel(timeout_timer);
+                            if (NULLPTR != socket) {
+                                Socket::Closesocket(socket);
+                                socket.reset();
+                            }
+
+                            callback = NULLPTR; // Release callback to avoid any accidental invocation
+                        });
                     }
 
                     // -------------------------------------------------------------------------
@@ -430,38 +429,39 @@ namespace ppp {
                      * @param is_timeout True when completion is triggered by timeout.
                      */
                     void finish(bool is_timeout) noexcept {
-                        bool expected = false;
-                        if (!completed.compare_exchange_strong(expected, true)) {
-                            return;
-                        }
-                        else {
-                            // Stop the merge timer if it is still pending.
-                            SynchronizedObjectScope lock(merge_timer_mutex);
-                            if (NULLPTR != merge_timer) {
-                                Socket::Cancel(*merge_timer);
-                                merge_timer.reset();
+                        VdnsRequestCompletion::State terminal_state = is_timeout
+                            ? VdnsRequestCompletion::State::TimedOut
+                            : VdnsRequestCompletion::State::Finished;
+                        completion.TryComplete(terminal_state, [this, is_timeout]() noexcept {
+                            {
+                                // Stop the merge timer if it is still pending.
+                                SynchronizedObjectScope lock(merge_timer_mutex);
+                                if (NULLPTR != merge_timer) {
+                                    Socket::Cancel(*merge_timer);
+                                    merge_timer.reset();
+                                }
                             }
-                        }
 
-                        // Invoke the user callback (if any) with the collected addresses.
-                        if (NULLPTR != callback) {
-                            callback(a_state.received || aaaa_state.received, addresses);
-                            callback = NULLPTR;
-                        }
+                            // Invoke the user callback (if any) with the collected addresses.
+                            if (NULLPTR != callback) {
+                                callback(a_state.received || aaaa_state.received, addresses);
+                                callback = NULLPTR;
+                            }
 
-                        // Cache the result only if we have at least one address and this is not a reverse query.
-                        if (!is_timeout && (a_state.received || aaaa_state.received) && !IsReverseQuery(hostname.data())) {
-                            cache();
-                        }
+                            // Cache the result only if we have at least one address and this is not a reverse query.
+                            if (!is_timeout && (a_state.received || aaaa_state.received) && !IsReverseQuery(hostname.data())) {
+                                cache();
+                            }
 
-                        // Close the socket.
-                        if (NULLPTR != socket) {
-                            Socket::Closesocket(socket);
-                            socket.reset();
-                        }
+                            // Close the socket.
+                            if (NULLPTR != socket) {
+                                Socket::Closesocket(socket);
+                                socket.reset();
+                            }
 
-                        // Ensure the timeout timer is also cancelled.
-                        Socket::Cancel(timeout_timer);
+                            // Ensure the timeout timer is also cancelled.
+                            Socket::Cancel(timeout_timer);
+                        });
                     }
 
                     // -------------------------------------------------------------------------
@@ -475,7 +475,7 @@ namespace ppp {
                      * @param len Packet length in bytes.
                      */
                     void on_response(const Byte* data, size_t len) noexcept {
-                        if (completed.load()) {
+                        if (!completion.IsPending()) {
                             return;
                         }
 
@@ -552,7 +552,7 @@ namespace ppp {
                                 pending_timer->async_wait(
                                     [weak_self](const boost::system::error_code& ec) noexcept {
                                         std::shared_ptr<DNS_RequestContext> self = weak_self.lock();
-                                        if (NULLPTR != self && ec != boost::asio::error::operation_aborted && !self->completed.load()) {
+                                        if (NULLPTR != self && ec != boost::asio::error::operation_aborted && self->completion.IsPending()) {
                                             self->finish(false);
                                         }
                                     });
@@ -725,7 +725,7 @@ namespace ppp {
                         timeout_timer.async_wait(
                             [weak_self](const boost::system::error_code& ec) noexcept {
                                 std::shared_ptr<DNS_RequestContext> self = weak_self.lock();
-                                if (NULLPTR != self && ec != boost::asio::error::operation_aborted && !self->completed.load()) {
+                                if (NULLPTR != self && ec != boost::asio::error::operation_aborted && self->completion.IsPending()) {
                                     self->finish(true);
                                 }
                             });
@@ -742,7 +742,7 @@ namespace ppp {
                     // -------------------------------------------------------------------------
                     /** @brief Starts or continues asynchronous UDP receive loop for this request. */
                     void start_receive_loop() noexcept {
-                        if (NULLPTR == socket || completed.load()) {
+                        if (NULLPTR == socket || !completion.IsPending()) {
                             return;
                         }
 
@@ -750,7 +750,7 @@ namespace ppp {
                         socket->async_receive_from(
                             boost::asio::buffer(packet, PPP_MAX_DNS_PACKET_BUFFER_SIZE), source,
                             [self](boost::system::error_code ec, size_t len) noexcept {
-                                if (ec || self->completed.load()) {
+                                if (ec || !self->completion.IsPending()) {
                                     return;
                                 }
 
@@ -759,7 +759,7 @@ namespace ppp {
                                 }
 
                                 // Continue the loop only if the request is still alive and the socket is open.
-                                if (!self->completed.load() && NULLPTR != self->socket && self->socket->is_open()) {
+                                if (self->completion.IsPending() && NULLPTR != self->socket && self->socket->is_open()) {
                                     self->start_receive_loop();
                                 }
                             });

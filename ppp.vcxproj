@@ -423,6 +423,7 @@
     <ClCompile Include="ppp\app\client\GeoRuleGenerator.cpp" />
     <ClCompile Include="ppp\dns\DnsResolver.cpp" />
     <ClCompile Include="ppp\dns\DnsProviderCatalog.cpp" />
+    <ClCompile Include="ppp\dns\DnsUdpFlowRegistry.cpp" />
     <ClCompile Include="ppp\app\client\proxys\VEthernetHttpProxyConnection.cpp" />
     <ClCompile Include="ppp\app\client\proxys\VEthernetHttpProxySwitcher.cpp" />
     <ClCompile Include="ppp\app\client\proxys\VEthernetLocalProxyConnection.cpp" />

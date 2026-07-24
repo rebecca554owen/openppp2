@@ -1,4 +1,5 @@
 #include "DnsUdpRelay.h"
+#include "DnsRelayOperation.h"
 
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/coroutines/asio/asio.h>
@@ -40,6 +41,129 @@ namespace ppp {
         namespace client {
             namespace dns {
 
+                namespace {
+
+                    class RelayResources final {
+                    public:
+                        RelayResources(
+                            DnsQueryContext query,
+                            std::shared_ptr<boost::asio::ip::udp::socket> socket) noexcept
+                            : query_(std::move(query)), socket_(std::move(socket)) {
+                        }
+
+                        bool Register(void* handle,
+                            const std::shared_ptr<Timer::TimeoutEventHandler>& handler) noexcept {
+                            std::lock_guard<std::mutex> lock(sync_);
+                            if (cleaned_ || NULLPTR == handle) {
+                                return false;
+                            }
+                            registry_handle_ = handle;
+                            registered_ = query_.emplace_timeout(handle, handler);
+                            return registered_;
+                        }
+
+                        void SetTimer(const std::shared_ptr<Timer>& timer) noexcept {
+                            bool stop = false;
+                            {
+                                std::lock_guard<std::mutex> lock(sync_);
+                                stop = cleaned_;
+                                if (!stop) {
+                                    timer_ = timer;
+                                }
+                            }
+                            if (stop && timer) {
+                                timer->Stop();
+                                timer->Dispose();
+                            }
+                        }
+
+                        void Cleanup() noexcept {
+                            std::shared_ptr<Timer> timer;
+                            bool registered;
+                            void* registry_handle;
+                            {
+                                std::lock_guard<std::mutex> lock(sync_);
+                                if (cleaned_) {
+                                    return;
+                                }
+                                cleaned_ = true;
+                                registered = registered_;
+                                registered_ = false;
+                                registry_handle = registry_handle_;
+                                registry_handle_ = nullptr;
+                                timer = timer_.lock();
+                                timer_.reset();
+                            }
+
+                            if (registered) {
+                                query_.delete_timeout(registry_handle);
+                            }
+                            ppp::net::Socket::Closesocket(socket_);
+                            if (timer) {
+                                timer->Stop();
+                                timer->Dispose();
+                            }
+                        }
+
+                    private:
+                        std::mutex sync_;
+                        bool registered_ = false;
+                        bool cleaned_ = false;
+                        void* registry_handle_ = nullptr;
+                        std::weak_ptr<Timer> timer_;
+                        DnsQueryContext query_;
+                        std::shared_ptr<boost::asio::ip::udp::socket> socket_;
+                    };
+
+                    void ReceiveRelayResponse(
+                        const DnsQueryContext& query,
+                        const std::shared_ptr<DnsRelayOperation>& operation,
+                        const std::shared_ptr<boost::asio::ip::udp::socket>& socket,
+                        const std::shared_ptr<Byte>& buffer,
+                        const std::shared_ptr<boost::asio::ip::udp::endpoint>& received_from,
+                        const boost::asio::ip::udp::endpoint& server,
+                        const boost::asio::ip::udp::endpoint& source,
+                        const boost::asio::ip::udp::endpoint& destination,
+                        const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
+                        int handle) noexcept {
+
+                        if (operation->GetCompletion() != DnsRelayOperation::Completion::Pending) {
+                            return;
+                        }
+
+                        socket->async_receive_from(boost::asio::buffer(buffer.get(), PPP_BUFFER_SIZE), *received_from,
+                            [query, operation, socket, buffer, received_from, server, source, destination,
+                             messages, handle](boost::system::error_code ec, size_t size) noexcept {
+                                if (ec == boost::system::errc::success && size > 0) {
+                                    if (!DnsUdpRelay::ShouldAcceptRelayResponse(
+                                            *received_from, server,
+                                            messages->Buffer.get(), messages->Length,
+                                            buffer.get(), static_cast<int>(size))) {
+                                        ReceiveRelayResponse(query, operation, socket, buffer, received_from,
+                                            server, source, destination, messages, handle);
+                                        return;
+                                    }
+
+                                    ANDROID_DNS_UDP_RELAY_TRACE("dns_redirect recv ok fd=%d bytes=%d",
+                                        handle, (int)size);
+                                    operation->CompleteResponse(
+                                        [query, buffer, source, destination, size]() noexcept {
+                                            query.datagram_output(source, destination, buffer.get(),
+                                                static_cast<int>(size), false);
+                                        });
+                                    return;
+                                }
+
+#if defined(_ANDROID)
+                                __android_log_print(ANDROID_LOG_WARN, "openppp2", "dns_redirect recv failed fd=%d ec=%d",
+                                    handle, ec.value());
+#endif
+                                operation->CompleteFallback();
+                            });
+                    }
+
+                }  // namespace
+
                 bool DnsUdpRelay::RunCoroutine(
                     const DnsQueryContext& query,
                     ppp::coroutines::YieldContext& y,
@@ -54,10 +178,37 @@ namespace ppp {
                     const boost::asio::ip::udp::endpoint& destinationEP,
                     bool use_underlying_nic) noexcept {
 
-                    (void)session;
-                    const auto fallback_tunnel = [query, messages, sourceEP, destinationEP]() noexcept {
-                        query.handle_resolver_response(messages, sourceEP, destinationEP, ppp::vector<Byte>{});
-                    };
+                    const std::weak_ptr<const DnsSessionContext> weak_session(session);
+                    const auto resources = make_shared_object<RelayResources>(query, socket);
+                    if (!resources) {
+                        ppp::net::Socket::Closesocket(socket);
+                        const auto active_session = weak_session.lock();
+                        if (active_session && active_session->IsActive()) {
+                            query.handle_resolver_response(
+                                messages, sourceEP, destinationEP, ppp::vector<Byte>{});
+                        }
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                    }
+
+                    const auto operation = make_shared_object<DnsRelayOperation>(
+                        [resources]() noexcept { resources->Cleanup(); },
+                        [query, messages, sourceEP, destinationEP]() noexcept {
+                            query.handle_resolver_response(
+                                messages, sourceEP, destinationEP, ppp::vector<Byte>{});
+                        },
+                        [weak_session]() noexcept {
+                            const auto active_session = weak_session.lock();
+                            return active_session && active_session->IsActive();
+                        });
+                    if (!operation) {
+                        resources->Cleanup();
+                        const auto active_session = weak_session.lock();
+                        if (active_session && active_session->IsActive()) {
+                            query.handle_resolver_response(
+                                messages, sourceEP, destinationEP, ppp::vector<Byte>{});
+                        }
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                    }
 
                     boost::system::error_code ec;
                     boost::asio::ip::udp::endpoint serverEP(serverIP, frame->Destination.Port);
@@ -68,7 +219,7 @@ namespace ppp {
                         __android_log_print(ANDROID_LOG_ERROR, "openppp2", "dns_redirect socket_open failed server=%s",
                             serverIP.to_string().c_str());
 #endif
-                        fallback_tunnel();
+                        operation->CompleteFallback();
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                     }
 
@@ -90,7 +241,7 @@ namespace ppp {
                                 __android_log_print(ANDROID_LOG_ERROR, "openppp2", "dns_redirect protect failed fd=%d server=%s",
                                     handle,
                                     serverIP.to_string().c_str());
-                                fallback_tunnel();
+                                operation->CompleteFallback();
                                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed);
                             }
                             ANDROID_DNS_UDP_RELAY_TRACE("dns_redirect protect ok fd=%d server=%s",
@@ -108,14 +259,14 @@ namespace ppp {
                         if (use_underlying_nic) {
                             auto protector_network = query.protector_network;
                             if (NULLPTR != protector_network && !protector_network->Protect(handle, y)) {
-                                fallback_tunnel();
+                                operation->CompleteFallback();
                                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed);
                             }
                         }
                         else {
                             socket->bind(boost::asio::ip::udp::endpoint(serverEP.protocol(), 0), ec);
                             if (ec || NULLPTR == query.udp_flow_registry) {
-                                fallback_tunnel();
+                                operation->CompleteFallback();
                                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                             }
 
@@ -123,7 +274,7 @@ namespace ppp {
                             if (ec || !query.udp_flow_registry->Register(
                                     localEP.port(), serverEP,
                                     std::chrono::seconds(query.configuration->udp.dns.timeout + 1))) {
-                                fallback_tunnel();
+                                operation->CompleteFallback();
                                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                             }
                         }
@@ -139,7 +290,7 @@ namespace ppp {
                             serverIP.to_string().c_str(),
                             ec.value());
 #endif
-                        fallback_tunnel();
+                        operation->CompleteFallback();
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpSendFailed);
                     }
                     ANDROID_DNS_UDP_RELAY_TRACE("dns_redirect send ok fd=%d server=%s bytes=%d",
@@ -147,80 +298,51 @@ namespace ppp {
                         serverIP.to_string().c_str(),
                         NULLPTR != messages ? (int)messages->Length : -1);
 
-                    const std::weak_ptr<boost::asio::ip::udp::socket> socket_weak(socket);
-                    const std::shared_ptr<ppp::configurations::AppConfiguration> configuration =
-                        query.configuration;
-
+                    const std::weak_ptr<DnsRelayOperation> weak_operation(operation);
                     const auto cb = make_shared_object<Timer::TimeoutEventHandler>(
-                        [socket_weak, handle](Timer*) noexcept {
+                        [weak_operation, handle](Timer*) noexcept {
 #if defined(_ANDROID)
                             __android_log_print(ANDROID_LOG_WARN, "openppp2", "dns_redirect timeout fd=%d", handle);
 #endif
-                            const std::shared_ptr<boost::asio::ip::udp::socket> locked = socket_weak.lock();
-                            if (locked) {
-                                ppp::net::Socket::Closesocket(locked);
+                            const auto active_operation = weak_operation.lock();
+                            if (active_operation) {
+                                active_operation->CompleteFallback();
                             }
                         });
-                    if (NULLPTR == cb) {
+                    if (!cb) {
+                        operation->CompleteFallback();
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     }
 
-                    const auto timeout = Timer::Timeout(context, (uint64_t)configuration->udp.dns.timeout * 1000, *cb);
-                    if (NULLPTR == timeout) {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
-                    }
-
-                    if (!query.emplace_timeout(socket.get(), cb)) {
+                    // The monotonically numbered operation owns a stable registration handle that
+                    // remains valid until the single winner deregisters it during cleanup.
+                    if (!resources->Register(operation->RegistryHandle(), cb)) {
+                        operation->CompleteFallback();
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingEntryConflict);
                     }
+                    if (operation->GetCompletion() != DnsRelayOperation::Completion::Pending) {
+                        return true;
+                    }
 
-                    const auto max_buffer_size = PPP_BUFFER_SIZE;
-                    const auto serverEPPtr = make_shared_object<boost::asio::ip::udp::endpoint>();
-                    if (NULLPTR == serverEPPtr) {
+                    const auto timeout = Timer::Timeout(
+                        context, (uint64_t)query.configuration->udp.dns.timeout * 1000, *cb);
+                    if (!timeout) {
+                        operation->CompleteFallback();
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeTimerCreateFailed);
+                    }
+                    resources->SetTimer(timeout);
+                    if (operation->GetCompletion() != DnsRelayOperation::Completion::Pending) {
+                        return true;
+                    }
+
+                    const auto received_from = make_shared_object<boost::asio::ip::udp::endpoint>();
+                    if (!received_from) {
+                        operation->CompleteFallback();
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     }
 
-                    auto receive_again = make_shared_object<std::function<void()> >();
-                    if (NULLPTR == receive_again) {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
-                    }
-
-                    *receive_again = [query, socket, timeout, buffer, sourceEP, destinationEP, serverEP, serverEPPtr, messages, max_buffer_size, handle, receive_again]() noexcept {
-                        socket->async_receive_from(boost::asio::buffer(buffer.get(), max_buffer_size), *serverEPPtr,
-                            [query, socket, timeout, buffer, sourceEP, destinationEP, serverEP, serverEPPtr, messages, handle, receive_again](boost::system::error_code ec, size_t sz) noexcept {
-                                if (ec == boost::system::errc::success && sz > 0) {
-                                    if (!ShouldAcceptRelayResponse(
-                                            *serverEPPtr, serverEP,
-                                            messages->Buffer.get(), messages->Length,
-                                            buffer.get(), static_cast<int>(sz))) {
-                                        (*receive_again)();
-                                        return;
-                                    }
-
-                                    ANDROID_DNS_UDP_RELAY_TRACE("dns_redirect recv ok fd=%d bytes=%d",
-                                        handle,
-                                        (int)sz);
-                                    query.datagram_output(sourceEP, destinationEP, buffer.get(), static_cast<int>(sz), false);
-                                }
-                                else {
-#if defined(_ANDROID)
-                                    __android_log_print(ANDROID_LOG_WARN, "openppp2", "dns_redirect recv failed fd=%d ec=%d",
-                                        handle,
-                                        ec.value());
-#endif
-                                    query.handle_resolver_response(messages, sourceEP, destinationEP, ppp::vector<Byte>{});
-                                }
-
-                                query.delete_timeout(socket.get());
-                                *receive_again = std::function<void()>();
-                                ppp::net::Socket::Closesocket(socket);
-                                if (timeout) {
-                                    timeout->Stop();
-                                    timeout->Dispose();
-                                }
-                            });
-                    };
-                    (*receive_again)();
+                    ReceiveRelayResponse(query, operation, socket, buffer, received_from,
+                        serverEP, sourceEP, destinationEP, messages, handle);
                     return true;
                 }
 

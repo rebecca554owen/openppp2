@@ -630,6 +630,12 @@ namespace ppp {
                     if (NULLPTR == vmux_context) {
                         break;
                     }
+                    if (NULLPTR == vmux_strand) {
+                        vmux_strand = make_shared_object<ppp::threading::Executors::Strand>(vmux_context->get_executor());
+                        if (NULLPTR == vmux_strand) {
+                            break;
+                        }
+                    }
 
                     vmux::vmux_net::mux_mode mux_mode = effective_mux_mode;
                     mux = make_shared_object<vmux::vmux_net>(vmux_context, vmux_strand, max_connections, true, acceleration, mux_mode);

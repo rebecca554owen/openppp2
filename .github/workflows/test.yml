@@ -27,6 +27,19 @@ jobs:
       - name: Run lifecycle sanitizers
         run: bash scripts/run-lifecycle-sanitizers.sh
 
+  cpp-tsan:
+    name: C++ ThreadSanitizer
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang libboost-all-dev libssl-dev libstdc++-14-dev
+      - name: Run standalone C++ suite with TSan
+        run: TSAN_OPTIONS='halt_on_error=1:second_deadlock_stack=1' CXX=clang++ bash scripts/run-cpp-tsan-tests.sh
+
   cpp-linux:
     name: C++ unit tests (Linux)
     runs-on: ubuntu-latest

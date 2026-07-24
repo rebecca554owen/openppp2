@@ -1,7 +1,7 @@
 # 测试
 > Status: Active
 > Type: Development guide
-> Last verified: 2026-07-22
+> Last verified: 2026-07-24
 >
 > **用途：**选择并运行真正覆盖所改界面的测试入口。
 > **适用对象：**贡献者和 CI 维护者。
@@ -67,6 +67,16 @@ scripts/run-lifecycle-sanitizers.sh
 
 该脚本以 `ENABLE_SANITIZERS=ON` 配置独立 C++ 项目，默认使用 `clang++`，并构建/运行五个指定的生命周期、路由和 DNS targets。它适用于生命周期敏感的改动；它不会构建完整原生可执行程序。
 
+### ThreadSanitizer
+
+```bash
+CXX=clang++ scripts/run-cpp-tsan-tests.sh
+```
+
+该脚本在 `build/test-tsan` 中以 `ENABLE_TSAN=ON` 配置完整独立 C++ 套件，然后构建并运行全部已注册的 CTest targets。TSan 与 `ENABLE_SANITIZERS`（ASan/UBSan）互斥，需要编译器提供可用的 ThreadSanitizer runtime，并且不会构建根原生可执行程序。本地 Clang TSan runtime 不可用时可改用 `CXX=g++`。通过 `openppp2_add_cpp_test()` 注册的每个独立测试都具有 120 秒 watchdog，因此死锁会失败而不是永久挂住 CI。
+
+本批关键的确定性并发测试包括 `yield_context_test`、`spinlock_test`、`asynchronous_write_io_queue_test`、`dns_udp_relay_test`、`client_datagram_port_manager_test`、`protector_network_request_test`、`transmission_qos_concurrency_test`、`vdns_request_lifecycle_test`、`mapping_port_connect_reentrancy_test` 和 `dns_controller_test`。
+
 ## Runtime contract 前提
 
 `bash scripts/test-runtime-contract.sh cpp` 假定 `build/test` 已存在。先配置独立项目；该脚本随后在检查共享 fixture hashes 后，只构建并运行 `runtime_snapshot_test`。
@@ -114,6 +124,6 @@ bash scripts/test-runtime-contract.sh cpp
 
 ## 当前 CI 覆盖
 
-`.github/workflows/test.yml` 是主单元测试 workflow。它运行独立 C++/覆盖率路径、生命周期 sanitizer、Guardian 和 Go 检查、Flutter 测试以及 iOS 逻辑测试。它**不**运行实验性 Desktop Client 的 npm 或 Cargo 测试命令。
+`.github/workflows/test.yml` 是主单元测试 workflow。它运行独立 C++/覆盖率路径、独立的完整套件 ThreadSanitizer job、生命周期 sanitizer、Guardian 和 Go 检查、Flutter 测试以及 iOS 逻辑测试。它**不**运行实验性 Desktop Client 的 npm 或 Cargo 测试命令。
 
 原生构建 workflows 与这个单元测试 workflow 分开。宣称某个平台或特性已由 CI 覆盖前，请阅读对应 workflow。

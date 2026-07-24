@@ -502,6 +502,10 @@ namespace vmux {
         bool                                                                        begin_close() noexcept;
         /** @brief True once external close has prevented new work from registering. */
         bool                                                                        close_requested() const noexcept;
+        /** @brief True only while executing on this session's mandatory strand. */
+        bool                                                                        is_strand_thread() const noexcept {
+            return NULLPTR != strand_ && strand_->running_in_this_thread();
+        }
 
         /** @brief Send packet to one specific underlying link-layer endpoint. */
         bool                                                                        underlyin_sent(const vmux_linklayer_ptr& linklayer, const std::shared_ptr<Byte>& packet, int packet_length, const tx_completion_ptr& completion) noexcept;
@@ -614,9 +618,9 @@ namespace vmux {
 
             return successing;
         }
-        /** @brief Build and enqueue one vmux framed packet. */
+        /** @brief Build and enqueue one vmux framed packet; synchronously requires the mux strand. */
         bool                                                                        post_internal(Byte cmd, const void* packet, int packet_length, uint32_t connection_id, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept;
-        /** @brief Enqueue prebuilt vmux framed packet. */
+        /** @brief Enqueue a prebuilt frame; synchronously requires the mux strand. */
         bool                                                                        post_internal(const std::shared_ptr<Byte>& packet, int packet_length, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept;
         /** @brief True when an underlying link-layer endpoint is usable. */
         static bool                                                                 is_linklayer_active(const vmux_linklayer_ptr& linklayer) noexcept;

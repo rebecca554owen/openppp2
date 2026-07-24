@@ -92,8 +92,9 @@ namespace ppp {
                     /** @brief Whether the owning exchanger has been disposed. */
                     ppp::function<bool()> is_disposed;
 
-                    /** @brief Deregister a datagram port from the session table (port self-finalize). */
-                    ppp::function<void(const boost::asio::ip::udp::endpoint& source)> release_port;
+                    /** @brief Deregister this exact datagram port during self-finalize. */
+                    ppp::function<void(const boost::asio::ip::udp::endpoint& source,
+                                       const VEthernetDatagramPort* expected)> release_port;
 
 #if defined(_ANDROID)
                     /** @brief Whether an address bypasses the VPN tunnel via a direct Android socket. */

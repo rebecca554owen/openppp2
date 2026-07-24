@@ -371,8 +371,17 @@ namespace vmux {
         m->status_.last_heartbeat_    = now;
         m->status_.heartbeat_timeout_ = 0;
 
-        m->strand_                    = strand;
         m->context_                   = context;
+        m->strand_                    = strand;
+        if (NULLPTR != m->context_ && NULLPTR == m->strand_) {
+            m->strand_ = ppp::make_shared_object<Strand>(m->context_->get_executor());
+        }
+        if (NULLPTR == m->context_ || NULLPTR == m->strand_) {
+            m->base_.disposed_.store(true, std::memory_order_release);
+            ppp::diagnostics::SetLastErrorCode(NULLPTR == m->context_
+                ? ppp::diagnostics::ErrorCode::RuntimeIoContextMissing
+                : ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+        }
     }
 
     vmux_net::tx_completion_ptr vmux_net::make_tx_completion(const PostInternalAsynchronousCallback& callback) noexcept {
@@ -2654,6 +2663,11 @@ namespace vmux {
      * @brief Queues or directly dispatches a prepared packet frame for transmit.
      */
     bool vmux_net::post_internal(const std::shared_ptr<Byte>& packet, int packet_length, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept {
+        if (!is_strand_thread()) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+            return false;
+        }
+
         if (NULLPTR == packet || packet_length < sizeof(vmux_hdr)) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
             return false;
@@ -3061,6 +3075,11 @@ namespace vmux {
      * @brief Builds a vmux frame from command/payload and schedules transmit.
      */
     bool vmux_net::post_internal(Byte cmd, const void* buffer, int buffer_size, uint32_t connection_id, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept {
+        if (!is_strand_thread()) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+            return false;
+        }
+
         if (NULLPTR != buffer && buffer_size < 0) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetPostInternalNegativeBufferSize);
             return false;

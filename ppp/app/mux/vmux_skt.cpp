@@ -496,6 +496,11 @@ namespace vmux {
      * @return true when frame posting starts successfully.
      */
     bool vmux_skt::send_to_peer(const void* packet, int packet_length, const SendAsynchronousCallback& ac) noexcept {
+        if (NULLPTR == mux_ || !mux_->is_strand_thread()) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeEventDispatchFailed);
+            return false;
+        }
+
         if (NULLPTR == packet || packet_length < 1) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendInvalidPayload);
             return false;

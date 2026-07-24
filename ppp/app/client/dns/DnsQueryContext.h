@@ -25,6 +25,8 @@ class ProtectorNetwork;
 namespace ppp::app::client::dns {
 
 struct DnsQueryContext final {
+    using TimeoutRegistrationHandle = void*;
+
     std::function<bool(
         const boost::asio::ip::udp::endpoint&,
         const boost::asio::ip::udp::endpoint&,
@@ -36,9 +38,9 @@ struct DnsQueryContext final {
     std::shared_ptr<boost::asio::io_context> io_context;
 
     std::function<bool(
-        void*,
+        TimeoutRegistrationHandle,
         const std::shared_ptr<std::function<void(ppp::threading::Timer*)>>&)> emplace_timeout;
-    std::function<bool(void*)> delete_timeout;
+    std::function<bool(TimeoutRegistrationHandle)> delete_timeout;
     std::function<void(const Byte*, int)> write_cache;
     std::shared_ptr<ppp::dns::DnsUdpFlowRegistry> udp_flow_registry;
 

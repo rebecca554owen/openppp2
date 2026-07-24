@@ -5,6 +5,7 @@
 
 #include <cstring>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -12,75 +13,122 @@
 namespace vmux {
 
 struct vmux_net_test_access {
+    template <typename Handler>
+    static auto RunOnStrand(vmux_net& mux, Handler&& handler) -> decltype(handler()) {
+        using Result = decltype(handler());
+        if (mux.is_strand_thread()) {
+            return handler();
+        }
+        if (!mux.context_ || !mux.strand_) {
+            throw std::runtime_error("mux executor unavailable");
+        }
+
+        std::optional<Result> result;
+        std::exception_ptr error;
+        boost::asio::post(*mux.strand_, [&]() {
+            try {
+                result.emplace(handler());
+            }
+            catch (...) {
+                error = std::current_exception();
+            }
+        });
+        mux.context_->restart();
+        while (!result && !error) {
+            if (mux.context_->run_one() == 0) {
+                throw std::runtime_error("mux strand handler did not run");
+            }
+        }
+        if (error) {
+            std::rethrow_exception(error);
+        }
+        return std::move(*result);
+    }
+
+    template <typename Handler>
+    static void RunOnStrandVoid(vmux_net& mux, Handler&& handler) {
+        RunOnStrand(mux, [&]() {
+            handler();
+            return true;
+        });
+    }
     static void ConfigureFlowV2(
         vmux_net& mux,
         std::size_t reorder_cap_bytes,
         std::uint64_t reorder_timeout_ms,
         std::size_t session_reorder_cap_bytes = 0,
-        std::size_t max_open_flows = 0) noexcept {
-        mux.ordering_mode_ = vmux_net::ordering_flow_v2;
-        mux.flow_reorder_cap_bytes_ = reorder_cap_bytes;
-        mux.flow_reorder_timeout_ = reorder_timeout_ms;
-        mux.session_reorder_cap_bytes_ = session_reorder_cap_bytes;
-        mux.session_reorder_bytes_ = 0;
-        mux.max_open_flows_ = max_open_flows;
-        mux.tx_ctrl_budget_frames_ = 32;
-        mux.base_.established_ = true;
-        mux.base_.disposed_.store(false, std::memory_order_release);
+        std::size_t max_open_flows = 0) {
+        RunOnStrandVoid(mux, [&]() {
+            mux.ordering_mode_ = vmux_net::ordering_flow_v2;
+            mux.flow_reorder_cap_bytes_ = reorder_cap_bytes;
+            mux.flow_reorder_timeout_ = reorder_timeout_ms;
+            mux.session_reorder_cap_bytes_ = session_reorder_cap_bytes;
+            mux.session_reorder_bytes_ = 0;
+            mux.max_open_flows_ = max_open_flows;
+            mux.tx_ctrl_budget_frames_ = 32;
+            mux.base_.established_ = true;
+            mux.base_.disposed_.store(false, std::memory_order_release);
+        });
     }
 
-    static std::size_t SessionReorderBytes(const vmux_net& mux) noexcept {
-        return mux.session_reorder_bytes_;
+    static std::size_t SessionReorderBytes(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.session_reorder_bytes_; });
     }
 
-    static std::size_t SktCount(const vmux_net& mux) noexcept {
-        return mux.skts_.size();
+    static std::size_t SktCount(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.skts_.size(); });
     }
 
     static bool ProcessRxConnecting(
         const std::shared_ptr<vmux_net>& mux,
         std::uint32_t connection_id,
         const char* host) {
-        std::shared_ptr<vmux_skt> skt;
-        return mux->process_rx_connecting(skt, connection_id, host, static_cast<int>(std::strlen(host)));
+        return RunOnStrand(*mux, [&]() {
+            std::shared_ptr<vmux_skt> skt;
+            return mux->process_rx_connecting(skt, connection_id, host, static_cast<int>(std::strlen(host)));
+        });
     }
 
-    static void SetCtrlBudget(vmux_net& mux, std::size_t n) noexcept {
-        mux.tx_ctrl_budget_frames_ = n;
+    static void SetCtrlBudget(vmux_net& mux, std::size_t n) {
+        RunOnStrandVoid(mux, [&]() { mux.tx_ctrl_budget_frames_ = n; });
     }
 
-    static std::size_t CtrlQueueSize(const vmux_net& mux) noexcept {
-        return mux.tx_ctrl_queue_.size();
+    static std::size_t CtrlQueueSize(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.tx_ctrl_queue_.size(); });
     }
 
     static void EmplaceCtrlFrame(vmux_net& mux, int n) {
-        for (int i = 0; i < n; ++i) {
-            auto buf = mux.make_byte_array(static_cast<int>(sizeof(vmux_net::vmux_hdr)));
-            if (!buf) throw std::runtime_error("alloc");
-            auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(buf.get());
-            std::memset(h, 0, sizeof(*h));
-            h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_keep_alived);
-            mux.tx_ctrl_queue_.emplace_back(vmux_net::tx_packet{ buf, static_cast<int>(sizeof(vmux_net::vmux_hdr)), nullptr });
-        }
+        RunOnStrandVoid(mux, [&]() {
+            for (int i = 0; i < n; ++i) {
+                auto buf = mux.make_byte_array(static_cast<int>(sizeof(vmux_net::vmux_hdr)));
+                if (!buf) throw std::runtime_error("alloc");
+                auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(buf.get());
+                std::memset(h, 0, sizeof(*h));
+                h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_keep_alived);
+                mux.tx_ctrl_queue_.emplace_back(vmux_net::tx_packet{ buf, static_cast<int>(sizeof(vmux_net::vmux_hdr)), nullptr });
+            }
+        });
     }
 
-    static bool ProcessTxAll(vmux_net& mux) noexcept {
-        return mux.process_tx_all_packets();
+    static bool ProcessTxAll(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.process_tx_all_packets(); });
     }
 
     static std::shared_ptr<vmux_skt> InstallQueueOnlySkt(
         const std::shared_ptr<vmux_net>& mux,
         std::uint32_t connection_id) {
-        auto skt = ppp::make_shared_object<vmux_skt>(mux, connection_id);
-        if (!skt) {
-            throw std::runtime_error("skt alloc failed");
-        }
-        skt->status_.connected_ = true;
-        skt->status_.disposed_ = false;
-        skt->status_.fin_ = false;
-        skt->status_.sending_.store(1, std::memory_order_relaxed); // queue-only input path
-        mux->skts_[connection_id] = skt;
-        return skt;
+        return RunOnStrand(*mux, [&]() {
+            auto skt = ppp::make_shared_object<vmux_skt>(mux, connection_id);
+            if (!skt) {
+                throw std::runtime_error("skt alloc failed");
+            }
+            skt->status_.connected_ = true;
+            skt->status_.disposed_ = false;
+            skt->status_.fin_ = false;
+            skt->status_.sending_.store(1, std::memory_order_relaxed); // queue-only input path
+            mux->skts_[connection_id] = skt;
+            return skt;
+        });
     }
 
     static std::size_t QueuedRx(const vmux_skt& skt) noexcept {
@@ -97,16 +145,15 @@ struct vmux_net_test_access {
         return total;
     }
 
-    static bool FlowExists(const vmux_net& mux, std::uint32_t connection_id) noexcept {
-        return mux.flows_.find(connection_id) != mux.flows_.end();
+    static bool FlowExists(vmux_net& mux, std::uint32_t connection_id) {
+        return RunOnStrand(mux, [&]() { return mux.flows_.find(connection_id) != mux.flows_.end(); });
     }
 
-    static std::size_t FlowBufferedBytes(const vmux_net& mux, std::uint32_t connection_id) noexcept {
-        auto it = mux.flows_.find(connection_id);
-        if (it == mux.flows_.end()) {
-            return 0;
-        }
-        return it->second.flow_reorder_.buffered_bytes();
+    static std::size_t FlowBufferedBytes(vmux_net& mux, std::uint32_t connection_id) {
+        return RunOnStrand(mux, [&]() {
+            auto it = mux.flows_.find(connection_id);
+            return it == mux.flows_.end() ? 0 : it->second.flow_reorder_.buffered_bytes();
+        });
     }
 
     static bool InjectPush(
@@ -116,44 +163,48 @@ struct vmux_net_test_access {
         const void* payload,
         int payload_len,
         std::uint64_t now) {
-        const int frame_len = static_cast<int>(sizeof(vmux_net::vmux_hdr)) + payload_len;
-        std::vector<std::uint8_t> frame(static_cast<std::size_t>(frame_len));
-        auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(frame.data());
-        std::memset(h, 0, sizeof(*h));
-        h->seq = htonl(dsn);
-        h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_push);
-        h->connection_id = htonl(connection_id);
-        if (payload_len > 0 && payload != nullptr) {
-            std::memcpy(h + 1, payload, static_cast<std::size_t>(payload_len));
-        }
-        return mux.packet_input_flow(vmux_net::vmux_linklayer_ptr{}, h, frame_len, now);
+        return RunOnStrand(mux, [&]() {
+            const int frame_len = static_cast<int>(sizeof(vmux_net::vmux_hdr)) + payload_len;
+            std::vector<std::uint8_t> frame(static_cast<std::size_t>(frame_len));
+            auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(frame.data());
+            std::memset(h, 0, sizeof(*h));
+            h->seq = htonl(dsn);
+            h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_push);
+            h->connection_id = htonl(connection_id);
+            if (payload_len > 0 && payload != nullptr) {
+                std::memcpy(h + 1, payload, static_cast<std::size_t>(payload_len));
+            }
+            return mux.packet_input_flow(vmux_net::vmux_linklayer_ptr{}, h, frame_len, now);
+        });
     }
 
-    static void EvictExpired(vmux_net& mux, std::uint64_t now) noexcept {
-        mux.flow_evict_expired(now);
+    static void EvictExpired(vmux_net& mux, std::uint64_t now) {
+        RunOnStrandVoid(mux, [&]() { mux.flow_evict_expired(now); });
     }
 
-    static void FailFlow(vmux_net& mux, std::uint32_t connection_id, const char* reason) noexcept {
-        mux.fail_flow(connection_id, reason);
+    static void FailFlow(vmux_net& mux, std::uint32_t connection_id, const char* reason) {
+        RunOnStrandVoid(mux, [&]() { mux.fail_flow(connection_id, reason); });
     }
 
-    static bool SktDisposed(const vmux_skt& skt) noexcept {
-        return skt.status_.disposed_;
+    static bool SktDisposed(vmux_net& mux, const vmux_skt& skt) {
+        return RunOnStrand(mux, [&]() { return skt.status_.disposed_; });
     }
 
     static void ConfigureCompat(
         vmux_net& mux,
         std::uint64_t gap_timeout_ms,
-        std::size_t session_reorder_cap_bytes = 0) noexcept {
-        mux.ordering_mode_ = vmux_net::ordering_compat;
-        mux.flow_reorder_timeout_ = gap_timeout_ms;
-        mux.session_reorder_cap_bytes_ = session_reorder_cap_bytes;
-        mux.session_reorder_bytes_ = 0;
-        mux.rx_gap_oldest_tick_ = 0;
-        mux.base_.established_ = true;
-        mux.base_.disposed_.store(false, std::memory_order_release);
-        mux.status_.rx_ack_ = 1; // next expected global seq
-        mux.status_.last_ = 0;
+        std::size_t session_reorder_cap_bytes = 0) {
+        RunOnStrandVoid(mux, [&]() {
+            mux.ordering_mode_ = vmux_net::ordering_compat;
+            mux.flow_reorder_timeout_ = gap_timeout_ms;
+            mux.session_reorder_cap_bytes_ = session_reorder_cap_bytes;
+            mux.session_reorder_bytes_ = 0;
+            mux.rx_gap_oldest_tick_ = 0;
+            mux.base_.established_ = true;
+            mux.base_.disposed_.store(false, std::memory_order_release);
+            mux.status_.rx_ack_ = 1; // next expected global seq
+            mux.status_.last_ = 0;
+        });
     }
 
     static bool InjectCompatFrame(
@@ -161,48 +212,79 @@ struct vmux_net_test_access {
         std::uint32_t seq,
         std::uint32_t connection_id,
         std::uint64_t now) {
-        const int frame_len = static_cast<int>(sizeof(vmux_net::vmux_hdr));
-        std::vector<std::uint8_t> frame(static_cast<std::size_t>(frame_len));
-        auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(frame.data());
-        std::memset(h, 0, sizeof(*h));
-        h->seq = htonl(seq);
-        h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_keep_alived);
-        h->connection_id = htonl(connection_id);
-        return mux.packet_input_unorder(vmux_net::vmux_linklayer_ptr{}, h, frame_len, now);
+        return RunOnStrand(mux, [&]() {
+            const int frame_len = static_cast<int>(sizeof(vmux_net::vmux_hdr));
+            std::vector<std::uint8_t> frame(static_cast<std::size_t>(frame_len));
+            auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(frame.data());
+            std::memset(h, 0, sizeof(*h));
+            h->seq = htonl(seq);
+            h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_keep_alived);
+            h->connection_id = htonl(connection_id);
+            return mux.packet_input_unorder(vmux_net::vmux_linklayer_ptr{}, h, frame_len, now);
+        });
     }
 
-    static std::uint64_t LastActive(const vmux_net& mux) noexcept {
-        return mux.status_.last_;
+    static std::uint64_t LastActive(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.status_.last_.load(std::memory_order_acquire); });
     }
 
-    static std::size_t FlowMapSize(const vmux_net& mux) noexcept {
-        return mux.flows_.size();
+    static std::size_t FlowMapSize(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.flows_.size(); });
     }
 
-    static std::size_t CompatReorderSize(const vmux_net& mux) noexcept {
-        return mux.rx_queue_.size();
+    static std::size_t CompatReorderSize(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.rx_queue_.size(); });
     }
 
-    static void CompatEvict(vmux_net& mux, std::uint64_t now) noexcept {
-        mux.compat_evict_expired(now);
+    static void CompatEvict(vmux_net& mux, std::uint64_t now) {
+        RunOnStrandVoid(mux, [&]() { mux.compat_evict_expired(now); });
     }
 
-    static bool IsDisposed(const vmux_net& mux) noexcept {
-        return mux.base_.disposed_.load(std::memory_order_acquire);
+    static bool IsDisposed(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.base_.disposed_.load(std::memory_order_acquire); });
     }
 
     static bool ConnectRequire(vmux_net& mux) {
-        auto socket = std::make_shared<boost::asio::ip::tcp::socket>(*mux.context_);
-        return mux.connect_require(socket, "127.0.0.1", 80);
+        return RunOnStrand(mux, [&]() {
+            auto socket = std::make_shared<boost::asio::ip::tcp::socket>(*mux.context_);
+            return mux.connect_require(socket, "127.0.0.1", 80);
+        });
     }
 
     static bool SendToPeerBeforeOpen(
         const std::shared_ptr<vmux_skt>& skt,
         const void* packet,
         int packet_length) {
-        // connected_ remains false until syn_ok.
-        skt->status_.connected_ = false;
+        return RunOnStrand(*skt->mux_, [&]() {
+            skt->status_.connected_ = false;
+            return skt->send_to_peer(packet, packet_length, nullptr);
+        });
+    }
+
+    static bool SendToPeerOffStrand(const std::shared_ptr<vmux_skt>& skt, const void* packet, int packet_length) {
         return skt->send_to_peer(packet, packet_length, nullptr);
+    }
+
+    static bool PostCommand(vmux_net& mux, bool on_strand) {
+        auto invoke = [&]() {
+            vmux_net::PostInternalAsynchronousCallback callback;
+            return mux.post_internal(vmux_net::cmd_keep_alived, nullptr, 0, 0, false, callback);
+        };
+        return on_strand ? RunOnStrand(mux, invoke) : invoke();
+    }
+
+    static bool PostFrame(vmux_net& mux, bool on_strand) {
+        auto frame = mux.make_byte_array(static_cast<int>(sizeof(vmux_net::vmux_hdr)));
+        if (!frame) {
+            throw std::runtime_error("frame alloc failed");
+        }
+        std::memset(frame.get(), 0, sizeof(vmux_net::vmux_hdr));
+        reinterpret_cast<vmux_net::vmux_hdr*>(frame.get())->cmd = vmux_net::cmd_keep_alived;
+        auto invoke = [&]() {
+            vmux_net::PostInternalAsynchronousCallback callback;
+            return mux.post_internal(frame, static_cast<int>(sizeof(vmux_net::vmux_hdr)), false, callback);
+        };
+        return on_strand ? RunOnStrand(mux, invoke) : invoke();
     }
 
     static vmux_net::vmux_linklayer_ptr MakeDeadLink(bool handshake_complete) {
@@ -212,23 +294,25 @@ struct vmux_net_test_access {
     }
 
     static void AttachLink(vmux_net& mux, const vmux_net::vmux_linklayer_ptr& link) {
-        mux.rx_links_.push_back(link);
-        if (link->handshake_complete_ && !link->drain_.retiring()) {
-            mux.tx_links_.push_back(link);
-        }
-        mux.refresh_runtime_active_links();
+        RunOnStrandVoid(mux, [&]() {
+            mux.rx_links_.push_back(link);
+            if (link->handshake_complete_ && !link->drain_.retiring()) {
+                mux.tx_links_.push_back(link);
+            }
+            mux.refresh_runtime_active_links();
+        });
     }
 
     static void OnLinkExit(vmux_net& mux, const vmux_net::vmux_linklayer_ptr& link, const char* reason) {
-        mux.on_link_exit(link, reason);
+        RunOnStrandVoid(mux, [&]() { mux.on_link_exit(link, reason); });
     }
 
-    static std::size_t LiveCarriers(const vmux_net& mux) {
-        return mux.count_live_carriers(nullptr);
+    static std::size_t LiveCarriers(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.count_live_carriers(nullptr); });
     }
 
-    static std::size_t RxLinkCount(const vmux_net& mux) {
-        return mux.rx_links_.size();
+    static std::size_t RxLinkCount(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.rx_links_.size(); });
     }
 
     static bool LinkHasByteCredit(const vmux_net::vmux_linklayer_ptr& link, int len) {
@@ -240,55 +324,56 @@ struct vmux_net_test_access {
     }
 
     static void EmplaceDataFrame(vmux_net& mux, std::uint32_t cid, int payload_len) {
-        const int frame_len = static_cast<int>(sizeof(vmux_net::vmux_hdr)) + payload_len;
-        auto buf = ppp::make_shared_alloc<Byte>(frame_len);
-        if (!buf) {
-            throw std::runtime_error("alloc data frame");
-        }
-        auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(buf.get());
-        std::memset(h, 0, sizeof(*h));
-        h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_push);
-        h->connection_id = htonl(cid);
-        h->seq = htonl(1);
-        if (payload_len > 0) {
-            std::memset(h + 1, 'd', static_cast<std::size_t>(payload_len));
-        }
-        mux.enqueue_flow_tx(cid, vmux_net::tx_packet{ buf, frame_len, nullptr });
+        RunOnStrandVoid(mux, [&]() {
+            const int frame_len = static_cast<int>(sizeof(vmux_net::vmux_hdr)) + payload_len;
+            auto buf = ppp::make_shared_alloc<Byte>(frame_len);
+            if (!buf) {
+                throw std::runtime_error("alloc data frame");
+            }
+            auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(buf.get());
+            std::memset(h, 0, sizeof(*h));
+            h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_push);
+            h->connection_id = htonl(cid);
+            h->seq = htonl(1);
+            if (payload_len > 0) {
+                std::memset(h + 1, 'd', static_cast<std::size_t>(payload_len));
+            }
+            mux.enqueue_flow_tx(cid, vmux_net::tx_packet{ buf, frame_len, nullptr });
+        });
     }
 
     /** Pop next DRR frame and return its cid (0 if empty). Leaves queue unchanged by requeue. */
     static std::uint32_t DrrPeekNextCid(vmux_net& mux) {
-        vmux_net::tx_packet pkt;
-        if (!mux.drr_pop_next(pkt)) {
-            return 0;
-        }
-        const std::uint32_t cid = vmux_net::peek_connection_id(pkt.buffer, pkt.length);
-        mux.drr_requeue_front(std::move(pkt));
-        return cid;
+        return RunOnStrand(mux, [&]() {
+            vmux_net::tx_packet pkt;
+            if (!mux.drr_pop_next(pkt)) {
+                return std::uint32_t{0};
+            }
+            const std::uint32_t cid = vmux_net::peek_connection_id(pkt.buffer, pkt.length);
+            mux.drr_requeue_front(std::move(pkt));
+            return cid;
+        });
     }
 
     /** Drain one quantum from head cid repeatedly until DRR switches or empty. */
     static std::uint32_t DrrSelectAfterQuantum(vmux_net& mux, std::uint32_t burn_cid, std::size_t burn_bytes) {
-        // Burn deficit for burn_cid by popping frames until DRR would need a new quantum
-        // and another cid is selected. Simpler: set deficit low by popping until switch.
-        std::uint32_t last = 0;
-        std::size_t burned = 0;
-        while (burned < burn_bytes) {
-            vmux_net::tx_packet pkt;
-            if (!mux.drr_pop_next(pkt)) {
-                break;
+        return RunOnStrand(mux, [&]() {
+            std::uint32_t last = 0;
+            std::size_t burned = 0;
+            while (burned < burn_bytes) {
+                vmux_net::tx_packet pkt;
+                if (!mux.drr_pop_next(pkt)) {
+                    break;
+                }
+                last = vmux_net::peek_connection_id(pkt.buffer, pkt.length);
+                burned += (std::size_t)(pkt.length > 0 ? pkt.length : 0);
+                if (last != burn_cid) {
+                    mux.drr_requeue_front(std::move(pkt));
+                    return last;
+                }
             }
-            last = vmux_net::peek_connection_id(pkt.buffer, pkt.length);
-            burned += (std::size_t)(pkt.length > 0 ? pkt.length : 0);
-            // Do not requeue burned frames — they are "sent".
-            if (last != burn_cid) {
-                // First frame of another cid after burning — requeue it as the selected next.
-                mux.drr_requeue_front(std::move(pkt));
-                return last;
-            }
-        }
-        // After burning, next pop is the selected cid.
-        return DrrPeekNextCid(mux);
+            return DrrPeekNextCid(mux);
+        });
     }
 
     static std::uint32_t PeekTxHeadCid(vmux_net& mux) {
@@ -296,16 +381,20 @@ struct vmux_net_test_access {
     }
 
     static std::uint32_t PopTxCid(vmux_net& mux) {
-        vmux_net::tx_packet pkt;
-        if (!mux.drr_pop_next(pkt)) {
-            return 0;
-        }
-        return vmux_net::peek_connection_id(pkt.buffer, pkt.length);
+        return RunOnStrand(mux, [&]() {
+            vmux_net::tx_packet pkt;
+            if (!mux.drr_pop_next(pkt)) {
+                return std::uint32_t{0};
+            }
+            return vmux_net::peek_connection_id(pkt.buffer, pkt.length);
+        });
     }
 
-    static void ClearTxQueue(vmux_net& mux) noexcept {
-        mux.clear_flow_tx();
-        mux.tx_ctrl_queue_.clear();
+    static void ClearTxQueue(vmux_net& mux) {
+        RunOnStrandVoid(mux, [&]() {
+            mux.clear_flow_tx();
+            mux.tx_ctrl_queue_.clear();
+        });
     }
 
     static void CloseAndDrain(const std::shared_ptr<vmux_net>& mux) noexcept {
@@ -408,8 +497,8 @@ void TestGapTimeoutResetsFlowWithoutHoleDelivery() {
 
     vmux::vmux_net_test_access::EvictExpired(*mux, 1001 + timeout_ms + 1);
 
-    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid), "gap timeout must erase flow");
     Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 1, "dsn3 must never be delivered after gap fail");
+    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid), "gap timeout must erase flow");
     // close() is posted async; poll executor so finalize can run.
     auto ctx = mux->get_context();
     Require(static_cast<bool>(ctx), "context");
@@ -439,8 +528,8 @@ void TestReorderOverflowResetsFlow() {
 
     // Another future frame cannot fit: overflow -> fail_flow.
     Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 4, payload, 16, 2002), "dsn4 overflow");
-    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid), "overflow must reset flow");
     Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 1, "no force-advance delivery of buffered frames");
+    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid), "overflow must reset flow");
 }
 
 void TestFrameOversizeResetsFlow() {
@@ -458,8 +547,8 @@ void TestFrameOversizeResetsFlow() {
     Require(vmux::vmux_net_test_access::InjectPush(
                 *mux, cid, 3, big.data(), static_cast<int>(big.size()), 3001),
             "oversize future inject returns");
-    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid), "oversize must reset flow");
     Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 1, "oversize must not deliver hole");
+    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid), "oversize must reset flow");
 }
 
 void TestInOrderStillDelivers() {
@@ -689,6 +778,35 @@ void TestTxFlowDrrDrainsBytesWithinQuantumBeforeRotating() {
     Require(vmux::vmux_net_test_access::PopTxCid(*mux) == 2, "cid2 runs after cid1 queue drains");
 }
 
+void TestVmuxCreatesMissingStrand() {
+    auto context = std::make_shared<boost::asio::io_context>();
+    vmux::StrandPtr strand;
+    auto mux = ppp::make_shared_object<vmux::vmux_net>(
+        context, strand, 1, true, false, vmux::vmux_net::mux_mode_balance);
+    Require(static_cast<bool>(mux), "fallback mux allocation");
+    Require(static_cast<bool>(mux->get_strand()), "valid context must create missing strand");
+    Require(!mux->is_disposed(), "fallback strand keeps mux usable");
+    vmux::vmux_net_test_access::CloseAndDrain(mux);
+}
+
+void TestStrandAffineSendAndPostRejectOffStrand() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, 1024, 1000);
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, 77);
+    const char payload[] = "x";
+
+    Require(!vmux::vmux_net_test_access::SendToPeerOffStrand(skt, payload, 1),
+        "send_to_peer must synchronously reject off-strand calls");
+    Require(!vmux::vmux_net_test_access::PostCommand(*mux, false),
+        "command post_internal must reject off-strand calls");
+    Require(!vmux::vmux_net_test_access::PostFrame(*mux, false),
+        "frame post_internal must reject off-strand calls");
+    Require(vmux::vmux_net_test_access::PostCommand(*mux, true),
+        "command post_internal remains synchronous on strand");
+    Require(vmux::vmux_net_test_access::PostFrame(*mux, true),
+        "frame post_internal remains synchronous on strand");
+}
+
 int main() {
     try {
         TestTxFlowDrrPrefersOtherCidAfterQuantum();
@@ -709,6 +827,8 @@ int main() {
         TestLinkExitIsolatesWhenOthersLive();
         TestLinkExitClosesWhenLast();
         TestLinkByteCreditHighWater();
+        TestVmuxCreatesMissingStrand();
+        TestStrandAffineSendAndPostRejectOffStrand();
         std::cout << "vmux_receive_semantics_test: ok" << std::endl;
         return 0;
     }
