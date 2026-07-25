@@ -49,6 +49,7 @@
 #if defined(_WIN32)
                 PaperAirplaneControllerPtr                                          paper_airplane_ctrl_;
                 AllNicDnsServerAddresses                                            ni_dns_servers_;
+                std::unique_ptr<ppp::win32::ipv6::WindowsIPv6RouteOwner>            windows_ipv6_route_owner_;
 #elif defined(_LINUX)
                 ppp::string                                                         ni_dns_servers_;
 #endif

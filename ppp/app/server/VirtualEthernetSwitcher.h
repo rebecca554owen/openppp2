@@ -744,10 +744,11 @@ namespace ppp {
                  */
                 bool                                                    DeleteIPv6TransitRoute(const boost::asio::ip::address& ip, int prefix_length) noexcept;
                 /**
-                 * @brief Clears the IPv6 exchanger table without acquiring `syncobj_`.
-                 * @warning Caller must hold `syncobj_` before calling this function.
+                 * @brief Snapshots IPv6 cleanup keys and clears exchanger/lease state without acquiring `syncobj_`.
+                 * @warning Caller must hold `syncobj_` before calling this function. Owned-neighbor records
+                 *          remain until lock-free kernel cleanup confirms deletion.
                  */
-                void                                                    ClearIPv6ExchangersUnsafe() noexcept;
+                void                                                    ClearIPv6ExchangersUnsafe(ppp::unordered_set<ppp::string>& cleanup_keys, ppp::unordered_set<ppp::string>& cleanup_owned_neighbors) noexcept;
                 /**
                  * @brief Injects a raw packet into the IPv6 transit TAP device.
                  * @param packet        Pointer to the raw IP packet buffer.
@@ -831,6 +832,7 @@ namespace ppp {
 
             private:
                 SynchronizedObject                                      syncobj_;           ///< Mutex guarding all shared mutable tables.
+                SynchronizedObject                                      ipv6_transit_lifecycle_syncobj_; ///< Serializes TAP-backed route/neighbor lifecycle operations with Finalize().
                 /** @brief Set to true after Dispose() begins; atomic for lock-free cross-thread reads via IsDisposed(). */
                 std::atomic<bool>                                       disposed_{false};
                 std::atomic<bool>                                       running_{false};
@@ -838,6 +840,7 @@ namespace ppp {
                 VirtualEthernetLoggerPtr                                logger_;                        ///< Session activity logger.
                 NatInformationTable                                     nats_;                          ///< IPv4 NAT ownership table (key = IP).
                 IPv6ExchangerTable                                      ipv6s_;                         ///< IPv6 address → exchanger mapping.
+                ppp::unordered_set<ppp::string>                          ipv6_transit_neighbor_owned_;   ///< Permanent transit neighbors created by this switcher.
                 IPv6RequestTable                                        ipv6_requests_;                 ///< Per-session IPv6 request state.
                 IPv6LeaseTable                                          ipv6_leases_;                   ///< Active IPv6 lease records.
                 P2PPeerTable                                            p2p_peers_;                     ///< P2P control-plane peer records (key = session_id).

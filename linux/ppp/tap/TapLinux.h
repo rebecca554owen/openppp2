@@ -25,6 +25,13 @@ namespace ppp
                 Changed,
             };
 
+            enum class NeighborMutationResult
+            {
+                Failed,
+                Unchanged,
+                Changed,
+            };
+
             static RouteMutationResult                                              ClassifyRouteAddResult(int error, bool query_succeeded, bool exact_exists) noexcept
             {
                 if (error == 0)
@@ -36,6 +43,19 @@ namespace ppp
                     return RouteMutationResult::Unchanged;
                 }
                 return RouteMutationResult::Failed;
+            }
+
+            static NeighborMutationResult                                           ClassifyPermanentNeighborAddResult(int error, bool query_succeeded, bool exact_exists) noexcept
+            {
+                if (error == 0)
+                {
+                    return NeighborMutationResult::Changed;
+                }
+                if (error == EEXIST && query_succeeded && exact_exists)
+                {
+                    return NeighborMutationResult::Unchanged;
+                }
+                return NeighborMutationResult::Failed;
             }
 
             TapLinux(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& dev, void* tun, uint32_t address, uint32_t gw, uint32_t mask, bool hosted_network);
@@ -85,6 +105,8 @@ namespace ppp
             static bool                                                             DisableIPv6NeighborProxy(const ppp::string& ifrName) noexcept;
             static bool                                                             AddIPv6NeighborProxy(const ppp::string& ifrName, const ppp::string& addressIP) noexcept;
             static bool                                                             DeleteIPv6NeighborProxy(const ppp::string& ifrName, const ppp::string& addressIP) noexcept;
+            static NeighborMutationResult                                           AddIPv6PermanentNeighbor(const ppp::string& ifrName, const ppp::string& addressIP) noexcept;
+            static bool                                                             DeleteIPv6PermanentNeighbor(const ppp::string& ifrName, const ppp::string& addressIP) noexcept;
             static ppp::string                                                      GetDeviceId(const ppp::string& ifrName) noexcept;
             static bool                                                             GetPreferredNetworkInterface(ppp::string& interface_, UInt32& address, UInt32& mask, UInt32& gw, const ppp::string& nic) noexcept;
 

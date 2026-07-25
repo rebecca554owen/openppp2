@@ -384,6 +384,9 @@
     <ClCompile Include="ppp\ipv6\IPv6Auxiliary.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\ipv6\IPv6RouteTransaction.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\app\protocol\VirtualEthernetTcpipConnection.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -424,6 +427,9 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="windows\ppp\ipv6\WIN32_IPv6Auxiliary.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="windows\ppp\ipv6\WindowsIPv6RouteOwner.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="windows\ppp\win32\Win32PerformanceCounter.cpp">
@@ -1389,6 +1395,15 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="windows\ppp\ipv6\IPv6Auxiliary.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\ipv6\IPv6ClientPolicy.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\ipv6\IPv6RouteTransaction.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="windows\ppp\ipv6\WindowsIPv6RouteOwner.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="windows\ppp\win32\Win32RegistryKey.h">
