@@ -35,6 +35,8 @@ class WindowsIPv6ContractTests(unittest.TestCase):
         self.assertIn("owned_interface_luid", deletion)
         self.assertIn("owned_interface_index", deletion)
         self.assertIn("IsEquivalentGatewayNeighbor(existing, expected)", deletion)
+        self.assertNotIn("InitializeMibIfRow", source)
+        self.assertNotIn("InitializeIpNetEntry", source)
 
     def test_neighbor_is_limited_to_actual_wintun_instance(self) -> None:
         header = (ROOT / "windows/ppp/tap/TapWindows.h").read_text(
@@ -213,6 +215,18 @@ class WindowsIPv6ContractTests(unittest.TestCase):
         for entry in entries:
             self.assertIn(entry, project)
             self.assertIn(entry, filters)
+
+    def test_paper_airplane_acceptors_retain_shared_ownership(self) -> None:
+        source = (
+            ROOT / "windows/ppp/app/client/lsp/PaperAirplaneController.cpp"
+        ).read_text(encoding="utf-8")
+        master = function_body(source, "bool PaperAirplaneController::AcceptMasterAcceptor")
+        forward = function_body(source, "bool PaperAirplaneController::AcceptForwardAcceptor")
+        self.assertIn("PacketInput(socket", master)
+        self.assertNotIn("PacketInput(*socket", master)
+        self.assertIn("auto acceptor = acceptors_[1]", forward)
+        self.assertIn("AcceptLoopbackSchedulerAsync(*acceptor", forward)
+        self.assertIn("[self, this, acceptor]", forward)
 
 
 if __name__ == "__main__":
