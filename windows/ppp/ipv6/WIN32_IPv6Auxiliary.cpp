@@ -32,14 +32,13 @@ namespace ppp {
                             return false;
                         }
 
-                        MIB_IF_ROW2 interface_row;
-                        ::InitializeMibIfRow(&interface_row);
+                        MIB_IF_ROW2 interface_row{};
                         interface_row.InterfaceIndex = static_cast<NET_IFINDEX>(interface_index);
                         if (::GetIfEntry2(&interface_row) != NO_ERROR) {
                             return false;
                         }
 
-                        ::InitializeIpNetEntry(&row);
+                        row = {};
                         row.InterfaceLuid = interface_row.InterfaceLuid;
                         row.InterfaceIndex = interface_row.InterfaceIndex;
                         row.Address.Ipv6.sin6_family = AF_INET6;
@@ -125,8 +124,7 @@ namespace ppp {
                             return false;
                         }
 
-                        MIB_IF_ROW2 current_interface;
-                        ::InitializeMibIfRow(&current_interface);
+                        MIB_IF_ROW2 current_interface{};
                         current_interface.InterfaceIndex = static_cast<NET_IFINDEX>(owned_interface_index);
                         if (::GetIfEntry2(&current_interface) != NO_ERROR ||
                             current_interface.InterfaceLuid.Value != owned_interface_luid ||
@@ -165,8 +163,7 @@ namespace ppp {
                             return false;
                         }
 
-                        MIB_IF_ROW2 interface_row;
-                        ::InitializeMibIfRow(&interface_row);
+                        MIB_IF_ROW2 interface_row{};
                         interface_row.InterfaceIndex = static_cast<NET_IFINDEX>(interface_index);
                         if (::GetIfEntry2(&interface_row) != NO_ERROR) {
                             return false;
@@ -251,8 +248,7 @@ namespace ppp {
                             return false;
                         }
 
-                        MIB_IF_ROW2 current_interface;
-                        ::InitializeMibIfRow(&current_interface);
+                        MIB_IF_ROW2 current_interface{};
                         current_interface.InterfaceIndex = static_cast<NET_IFINDEX>(current_interface_index);
                         if (::GetIfEntry2(&current_interface) != NO_ERROR ||
                             current_interface.InterfaceLuid.Value != owned_address.InterfaceLuid ||
