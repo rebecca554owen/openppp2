@@ -90,9 +90,9 @@ namespace ppp {
                 std::string* error = nullptr) noexcept;
 
         private:
-            TransportAuthKeyringSnapshot() noexcept = default;
+            TransportAuthKeyringSnapshot() noexcept;
 
-            std::uint64_t                   generation_ = 0;
+            std::uint64_t                   generation_;
             std::unique_ptr<Key>            active_key_;
             std::vector<Key>                verify_keys_;
         };

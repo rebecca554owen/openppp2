@@ -1834,8 +1834,7 @@ namespace ppp {
                     const bool timed_out = !handshake_state->compare_exchange_strong(
                         expected, HandshakeCompleted, std::memory_order_acq_rel) &&
                         expected == HandshakeTimedOut;
-                    boost::system::error_code ignored;
-                    handshake_timer->cancel(ignored);
+                    handshake_timer->cancel();
                     if (timed_out) {
                         ppp::diagnostics::SetLastErrorCode(
                             ppp::diagnostics::ErrorCode::SocketTimeout);

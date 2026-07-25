@@ -539,8 +539,7 @@ namespace vmux {
             // Reliability sub-protocol teardown: stop the maintenance timer and
             // drop all ACK / retransmit / FEC state with the session.
             if (NULLPTR != reliability_timer_) {
-                boost::system::error_code timer_ec;
-                reliability_timer_->cancel(timer_ec);
+                reliability_timer_->cancel();
                 reliability_timer_.reset();
             }
             rtx_.Clear();

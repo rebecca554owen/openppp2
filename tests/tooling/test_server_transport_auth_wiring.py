@@ -104,7 +104,7 @@ class ServerTransportAuthWiringTest(unittest.TestCase):
         self.assertIn("configuration_->transport_auth.handshake_timeout_ms", helper)
         self.assertIn("boost::asio::steady_timer", helper)
         self.assertIn("transmission->Dispose()", helper)
-        self.assertIn("handshake_timer->cancel(ignored)", helper)
+        self.assertIn("handshake_timer->cancel()", helper)
         self.assertIn("ErrorCode::SocketTimeout", helper)
 
     def test_recovery_carriers_require_exact_kind_method_and_exporter(self) -> None:
