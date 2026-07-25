@@ -1502,7 +1502,9 @@ namespace ppp {
                     return switcher_->SendIPv6TransitPacket(packet, packet_length);
                 }
 
-                if (!configuration->server.subnet && configuration->server.ipv6.mode != AppConfiguration::IPv6Mode_Gua) {
+                if (!configuration->server.subnet &&
+                    configuration->server.ipv6.mode != AppConfiguration::IPv6Mode_Gua &&
+                    configuration->server.ipv6.mode != AppConfiguration::IPv6Mode_Nat66) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ModeInvalid);
                     return false;
                 }

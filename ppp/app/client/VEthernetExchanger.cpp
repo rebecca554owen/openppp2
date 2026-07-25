@@ -1261,8 +1261,50 @@ namespace ppp {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
+#if defined(_WIN32)
+                bool windows_ipv6_route_staged = false;
+                if (role == ppp::transmissions::TcpTransmissionRole::Main) {
+                    const bool had_takeover = switcher_->HasActiveWindowsIPv6Takeover();
+                    boost::asio::ip::tcp::endpoint egress_endpoint = remoteEP;
+                    if (const auto forwarding = switcher_->GetForwarding(); forwarding) {
+                        egress_endpoint = forwarding->GetProxyEndPoint();
+                    }
+                    const boost::asio::ip::address egress_address = egress_endpoint.address();
+                    const bool proven_external =
+                        !IPEndPoint::IsInvalid(egress_address) &&
+                        !egress_address.is_unspecified() &&
+                        !egress_address.is_multicast() &&
+                        !egress_address.is_loopback();
+                    const bool staged = switcher_->StageWindowsIPv6Egress(
+                        egress_endpoint, proven_external);
+                    const bool protected_route = staged && switcher_->EnsureWindowsIPv6Sink();
+                    if (protected_route) {
+                        windows_ipv6_route_staged = true;
+                    }
+                    else {
+                        switcher_->RollbackWindowsIPv6Egress();
+                        // Initial protection is best-effort. Once takeover exists, or an exact
+                        // rollback is pending, never connect a candidate without a safe egress.
+                        if (had_takeover || switcher_->HasPendingWindowsIPv6Cleanup()) {
+                            return ppp::diagnostics::SetLastError(
+                                ppp::diagnostics::ErrorCode::RouteAddFailed,
+                                VEthernetExchanger::ITransmissionPtr(NULLPTR));
+                        }
+                    }
+                }
+#endif
+                auto rollback_windows_ipv6_route = [&]() noexcept {
+#if defined(_WIN32)
+                    if (windows_ipv6_route_staged) {
+                        switcher_->RollbackWindowsIPv6Egress();
+                        windows_ipv6_route_staged = false;
+                    }
+#endif
+                };
+
                 std::shared_ptr<boost::asio::ip::tcp::socket> socket = NewAsynchronousSocket(context, strand, remoteEP.protocol(), y);
                 if (!socket) {
+                    rollback_windows_ipv6_route();
                     return NULLPTR;
                 }
 
@@ -1274,6 +1316,7 @@ namespace ppp {
                     auto protector_network = switcher_->GetProtectorNetwork();
                     if (NULLPTR != protector_network) {
                         if (!protector_network->Protect(socket->native_handle(), y)) {
+                            rollback_windows_ipv6_route();
                             return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                         }
                     }
@@ -1285,6 +1328,7 @@ namespace ppp {
 
                 AppConfigurationPtr configuration = GetConfiguration();
                 if (NULLPTR == configuration) {
+                    rollback_windows_ipv6_route();
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::AppConfigurationMissing, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
@@ -1296,6 +1340,7 @@ namespace ppp {
                     ? make_shared_object<boost::asio::steady_timer>(*strand)
                     : make_shared_object<boost::asio::steady_timer>(*context);
                 if (NULLPTR == connect_state || NULLPTR == connect_timer) {
+                    rollback_windows_ipv6_route();
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
@@ -1323,11 +1368,17 @@ namespace ppp {
                         : ppp::diagnostics::ErrorCode::TcpConnectFailed;
                     ppp::telemetry::Count("client_exchanger.connect.fail.tcp", 1);
                     ppp::telemetry::Log(Level::kInfo, "client_exchanger", "tcp connect failed: %s:%d address=%s error=%d", hostname.c_str(), remotePort, remoteIP.to_string().c_str(), (int)error);
+                    rollback_windows_ipv6_route();
                     return ppp::diagnostics::SetLastError(error, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
                 ppp::telemetry::Log(Level::kInfo, "client_exchanger", "tcp connected: %s:%d role=%s", hostname.c_str(), remotePort, TransmissionRoleName(role));
-                return NewTransmission(context, strand, socket, protocol_type, hostname, path, role);
+                ITransmissionPtr transmission = NewTransmission(
+                    context, strand, socket, protocol_type, hostname, path, role);
+                if (!transmission) {
+                    rollback_windows_ipv6_route();
+                }
+                return transmission;
             }
 
             /** @brief Starts main asynchronous exchanger loop. */
@@ -1900,6 +1951,17 @@ namespace ppp {
                             }
                         }
 
+#if defined(_WIN32)
+                        if (established && !switcher_->CommitWindowsIPv6Egress()) {
+                            switcher_->RollbackWindowsIPv6Egress();
+                            established = false;
+                            ppp::diagnostics::SetLastErrorCode(
+                                ppp::diagnostics::ErrorCode::RouteAddFailed);
+                        }
+                        if (!established) {
+                            switcher_->RollbackWindowsIPv6Egress();
+                        }
+#endif
                         if (!established) {
                             if (IsTerminalSessionResumeError(
                                     ppp::diagnostics::GetLastErrorCode())) {

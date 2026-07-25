@@ -667,6 +667,12 @@ namespace ppp
             return WintunAdapter::Ready();
         }
 
+        bool TapWindows::IsWintunBackend() noexcept
+        {
+            std::lock_guard<std::mutex> lock(wintun_mutex_);
+            return NULLPTR != wintun_adapter_;
+        }
+
         ppp::string TapWindows::FindComponentId() noexcept
         {
             ppp::unordered_set<ppp::string> componentIds;

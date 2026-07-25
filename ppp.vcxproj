@@ -550,12 +550,14 @@
     <ClCompile Include="ppp\p2p\P2PSocketProtector.cpp" />
     <ClCompile Include="ppp\p2p\P2PStunClient.cpp" />
     <ClCompile Include="ppp\ipv6\IPv6Auxiliary.cpp" />
+    <ClCompile Include="ppp\ipv6\IPv6RouteTransaction.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneConnection.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneController.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneLspX.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneLspY.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneRoot.cpp" />
     <ClCompile Include="windows\ppp\ipv6\WIN32_IPv6Auxiliary.cpp" />
+    <ClCompile Include="windows\ppp\ipv6\WindowsIPv6RouteOwner.cpp" />
     <ClCompile Include="windows\ppp\net\proxies\HttpProxy.cpp" />
     <ClCompile Include="windows\ppp\net\QoSS.cpp" />
     <ClCompile Include="windows\ppp\net\Win32SocketAcceptor.cpp" />
@@ -937,6 +939,9 @@
     <ClInclude Include="windows\ppp\app\client\lsp\PaperAirplaneLspY.h" />
     <ClInclude Include="windows\ppp\app\client\lsp\PaperAirplaneRoot.h" />
     <ClInclude Include="windows\ppp\ipv6\IPv6Auxiliary.h" />
+    <ClInclude Include="ppp\ipv6\IPv6ClientPolicy.h" />
+    <ClInclude Include="ppp\ipv6\IPv6RouteTransaction.h" />
+    <ClInclude Include="windows\ppp\ipv6\WindowsIPv6RouteOwner.h" />
     <ClInclude Include="windows\ppp\net\proxies\HttpProxy.h" />
     <ClInclude Include="windows\ppp\net\QoSS.h" />
     <ClInclude Include="windows\ppp\tap\tap-windows.h" />

@@ -616,14 +616,14 @@ namespace ppp
                 return NULLPTR;
             }
 
-            IPEndPoint gwEP(ip, 0);
+            IPEndPoint gwEP(gw, 0);
             if (IPEndPoint::IsInvalid(gwEP))
             {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkGatewayInvalid);
                 return NULLPTR;
             }
 
-            IPEndPoint maskEP(ip, 0);
+            IPEndPoint maskEP(mask, 0);
             if (IPEndPoint::IsInvalid(maskEP))
             {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkMaskInvalid);

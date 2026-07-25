@@ -30,6 +30,7 @@ namespace ppp::net::packet { class UdpFrame; class BufferSegment; }
 #if defined(_WIN32)
 struct _MIB_IPFORWARDROW;
 typedef struct _MIB_IPFORWARDROW MIB_IPFORWARDROW;
+namespace ppp::win32::ipv6 { class WindowsIPv6RouteOwner; }
 #endif
 
 namespace ppp {

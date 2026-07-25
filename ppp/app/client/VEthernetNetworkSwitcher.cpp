@@ -77,6 +77,7 @@ static bool AndroidDnsRedirectTraceEnabled() noexcept {
 #include <windows/ppp/net/proxies/HttpProxy.h>
 #include <windows/ppp/win32/network/NetworkInterface.h>
 #include <windows/ppp/app/client/lsp/PaperAirplaneController.h>
+#include <windows/ppp/ipv6/WindowsIPv6RouteOwner.h>
 #else
 #include <common/unix/UnixAfx.h>
 #if defined(_MACOS)
@@ -166,6 +167,10 @@ namespace ppp {
                 aggregator_loader_->Bind(this);
                 remote_endpoint_loader_->Bind(this);
                 timeout_registry_->Bind(&GetSynchronizedObject());
+
+#if defined(_WIN32)
+                windows_ipv6_route_owner_ = std::make_unique<ppp::win32::ipv6::WindowsIPv6RouteOwner>();
+#endif
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
 #if defined(_LINUX)
@@ -262,6 +267,51 @@ namespace ppp {
             VEthernetNetworkSwitcher::IForwardingPtr VEthernetNetworkSwitcher::GetForwarding() noexcept {
                 return forwarding_;
             }
+
+#if defined(_WIN32)
+            bool VEthernetNetworkSwitcher::BindWindowsIPv6RouteOwner() noexcept {
+                return windows_ipv6_route_owner_ && tun_ni_ && underlying_ni_ &&
+                    windows_ipv6_route_owner_->BindInterfaces(tun_ni_->Index, underlying_ni_->Index);
+            }
+
+            bool VEthernetNetworkSwitcher::StageWindowsIPv6Egress(
+                const boost::asio::ip::tcp::endpoint& endpoint,
+                bool proven_external) noexcept {
+                return windows_ipv6_route_owner_ &&
+                    windows_ipv6_route_owner_->StageEgressEndpoint(endpoint, proven_external);
+            }
+
+            bool VEthernetNetworkSwitcher::EnsureWindowsIPv6Sink() noexcept {
+                return windows_ipv6_route_owner_ && windows_ipv6_route_owner_->EnsureSinkMode();
+            }
+
+            bool VEthernetNetworkSwitcher::ActivateWindowsManagedIPv6(
+                const boost::asio::ip::address& gateway,
+                bool nat_mode) noexcept {
+                return windows_ipv6_route_owner_ &&
+                    windows_ipv6_route_owner_->ActivateManagedMode(gateway, nat_mode);
+            }
+
+            bool VEthernetNetworkSwitcher::CommitWindowsIPv6Egress() noexcept {
+                return windows_ipv6_route_owner_ && windows_ipv6_route_owner_->CommitStagedPin();
+            }
+
+            bool VEthernetNetworkSwitcher::RollbackWindowsIPv6Egress() noexcept {
+                return !windows_ipv6_route_owner_ || windows_ipv6_route_owner_->RollbackStagedPin();
+            }
+
+            bool VEthernetNetworkSwitcher::StopWindowsIPv6Routes() noexcept {
+                return !windows_ipv6_route_owner_ || windows_ipv6_route_owner_->Stop();
+            }
+
+            bool VEthernetNetworkSwitcher::HasActiveWindowsIPv6Takeover() const noexcept {
+                return windows_ipv6_route_owner_ && windows_ipv6_route_owner_->HasActiveTakeover();
+            }
+
+            bool VEthernetNetworkSwitcher::HasPendingWindowsIPv6Cleanup() const noexcept {
+                return windows_ipv6_route_owner_ && windows_ipv6_route_owner_->HasPendingCleanup();
+            }
+#endif
 
             std::shared_ptr<aggligator::aggligator> VEthernetNetworkSwitcher::GetAggligator() noexcept {
                 return aggligator_;
@@ -471,14 +521,27 @@ namespace ppp {
                 auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(shared_from_this());
                 std::shared_ptr<boost::asio::io_context> context = GetContext();
                 boost::asio::dispatch(*context,
-                    [self, this, context, completion = std::move(completion)]() mutable noexcept {
-                        Finalize();
-                        VEthernet::Dispose();
-                        if (completion) {
-                            completion(WasTeardownSuccessful());
-                        }
+                    [self, this, completion = std::move(completion)]() mutable noexcept {
+                        DisposeAttempt(std::move(completion), 3);
                     });
+            }
+
+            /** @brief Retries host cleanup before releasing the TAP and its interface identity. */
+            void VEthernetNetworkSwitcher::DisposeAttempt(
+                ppp::function<void(bool)> completion,
+                int attempts_remaining) noexcept {
+                Finalize();
+                const bool cleanup_success = WasTeardownSuccessful();
+                if (!cleanup_success && attempts_remaining > 1) {
+                    DisposeAttempt(std::move(completion), attempts_remaining - 1);
+                    return;
+                }
+
+                VEthernet::Dispose();
                 ppp::telemetry::Log(Level::kInfo, "client", "TUN detached");
+                if (completion) {
+                    completion(cleanup_success);
+                }
             }
 
             /** @brief Releases objects, packets, and timeout handlers. */
@@ -614,10 +677,29 @@ namespace ppp {
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
             bool VEthernetNetworkSwitcher::ApplyAssignedIPv6(const VirtualEthernetInformationExtensions& extensions) noexcept {
-                return address_manager_->ApplyAssignedIPv6(extensions);
+                const bool applied = address_manager_->ApplyAssignedIPv6(extensions);
+#if defined(_WIN32)
+                if (!applied) {
+                    return false;
+                }
+
+                const bool nat_mode = extensions.AssignedIPv6Mode ==
+                    VirtualEthernetInformationExtensions::IPv6Mode_Nat66;
+                if (!ActivateWindowsManagedIPv6(extensions.AssignedIPv6Gateway, nat_mode)) {
+                    // Route protection is best-effort: keep the VPN session, but do not leave
+                    // a managed IPv6 address active without the split takeover pair.
+                    EnsureWindowsIPv6Sink();
+                    address_manager_->RestoreAssignedIPv6();
+                    return true;
+                }
+#endif
+                return applied;
             }
 
             void VEthernetNetworkSwitcher::RestoreAssignedIPv6() noexcept {
+#if defined(_WIN32)
+                EnsureWindowsIPv6Sink();
+#endif
                 address_manager_->RestoreAssignedIPv6();
             }
 
@@ -668,8 +750,15 @@ namespace ppp {
                 }
 
                 bool valid_ipv6_assignment = HasManagedIPv6Assignment(extensions);
-                if (!valid_ipv6_assignment && address_manager_->Ipv6Applied()) {
-                    RestoreAssignedIPv6();
+                if (!valid_ipv6_assignment) {
+                    if (address_manager_->Ipv6Applied()) {
+                        RestoreAssignedIPv6();
+                    }
+#if defined(_WIN32)
+                    else {
+                        EnsureWindowsIPv6Sink();
+                    }
+#endif
                 }
 
                 if (valid_ipv6_assignment &&

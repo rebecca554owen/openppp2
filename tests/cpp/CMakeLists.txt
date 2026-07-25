@@ -428,6 +428,12 @@ openppp2_add_cpp_test(linux_route_platform_contract_test SOURCES
     support/linux_route_platform_stubs.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/route/LinuxRoutePlatform.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/route/RouteSpecs.cpp")
+openppp2_add_cpp_test(linux_ipv6_contract_test SOURCES
+    linux_ipv6_contract_test.cpp)
+target_link_libraries(linux_ipv6_contract_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(windows_ipv6_route_transaction_test SOURCES
+    windows_ipv6_route_transaction_test.cpp
+    "${OPENPPP2_ROOT}/ppp/ipv6/IPv6RouteTransaction.cpp")
 openppp2_add_cpp_test(route_platform_adapters_test SOURCES
     route_platform_adapters_test.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/route/WindowsRoutePlatform.cpp"
