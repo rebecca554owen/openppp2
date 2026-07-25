@@ -60,6 +60,28 @@ public:
     }
     void Close() noexcept override {}
 
+    std::shared_ptr<const ppp::app::client::routing::HumanRoutingRules>
+    GetHumanRoutingRules() const noexcept override {
+        return human_rules;
+    }
+
+    bool ResolveDestination(
+        const ppp::net::IPEndPoint& endpoint,
+        ppp::app::client::routing::ResolvedDestination& destination) const noexcept override {
+        if (!human_rules) {
+            return dns::IDnsPolicy::ResolveDestination(endpoint, destination);
+        }
+        destination.original_endpoint = endpoint;
+        destination.connect_endpoint = ppp::net::IPEndPoint(htonl(0xCB007107u), endpoint.Port);
+        destination.hostname = "resolved.example";
+        destination.action = ppp::app::client::routing::RoutingAction::Proxy;
+        destination.is_fake_ip = true;
+        destination.is_resolved = true;
+        return true;
+    }
+
+    std::shared_ptr<const ppp::app::client::routing::HumanRoutingRules> human_rules;
+
 private:
     std::shared_ptr<ResolverCallbackState> state_;
 };
@@ -165,4 +187,41 @@ BOOST_AUTO_TEST_CASE(late_resolver_callback_after_controller_destruction_is_safe
 
     BOOST_TEST(datagram_outputs == 0);
     BOOST_TEST(transport->sends == 0);
+}
+
+BOOST_AUTO_TEST_CASE(human_policy_snapshot_and_destination_resolution_are_forwarded) {
+    auto policy = std::make_unique<FakePolicy>();
+    auto expected_rules = std::make_shared<ppp::app::client::routing::HumanRoutingRules>();
+    policy->human_rules = expected_rules;
+    dns::DnsController controller(std::move(policy), std::make_shared<FakeTimers>());
+
+    BOOST_TEST(controller.GetHumanRoutingRules() == expected_rules);
+    const ppp::net::IPEndPoint original(htonl(0xC6120005u), 443);
+    ppp::app::client::routing::ResolvedDestination destination;
+    BOOST_REQUIRE(controller.ResolveDestination(original, destination));
+    BOOST_TEST(destination.original_endpoint.Equals(original));
+    BOOST_TEST(ntohl(destination.connect_endpoint.GetAddress()) == 0xCB007107u);
+    BOOST_TEST(destination.connect_endpoint.Port == 443);
+    BOOST_TEST(destination.hostname == "resolved.example");
+    BOOST_TEST(static_cast<int>(destination.action) ==
+        static_cast<int>(ppp::app::client::routing::RoutingAction::Proxy));
+    BOOST_TEST(destination.is_fake_ip);
+    BOOST_TEST(destination.is_resolved);
+}
+
+BOOST_AUTO_TEST_CASE(absent_human_policy_preserves_original_destination) {
+    dns::DnsController controller(
+        std::make_unique<FakePolicy>(),
+        std::make_shared<FakeTimers>());
+    BOOST_TEST(controller.GetHumanRoutingRules() == nullptr);
+
+    const ppp::net::IPEndPoint original(htonl(0x08080808u), 53);
+    ppp::app::client::routing::ResolvedDestination destination;
+    BOOST_REQUIRE(controller.ResolveDestination(original, destination));
+    BOOST_TEST(destination.original_endpoint.Equals(original));
+    BOOST_TEST(destination.connect_endpoint.Equals(original));
+    BOOST_TEST(static_cast<int>(destination.action) ==
+        static_cast<int>(ppp::app::client::routing::RoutingAction::Auto));
+    BOOST_TEST(!destination.is_fake_ip);
+    BOOST_TEST(destination.is_resolved);
 }

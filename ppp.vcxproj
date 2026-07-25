@@ -400,6 +400,12 @@
     <ClCompile Include="ppp\app\client\dns\DnsResponseHandler.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsController.cpp" />
     <ClCompile Include="ppp\app\client\dns\DnsSessionContext.cpp" />
+    <ClCompile Include="ppp\app\client\routing\GeoDataReader.cpp" />
+    <ClCompile Include="ppp\app\client\routing\HumanRoutingRouteSpecs.cpp" />
+    <ClCompile Include="ppp\app\client\routing\HumanRoutingRules.cpp" />
+    <ClCompile Include="ppp\app\client\routing\ProtocolSniffer.cpp" />
+    <ClCompile Include="ppp\app\client\routing\TcpRoutingSelector.cpp" />
+    <ClCompile Include="ppp\app\client\routing\UdpRoutingSelector.cpp" />
     <ClCompile Include="ppp\app\client\route\RouteCoordinator.cpp" />
     <ClCompile Include="ppp\app\client\route\RouteCoordinator_mobile.cpp" />
     <ClCompile Include="ppp\app\client\route\RouteCoordinator_win32.cpp" />
@@ -474,6 +480,7 @@
     <ClCompile Include="ppp\app\client\RemoteEndpointLoader.cpp" />
     <ClCompile Include="ppp\app\client\SwitcherTimeoutRegistry.cpp" />
     <ClCompile Include="ppp\app\client\ClientNetworkInterfaceResolver.cpp" />
+    <ClCompile Include="ppp\app\client\ClientUnderlyingSocketProtector.cpp" />
     <ClCompile Include="ppp\app\client\QuicRejectRateLimiter.cpp" />
     <ClCompile Include="ppp\app\client\VEthernetDatagramPort.cpp" />
     <ClCompile Include="ppp\app\client\VEthernetExchanger.cpp" />
@@ -781,6 +788,14 @@
     <ClInclude Include="ppp\app\client\dns\DnsRouteDispatcher.h" />
     <ClInclude Include="ppp\app\client\dns\DnsUdpRelay.h" />
     <ClInclude Include="ppp\app\client\dns\FakeIpPool.h" />
+    <ClInclude Include="ppp\app\client\dns\HumanDnsQueryPolicy.h" />
+    <ClInclude Include="ppp\app\client\routing\GeoDataReader.h" />
+    <ClInclude Include="ppp\app\client\routing\HumanRoutingRouteSpecs.h" />
+    <ClInclude Include="ppp\app\client\routing\HumanRoutingRules.h" />
+    <ClInclude Include="ppp\app\client\routing\ProtocolSniffer.h" />
+    <ClInclude Include="ppp\app\client\routing\ResolvedDestination.h" />
+    <ClInclude Include="ppp\app\client\routing\TcpRoutingSelector.h" />
+    <ClInclude Include="ppp\app\client\routing\UdpRoutingSelector.h" />
     <ClInclude Include="ppp\app\client\GeoRuleGenerator.h" />
     <ClInclude Include="ppp\dns\DnsResolver.h" />
     <ClInclude Include="ppp\dns\DnsProviderCatalog.h" />
@@ -830,6 +845,7 @@
     <ClInclude Include="ppp\app\client\ClientPacketDispatchHandler.h" />
     <ClInclude Include="ppp\app\client\ClientNetworkInterface.h" />
     <ClInclude Include="ppp\app\client\ClientNetworkInterfaceResolver.h" />
+    <ClInclude Include="ppp\app\client\ClientUnderlyingSocketProtector.h" />
     <ClInclude Include="ppp\app\client\QuicRejectRateLimiter.h" />
     <ClInclude Include="ppp\app\client\VEthernetDatagramPort.h" />
     <ClInclude Include="ppp\app\client\VEthernetExchanger.h" />

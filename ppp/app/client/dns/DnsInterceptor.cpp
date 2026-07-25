@@ -5,6 +5,7 @@
 #include <ppp/app/client/dns/DnsFakeIpResponse.h>
 #include <ppp/app/client/dns/DnsRedirectPlan.h>
 #include <ppp/app/client/dns/DnsResponseHandler.h>
+#include <ppp/app/client/dns/HumanDnsQueryPolicy.h>
 #include <ppp/app/client/dns/DnsRouteDispatcher.h>
 #include <ppp/app/client/dns/DnsUdpRelay.h>
 #include <ppp/coroutines/YieldContext.h>
@@ -120,6 +121,21 @@ namespace ppp {
                     return type == ::dns::RecordType::kAAAA ? DnsQueryType::kAAAA : DnsQueryType::kA;
                 }
 
+                static bool ReportHumanRoutingFailure(
+                    const routing::HumanRoutingRules& rules) noexcept {
+                    for (const routing::RoutingDiagnostic& diagnostic : rules.Diagnostics()) {
+                        ppp::telemetry::Log(
+                            ppp::telemetry::Level::kInfo,
+                            "client",
+                            "human routing policy load failed file=%s line=%zu reason=%s",
+                            diagnostic.file.c_str(),
+                            diagnostic.line,
+                            diagnostic.reason.c_str());
+                    }
+                    return ppp::diagnostics::SetLastError(
+                        ppp::diagnostics::ErrorCode::ConfigRouteLoadFailed);
+                }
+
                 bool DnsInterceptor::Open(
                     const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
                     const std::shared_ptr<boost::asio::io_context>& context,
@@ -128,18 +144,77 @@ namespace ppp {
                     , const std::shared_ptr<ppp::net::ProtectorNetwork>& protect_network
 #endif
                 ) noexcept {
-                    {
+                    std::shared_ptr<const routing::HumanRoutingRules> human_rules;
+                    if (NULLPTR != configuration && !configuration->routing.rules.empty()) {
+                        std::shared_ptr<routing::HumanRoutingRules> loaded =
+                            make_shared_object<routing::HumanRoutingRules>();
+                        if (NULLPTR == loaded) {
+                            return ppp::diagnostics::SetLastError(
+                                ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                        }
+                        if (!loaded->LoadFile(configuration->routing.rules)) {
+                            return ReportHumanRoutingFailure(*loaded);
+                        }
+                        if (!loaded->GeoDeclarations().empty()) {
+                            routing::HumanGeoDataSources sources;
+                            sources.geoip_dat = configuration->geo_rules.geoip_dat;
+                            sources.geosite_dat = configuration->geo_rules.geosite_dat;
+                            sources.geoip.assign(
+                                configuration->geo_rules.geoip.begin(),
+                                configuration->geo_rules.geoip.end());
+                            sources.geosite.assign(
+                                configuration->geo_rules.geosite.begin(),
+                                configuration->geo_rules.geosite.end());
+                            if (!loaded->CompileGeo(sources)) {
+                                return ReportHumanRoutingFailure(*loaded);
+                            }
+                        }
+                        human_rules = std::move(loaded);
+                    }
+
+                    const HumanDnsStartupMode startup_mode =
+                        HumanDnsQueryPolicy::DecideStartup({
+                            NULLPTR != configuration && configuration->dns.fake_ip.enabled,
+                            human_rules && !human_rules->DomainRules().empty(),
+                        });
+                    std::shared_ptr<FakeIpPool> configured_fake_ip_pool;
+                    if (startup_mode == HumanDnsStartupMode::FakeIp) {
+                        configured_fake_ip_pool = make_shared_object<FakeIpPool>();
+                        if (NULLPTR == configured_fake_ip_pool) {
+                            return ppp::diagnostics::SetLastError(
+                                ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                        }
+                        if (!configured_fake_ip_pool->Configure(
+                                configuration->dns.fake_ip.range)) {
+                            ppp::telemetry::Log(
+                                ppp::telemetry::Level::kInfo,
+                                "client",
+                                "human routing policy load failed file=%s line=0 reason=invalid dns.fake-ip.range value=%s",
+                                configuration->routing.rules.c_str(),
+                                configuration->dns.fake_ip.range.c_str());
+                            return ppp::diagnostics::SetLastError(
+                                ppp::diagnostics::ErrorCode::ConfigFieldInvalid);
+                        }
+                    }
+
+                    if (proxy_only || NULLPTR == context || NULLPTR == configuration) {
                         std::lock_guard<std::mutex> scope(syncobj_);
                         configuration_ = configuration;
-                    }
-                    if (proxy_only || NULLPTR == context || NULLPTR == configuration) {
+                        dns_resolver_.reset();
+                        std::atomic_store(&human_routing_rules_, human_rules);
+                        std::atomic_store(&fake_ip_pool_, configured_fake_ip_pool);
                         return true;
                     }
 
-                    // Configure the resolver locally and publish it under the lock only once
-                    // fully initialized, so concurrent readers never observe a half-built one.
+                    // Configure the resolver locally and publish the complete generation only
+                    // after all policy, pool, and resolver validation has succeeded.
                     std::shared_ptr<ppp::dns::DnsResolver> resolver = make_shared_object<ppp::dns::DnsResolver>(*context);
                     if (NULLPTR == resolver) {
+                        std::lock_guard<std::mutex> scope(syncobj_);
+                        configuration_ = configuration;
+                        dns_resolver_.reset();
+                        std::atomic_store(&human_routing_rules_, human_rules);
+                        std::atomic_store(&fake_ip_pool_, configured_fake_ip_pool);
                         return true;
                     }
                     resolver->SetUdpFlowRegistry(udp_flow_registry_);
@@ -192,42 +267,34 @@ namespace ppp {
                         }
                     }
 
-                    if (configuration->dns.fake_ip.enabled) {
-                        std::shared_ptr<FakeIpPool> fake_ip_pool = std::atomic_load(&fake_ip_pool_);
-                        if (NULLPTR == fake_ip_pool) {
-                            fake_ip_pool = make_shared_object<FakeIpPool>();
-                            std::atomic_store(&fake_ip_pool_, fake_ip_pool);
-                        }
-                        if (NULLPTR != fake_ip_pool) {
-                            fake_ip_pool->Configure(configuration->dns.fake_ip.range);
-                        }
-                    }
-                    else {
-                        std::shared_ptr<FakeIpPool> fake_ip_pool = std::atomic_load(&fake_ip_pool_);
-                        if (NULLPTR != fake_ip_pool) {
-                            fake_ip_pool->Clear();
-                        }
-                    }
-
                     {
                         std::lock_guard<std::mutex> scope(syncobj_);
+                        configuration_ = configuration;
                         dns_resolver_ = std::move(resolver);
+                        std::atomic_store(&human_routing_rules_, human_rules);
+                        std::atomic_store(&fake_ip_pool_, configured_fake_ip_pool);
                     }
                     return true;
                 }
 
                 void DnsInterceptor::Close() noexcept {
-                    std::shared_ptr<FakeIpPool> fake_ip_pool =
-                        std::atomic_exchange(&fake_ip_pool_, std::shared_ptr<FakeIpPool>());
+                    std::shared_ptr<FakeIpPool> fake_ip_pool;
+                    {
+                        std::lock_guard<std::mutex> scope(syncobj_);
+                        std::atomic_store(
+                            &human_routing_rules_,
+                            std::shared_ptr<const routing::HumanRoutingRules>());
+                        fake_ip_pool = std::atomic_exchange(
+                            &fake_ip_pool_, std::shared_ptr<FakeIpPool>());
+                        dns_resolver_.reset();
+                        for (auto& table : dns_ruless_) {
+                            table.clear();
+                        }
+                        configuration_.reset();
+                    }
                     if (NULLPTR != fake_ip_pool) {
                         fake_ip_pool->Clear();
                     }
-                    std::lock_guard<std::mutex> scope(syncobj_);
-                    dns_resolver_.reset();
-                    for (auto& table : dns_ruless_) {
-                        table.clear();
-                    }
-                    configuration_.reset();
                 }
 
                 void DnsInterceptor::OnSessionInfo(
@@ -298,48 +365,56 @@ namespace ppp {
                 static void ApplyFakeIpBackgroundResponse(
                     FakeIpPool& pool,
                     const ppp::string& hostname,
-                    const ppp::vector<Byte>& response) noexcept {
+                    const ppp::vector<Byte>& response,
+                    const std::shared_ptr<const routing::HumanRoutingRules>& human_rules) noexcept {
 
                     if (response.empty()) {
+                        pool.SetResolveFailed(hostname);
                         return;
                     }
 
-                    const uint32_t real_ip = DnsFakeIpResponse::ParseFirstARecordNetwork(
+                    const uint32_t real_ip_host = DnsFakeIpResponse::ParseFirstARecordNetwork(
                         response.data(), static_cast<int>(response.size()));
-                    if (real_ip == 0) {
+                    if (real_ip_host == 0) {
+                        pool.SetResolveFailed(hostname);
                         return;
                     }
 
-                    pool.SetRealIp(hostname, real_ip);
+                    routing::RoutingAction action = routing::RoutingAction::Auto;
+                    if (human_rules) {
+                        const routing::RoutingMatch match = human_rules->MatchIpv4Rule(real_ip_host);
+                        action = match.matched ? match.action : human_rules->DefaultAction();
+                    }
+                    if (!pool.SetResolved(hostname, real_ip_host, action)) {
+                        return;
+                    }
                     ppp::net::asio::vdns::AddCache(
                         response.data(), static_cast<int>(response.size()));
                     ppp::telemetry::Count("dns.fake_ip.resolved", 1);
                 }
 
                 void DnsInterceptor::SpawnFakeIpBackgroundResolve(
+                    const std::shared_ptr<FakeIpPool>& pool,
+                    const std::shared_ptr<ppp::dns::DnsResolver>& resolver,
+                    const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
                     const DnsRedirectPlanResult& plan,
                     const Rule::Ptr& rule,
                     const ppp::string& hostname,
-                    const std::shared_ptr<ppp::net::packet::BufferSegment>& messages) noexcept {
+                    const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
+                    const std::shared_ptr<const routing::HumanRoutingRules>& human_rules) noexcept {
 
-                    std::shared_ptr<ppp::dns::DnsResolver> resolver;
-                    std::shared_ptr<ppp::configurations::AppConfiguration> configuration;
-                    {
-                        std::lock_guard<std::mutex> scope(syncobj_);
-                        resolver = dns_resolver_;
-                        configuration = configuration_;
-                    }
-                    if (NULLPTR == resolver || NULLPTR == configuration || NULLPTR == messages) {
-                        return;
-                    }
-
-                    std::shared_ptr<FakeIpPool> pool = std::atomic_load(&fake_ip_pool_);
                     if (NULLPTR == pool) {
                         return;
                     }
-                    const auto callback =
-                        [pool, hostname](ppp::vector<Byte> response) noexcept {
-                            ApplyFakeIpBackgroundResponse(*pool, hostname, response);
+                    if (NULLPTR == resolver || NULLPTR == configuration ||
+                        NULLPTR == messages) {
+                        pool->SetResolveFailed(hostname);
+                        return;
+                    }
+
+                    auto callback =
+                        [pool, hostname, human_rules](ppp::vector<Byte> response) noexcept {
+                            ApplyFakeIpBackgroundResponse(*pool, hostname, response, human_rules);
                         };
 
                     switch (plan.action) {
@@ -403,12 +478,14 @@ namespace ppp {
                                 entries, rule->Nic,
                                 static_cast<const Byte*>(messages->Buffer.get()),
                                 messages->Length, callback);
+                            return;
                         }
-                        return;
+                        break;
 
                     default:
-                        return;
+                        break;
                     }
+                    pool->SetResolveFailed(hostname);
                 }
 
                 bool DnsInterceptor::HandleQuery(
@@ -433,19 +510,48 @@ namespace ppp {
                     boost::asio::ip::address destinationIP = Ipep::ToAddress(packet->Destination);
                     ::dns::QuestionSection& qs = *m.questions.data();
 
-                    // Snapshot the shared resolver/configuration under the lock; Close() may
-                    // reset them concurrently from the teardown thread.
+                    // Snapshot one complete runtime generation under the publication lock.
                     std::shared_ptr<ppp::dns::DnsResolver> resolver;
                     std::shared_ptr<ppp::configurations::AppConfiguration> configuration;
+                    std::shared_ptr<const routing::HumanRoutingRules> human_rules;
+                    std::shared_ptr<FakeIpPool> fake_ip_pool;
                     {
                         std::lock_guard<std::mutex> scope(syncobj_);
                         resolver = dns_resolver_;
                         configuration = configuration_;
+                        human_rules = std::atomic_load(&human_routing_rules_);
+                        fake_ip_pool = std::atomic_load(&fake_ip_pool_);
+                    }
+                    const ppp::string hostname_lower = stl::transform<ppp::string>(qs.mName);
+                    routing::RoutingMatch domain_match;
+                    if (human_rules) {
+                        domain_match = human_rules->MatchDomainRule(hostname_lower);
+                    }
+                    const bool strict_human_match =
+                        domain_match.matched &&
+                        domain_match.action != routing::RoutingAction::Auto;
+                    const bool is_a_query = qs.mType == ::dns::RecordType::kA;
+                    const bool fake_ip_enabled =
+                        fake_ip_pool && fake_ip_pool->IsEnabled();
+                    const bool hostname_fake_eligible =
+                        DnsFakeIpResponse::ShouldUseFakeIp(hostname_lower);
+                    const HumanDnsQueryMode human_query_mode =
+                        HumanDnsQueryPolicy::DecideQuery({
+                            fake_ip_enabled,
+                            strict_human_match,
+                            is_a_query,
+                            hostname_fake_eligible,
+                            NULLPTR != configuration &&
+                                configuration->routing.tcp_domain_sniff,
+                        });
+                    if (human_query_mode == HumanDnsQueryMode::Reject) {
+                        ppp::telemetry::Count("dns.fake_ip.unavailable", 1);
+                        return false;
                     }
 
                     if (qs.mType == ::dns::RecordType::kAAAA &&
-                        NULLPTR != resolver &&
-                        !resolver->IsAllowIPv6Response()) {
+                        (strict_human_match ||
+                         (NULLPTR != resolver && !resolver->IsAllowIPv6Response()))) {
                         ppp::vector<Byte> synthesized = ppp::dns::DnsResolver::BuildAaaaBlockedResponse(
                             static_cast<const Byte*>(messages->Buffer.get()),
                             messages->Length);
@@ -458,7 +564,12 @@ namespace ppp {
                         }
                     }
 
-                    if (!ppp::net::asio::vdns::QueryCache2(
+                    const bool human_fake_eligible =
+                        human_rules && is_a_query && fake_ip_enabled &&
+                        hostname_fake_eligible;
+                    if (human_query_mode != HumanDnsQueryMode::ResolveReal &&
+                        !human_fake_eligible &&
+                        !ppp::net::asio::vdns::QueryCache2(
                             qs.mName.data(), m,
                             qs.mType == ::dns::RecordType::kA ?
                                 ppp::net::asio::vdns::AddressFamily::kA :
@@ -485,6 +596,22 @@ namespace ppp {
 #if !defined(_ANDROID)
                     plan_input.defer_same_destination_to_tunnel = true;
 #endif
+                    if (domain_match.matched) {
+                        plan_input.has_human_action = true;
+                        plan_input.human_action = domain_match.action;
+                        for (const routing::DnsProviderRule& provider : human_rules->DnsProviders()) {
+                            if (provider.action == domain_match.action) {
+                                plan_input.human_provider = provider.provider;
+                                break;
+                            }
+                        }
+                        if (plan_input.human_provider.empty() && configuration) {
+                            plan_input.human_provider =
+                                domain_match.action == routing::RoutingAction::Direct
+                                    ? configuration->dns.servers.domestic
+                                    : configuration->dns.servers.foreign;
+                        }
+                    }
 
                     if (std::shared_ptr<ITap> tap = context.tap; NULLPTR != tap) {
                         const uint32_t dest = packet->Destination;
@@ -496,10 +623,10 @@ namespace ppp {
                             DnsRedirectPlan::IsGatewayDnsServer(dest, gw, mask);
                     }
 
-                    {
+                    if (!domain_match.matched) {
                         std::lock_guard<std::mutex> scope(syncobj_);
                         plan_input.rule = Rule::Get(
-                            stl::transform<ppp::string>(qs.mName),
+                            hostname_lower,
                             dns_ruless_[0], dns_ruless_[1], dns_ruless_[2]);
                     }
 
@@ -512,7 +639,6 @@ namespace ppp {
                         }
                     }
 
-                    const ppp::string hostname_lower = stl::transform<ppp::string>(qs.mName);
                     const DnsRedirectPlanResult plan = DnsRedirectPlan::Decide(plan_input);
 
                     const bool passthrough =
@@ -521,21 +647,28 @@ namespace ppp {
                         !plan_input.is_gateway_query &&
                         !plan_input.intercept_unmatched;
 
-                    std::shared_ptr<FakeIpPool> fake_ip_pool = std::atomic_load(&fake_ip_pool_);
-                    if (!passthrough &&
+                    const bool should_attempt_fake =
                         plan.action != DnsRouteAction::kDrop &&
-                        qs.mType == ::dns::RecordType::kA &&
-                        NULLPTR != fake_ip_pool &&
-                        fake_ip_pool->IsEnabled() &&
-                        DnsFakeIpResponse::ShouldUseFakeIp(hostname_lower)) {
-
-                        const uint32_t fake_ip_host = fake_ip_pool->Allocate(hostname_lower);
-                        if (fake_ip_host != 0) {
+                        is_a_query && fake_ip_enabled && hostname_fake_eligible &&
+                        (human_query_mode == HumanDnsQueryMode::AttemptFake ||
+                         (human_query_mode == HumanDnsQueryMode::Continue &&
+                          (domain_match.matched || !passthrough)));
+                    bool fake_allocation_succeeded = false;
+                    bool fake_response_built = false;
+                    if (should_attempt_fake) {
+                        const routing::RoutingAction initial_action = domain_match.matched
+                            ? domain_match.action
+                            : routing::RoutingAction::Auto;
+                        const FakeIpPool::AllocationResult allocation = fake_ip_pool->Allocate(
+                            hostname_lower, initial_action, domain_match.matched);
+                        fake_allocation_succeeded = allocation.entry.fake_ip_host != 0;
+                        if (fake_allocation_succeeded) {
                             ppp::vector<Byte> fake_response = DnsFakeIpResponse::BuildARecordResponse(
                                 static_cast<const Byte*>(messages->Buffer.get()),
                                 messages->Length,
-                                fake_ip_host);
-                            if (!fake_response.empty()) {
+                                allocation.entry.fake_ip_host);
+                            fake_response_built = !fake_response.empty();
+                            if (fake_response_built) {
                                 const boost::asio::ip::udp::endpoint sourceEP =
                                     IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
                                 const boost::asio::ip::udp::endpoint destEP(destinationIP, PPP_DNS_SYS_PORT);
@@ -543,10 +676,26 @@ namespace ppp {
                                 context.datagram_output(
                                     sourceEP, destEP,
                                     fake_response.data(), static_cast<int>(fake_response.size()), false);
-                                SpawnFakeIpBackgroundResolve(plan, plan_input.rule, hostname_lower, messages);
+                                if (allocation.should_resolve) {
+                                    SpawnFakeIpBackgroundResolve(
+                                        fake_ip_pool, resolver, configuration, plan,
+                                        plan_input.rule, hostname_lower, messages, human_rules);
+                                }
                                 return true;
                             }
+                            if (allocation.should_resolve) {
+                                fake_ip_pool->SetResolveFailed(hostname_lower);
+                            }
                         }
+                    }
+
+                    if (human_query_mode == HumanDnsQueryMode::AttemptFake &&
+                        plan.action != DnsRouteAction::kDrop &&
+                        HumanDnsQueryPolicy::DecideFakeAttempt(
+                            fake_allocation_succeeded,
+                            fake_response_built) == HumanDnsFakeAttemptResult::Reject) {
+                        ppp::telemetry::Count("dns.fake_ip.allocation_failed", 1);
+                        return false;
                     }
 
                     const boost::asio::ip::udp::endpoint sourceEP =
@@ -633,6 +782,52 @@ namespace ppp {
                     return real_host == 0
                         ? address
                         : boost::asio::ip::address_v4(real_host);
+                }
+
+                std::shared_ptr<const routing::HumanRoutingRules>
+                DnsInterceptor::GetHumanRoutingRules() const noexcept {
+                    return std::atomic_load(&human_routing_rules_);
+                }
+
+                bool DnsInterceptor::ResolveDestination(
+                    const ppp::net::IPEndPoint& endpoint,
+                    routing::ResolvedDestination& destination) const noexcept {
+                    destination = routing::ResolvedDestination{};
+                    destination.original_endpoint = endpoint;
+                    destination.connect_endpoint = endpoint;
+                    if (endpoint.GetAddressFamily() != ppp::net::AddressFamily::InterNetwork) {
+                        return true;
+                    }
+
+                    const uint32_t address_host = ntohl(endpoint.GetAddress());
+                    std::shared_ptr<const FakeIpPool> pool;
+                    std::shared_ptr<const routing::HumanRoutingRules> human_rules;
+                    {
+                        std::lock_guard<std::mutex> scope(syncobj_);
+                        pool = std::atomic_load(&fake_ip_pool_);
+                        human_rules = std::atomic_load(&human_routing_rules_);
+                    }
+                    if (pool && pool->IsEnabled() && pool->ContainsHostOrder(address_host)) {
+                        destination.is_fake_ip = true;
+                        FakeIpPool::EntrySnapshot entry;
+                        if (!pool->Lookup(address_host, entry) || !entry.is_resolved) {
+                            destination.is_resolved = false;
+                            return true;
+                        }
+                        destination.hostname = entry.hostname;
+                        destination.action = entry.action;
+                        destination.connect_endpoint = ppp::net::IPEndPoint(
+                            htonl(entry.real_ip_host), endpoint.Port);
+                        return true;
+                    }
+
+                    if (human_rules) {
+                        const routing::RoutingMatch match = human_rules->MatchIpv4Rule(address_host);
+                        destination.action = match.matched
+                            ? match.action
+                            : human_rules->DefaultAction();
+                    }
+                    return true;
                 }
 
                 bool DnsInterceptor::GetFakeIpRoute(

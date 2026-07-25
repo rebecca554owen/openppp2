@@ -14,6 +14,7 @@
 #include <ppp/stdafx.h>
 #include <ppp/net/Ipep.h> // std::hash<udp::endpoint> specialization (must precede the endpoint-keyed tables)
 #include <ppp/app/client/udp/UdpRelayHost.h>
+#include <ppp/app/client/routing/HumanRoutingRules.h>
 
 namespace ppp {
     namespace coroutines {
@@ -52,6 +53,8 @@ namespace ppp {
                     /** @brief Send a UDP datagram to the server via the source-bound relay port. */
                     bool SendTo(const boost::asio::ip::udp::endpoint& source, const boost::asio::ip::udp::endpoint& destination,
                                 const void* packet, int packet_size) noexcept;
+                    bool SendTo(const boost::asio::ip::udp::endpoint& source, const boost::asio::ip::udp::endpoint& destination,
+                                const void* packet, int packet_size, routing::RoutingAction action) noexcept;
                     /** @brief Route an inbound datagram to its port, a local handler, or the TUN. */
                     bool ReceiveFromDestination(const boost::asio::ip::udp::endpoint& source, const boost::asio::ip::udp::endpoint& destination,
                                                 ppp::Byte* packet, int packet_length) noexcept;

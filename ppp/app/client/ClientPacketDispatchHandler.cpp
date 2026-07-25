@@ -311,8 +311,28 @@ ANDROID_DNS_REDIRECT_TRACE(
                     return RejectBlockedQuic(packet, frame);
                 }
 
-                // If the VPN uses static transmission mode, ensure that the link is link ready.
-                if (owner_->static_mode_ && !resolver_udp_flow) {
+                routing::ResolvedDestination destination;
+                if (!owner_->ResolveDestination(frame->Destination, destination)) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpRelayFailed);
+                }
+                if (destination.is_fake_ip && !destination.is_resolved) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
+                }
+
+                boost::asio::ip::udp::endpoint destinationEP =
+                    IPEndPoint::ToEndPoint<boost::asio::ip::udp>(destination.connect_endpoint);
+                if (destinationEP.address().is_unspecified()) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
+                }
+                if (destinationEP.port() <= IPEndPoint::MinPort ||
+                    destinationEP.port() > IPEndPoint::MaxPort) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
+                }
+                frame->Destination = destination.connect_endpoint;
+
+                // Direct policy must not enter the tunnel-only static echo path.
+                if (owner_->static_mode_ && !resolver_udp_flow &&
+                    destination.action != routing::RoutingAction::Direct) {
                     auto& static_ = owner_->configuration_->udp.static_;
                     if (static_.quic && destinationPort == PPP_HTTPS_SYS_PORT) {
                         if (exchanger->StaticEchoAllocated()) {
@@ -330,12 +350,8 @@ ANDROID_DNS_REDIRECT_TRACE(
                 }
 
                 boost::asio::ip::udp::endpoint sourceEP = IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source);
-                boost::asio::ip::udp::endpoint destinationEP = IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Destination);
-                const boost::asio::ip::address rewritten = owner_->RewriteFakeIpAddress(destinationEP.address());
-                if (rewritten != destinationEP.address()) {
-                    destinationEP = boost::asio::ip::udp::endpoint(rewritten, destinationEP.port());
-                }
-                bool ok = exchanger->SendTo(sourceEP, destinationEP, messages->Buffer.get(), messages->Length);
+                bool ok = exchanger->SendTo(
+                    sourceEP, destinationEP, messages->Buffer.get(), messages->Length, destination.action);
                 if (destinationEP.port() == PPP_DNS_SYS_PORT || !ok) {
                     ppp::telemetry::Log(Level::kInfo, "switcher", "UDP send source=%s:%u destination=%s:%u bytes=%d ok=%d error=%d",
                         sourceEP.address().to_string().c_str(),
