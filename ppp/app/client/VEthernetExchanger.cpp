@@ -1477,8 +1477,7 @@ namespace ppp {
                 int expected = ConnectPending;
                 const bool timed_out = !connect_state->compare_exchange_strong(
                     expected, ConnectCompleted, std::memory_order_acq_rel) && expected == ConnectTimedOut;
-                boost::system::error_code cancel_ec;
-                connect_timer->cancel(cancel_ec);
+                connect_timer->cancel();
                 if (!ok || timed_out) {
                     const ppp::diagnostics::ErrorCode error = timed_out
                         ? ppp::diagnostics::ErrorCode::TcpConnectTimeout
@@ -2083,8 +2082,7 @@ namespace ppp {
                             int expected = HandshakePending;
                             const bool handshake_timed_out = !handshake_state->compare_exchange_strong(
                                 expected, HandshakeCompleted, std::memory_order_acq_rel) && expected == HandshakeTimedOut;
-                            boost::system::error_code cancel_ec;
-                            handshake_timer->cancel(cancel_ec);
+                            handshake_timer->cancel();
                             if (handshake_timed_out) {
                                 established = false;
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketTimeout);

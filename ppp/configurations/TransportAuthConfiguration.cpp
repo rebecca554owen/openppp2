@@ -268,6 +268,10 @@ namespace ppp {
             return valid;
         }
 
+        TransportAuthKeyringSnapshot::TransportAuthKeyringSnapshot() noexcept
+            : generation_(0) {
+        }
+
         const TransportAuthKeyringSnapshot::Key* TransportAuthKeyringSnapshot::active() const noexcept {
             return active_key_.get();
         }
