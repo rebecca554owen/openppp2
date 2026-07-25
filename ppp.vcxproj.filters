@@ -252,6 +252,9 @@
     <ClCompile Include="ppp\configurations\AppConfiguration.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\configurations\TransportAuthConfiguration.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="common\base64\base64.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -282,6 +285,9 @@
     <ClCompile Include="ppp\cryptography\EVP.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\cryptography\noise\NoisePsk.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\net\asio\websocket.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -292,6 +298,9 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\transmissions\ITransmission.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\transmissions\NoisePskAuthenticatedCarrierBinding.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\net\asio\IAsynchronousWriteIoQueue.cpp">
@@ -322,6 +331,9 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\app\protocol\SessionResumeAuthenticator.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\protocol\TransportAuthNegotiation.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\app\protocol\VirtualEthernetInformation.cpp">
@@ -384,6 +396,9 @@
     <ClCompile Include="ppp\ipv6\IPv6Auxiliary.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\ipv6\IPv6RouteTransaction.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\app\protocol\VirtualEthernetTcpipConnection.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -427,6 +442,9 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="windows\ppp\ipv6\WIN32_IPv6Auxiliary.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="windows\ppp\ipv6\WindowsIPv6RouteOwner.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="windows\ppp\win32\Win32PerformanceCounter.cpp">
@@ -1331,6 +1349,9 @@
     <ClInclude Include="ppp\configurations\AppConfiguration.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\configurations\TransportAuthConfiguration.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\p2p\P2PDefs.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -1412,6 +1433,15 @@
     <ClInclude Include="windows\ppp\ipv6\IPv6Auxiliary.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\ipv6\IPv6ClientPolicy.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\ipv6\IPv6RouteTransaction.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="windows\ppp\ipv6\WindowsIPv6RouteOwner.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="windows\ppp\win32\Win32RegistryKey.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -1431,6 +1461,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\cryptography\EVP.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\cryptography\noise\NoisePsk.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\net\asio\websocket.h">
@@ -1457,6 +1490,9 @@
     <ClInclude Include="ppp\transmissions\ITransmission.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\transmissions\IAuthenticatedCarrierBinding.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\net\asio\IAsynchronousWriteIoQueue.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -1464,6 +1500,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\transmissions\IWebsocketTransmission.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\transmissions\NoisePskAuthenticatedCarrierBinding.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\net\asio\InternetControlMessageProtocol.h">
@@ -1479,6 +1518,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\app\protocol\SessionResumeAuthenticator.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\protocol\TransportAuthNegotiation.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\app\protocol\VirtualEthernetInformation.h">

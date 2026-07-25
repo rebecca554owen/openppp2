@@ -99,8 +99,11 @@ tunnel setup occurred.
 
 Repository sources provide the harness, parser, and correctness/tooling tests.
 They do not contain a qualifying Linux-plus-mobile throughput/p99 evidence
-bundle. Therefore this reference makes no performance-pass claim and cites no
-historical raw commit or sanitizer-run result as rollout evidence.
+bundle. Commit `ded25d6` remains the documented compatibility/correctness
+baseline; it is not a qualifying rollout performance bundle or evidence that
+the default-change gate passed. Therefore this reference makes no
+performance-pass claim and cites no historical raw commit or sanitizer-run
+result as rollout evidence.
 
 ## Default-change rule
 

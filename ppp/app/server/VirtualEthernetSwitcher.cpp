@@ -1,4 +1,5 @@
 #include <ppp/app/server/VirtualEthernetSwitcher.h>
+#include <ppp/app/server/IPv6TransitPolicy.h>
 #include <ppp/app/server/PeerRouteAnnouncePolicy.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/server/VirtualEthernetExchanger.h>
@@ -16,6 +17,7 @@
 #include <ppp/io/File.h>
 #include <ppp/app/protocol/VirtualEthernetTcpMss.h>
 #include <ppp/app/protocol/SessionResumeAuthenticator.h>
+#include <ppp/app/protocol/TransportAuthNegotiation.h>
 #include <ppp/app/server/SessionResumeEstablishTransaction.h>
 #include <ppp/app/server/SessionResumeFallbackDecision.h>
 #include <ppp/net/packet/IPFrame.h>
@@ -97,13 +99,30 @@ static bool BuildSessionResumeId(const ppp::Int128& id,
     return true;
 }
 
+static bool IsEligibleAuthenticatedRecoveryCarrier(
+    const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept {
+    if (!transmission || transmission->IsServerLoopbackIngress() ||
+        !transmission->IsAuthenticatedCarrierBindingActive() ||
+        !transmission->HasAuthenticatedSessionExporter()) {
+        return false;
+    }
+
+    using ppp::transmissions::AuthenticatedCarrierKind;
+    using ppp::transmissions::AuthenticatedCarrierMethod;
+    const AuthenticatedCarrierKind kind = transmission->GetAuthenticatedCarrierKind();
+    const AuthenticatedCarrierMethod method = transmission->GetAuthenticatedCarrierMethod();
+    return (kind == AuthenticatedCarrierKind::TlsWebSocket &&
+            method == AuthenticatedCarrierMethod::TlsExporterV1) ||
+        ((kind == AuthenticatedCarrierKind::Tcp ||
+             kind == AuthenticatedCarrierKind::WebSocket) &&
+            method == AuthenticatedCarrierMethod::NoisePskV1);
+}
+
 static bool DeriveSessionResumeCandidateBinding(
     const std::shared_ptr<ppp::transmissions::ITransmission>& transmission,
     const ppp::Int128& session_id,
     ppp::app::protocol::SessionResumeCandidateBinding& candidate) noexcept {
-    if (!transmission ||
-        !std::dynamic_pointer_cast<ppp::transmissions::ISslWebsocketTransmission>(transmission) ||
-        !transmission->HasAuthenticatedSessionExporter()) {
+    if (!IsEligibleAuthenticatedRecoveryCarrier(transmission)) {
         candidate.fill(0);
         return false;
     }
@@ -280,6 +299,64 @@ namespace ppp {
 
     namespace app {
         namespace server {
+#if defined(_LINUX)
+            static bool AddIPv6TransitRouteOnTap(
+                const std::shared_ptr<ppp::tap::ITap>& tap,
+                const boost::asio::ip::address& ip,
+                int prefix_length) noexcept {
+                if (NULLPTR == tap || !ip.is_v6()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteAddFailed);
+                    return false;
+                }
+
+                std::string ip_std = ip.to_string();
+                ppp::string ip_str(ip_std.data(), ip_std.size());
+                prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH,
+                    std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
+                auto started_at = std::chrono::steady_clock::now();
+                bool ok = ppp::tap::TapLinux::AddRoute6(tap->GetId(), ip_str, prefix_length, ppp::string());
+                if (ok) {
+                    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - started_at).count();
+                    ppp::telemetry::Count("server.route.added", 1);
+                    ppp::telemetry::Histogram("server.route.add.us", elapsed);
+                    ppp::telemetry::Log(Level::kDebug, "server", "route added");
+                }
+                else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteAddFailed);
+                }
+                return ok;
+            }
+
+            static bool DeleteIPv6TransitRouteOnTap(
+                const std::shared_ptr<ppp::tap::ITap>& tap,
+                const boost::asio::ip::address& ip,
+                int prefix_length) noexcept {
+                if (NULLPTR == tap || !ip.is_v6()) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteDeleteFailed);
+                    return false;
+                }
+
+                std::string ip_std = ip.to_string();
+                ppp::string ip_str(ip_std.data(), ip_std.size());
+                prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH,
+                    std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
+                auto started_at = std::chrono::steady_clock::now();
+                bool ok = ppp::tap::TapLinux::DeleteRoute6(tap->GetId(), ip_str, prefix_length, ppp::string());
+                if (ok) {
+                    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - started_at).count();
+                    ppp::telemetry::Count("server.route.deleted", 1);
+                    ppp::telemetry::Histogram("server.route.delete.us", elapsed);
+                    ppp::telemetry::Log(Level::kDebug, "server", "route deleted");
+                }
+                else {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteDeleteFailed);
+                }
+                return ok;
+            }
+#endif
+
             /**
              * @brief Constructs the virtual ethernet switch core.
              * @param configuration Shared server/application configuration.
@@ -951,7 +1028,7 @@ namespace ppp {
              * @brief Binds a session exchanger to its assigned IPv6 dataplane state.
              * @param session_id Session identifier.
              * @param extensions Assigned IPv6 settings.
-             * @return true when route/proxy and table mappings are installed.
+             * @return true when route, permanent-neighbor/proxy, and table mappings are installed.
              */
             bool VirtualEthernetSwitcher::AddIPv6Exchanger(const Int128& session_id, const VirtualEthernetInformationExtensions& extensions) noexcept {
                 if (!extensions.AssignedIPv6Address.is_v6()) {
@@ -959,6 +1036,9 @@ namespace ppp {
                     return false;
                 }
 
+#if defined(_LINUX)
+                SynchronizedObjectScope lifecycle_scope(ipv6_transit_lifecycle_syncobj_);
+#endif
                 const auto& ipv6 = configuration_->server.ipv6;
                 AppConfiguration::IPv6Mode mode = ipv6.mode;
                 const boost::asio::ip::address& ip = extensions.AssignedIPv6Address;
@@ -971,8 +1051,22 @@ namespace ppp {
                     return false;
                 }
 
+#if defined(_LINUX)
+                ITapPtr transit_tap;
+#endif
                 {
                     SynchronizedObjectScope scope(syncobj_);
+                    if (disposed_.load(std::memory_order_acquire)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                        return false;
+                    }
+
+                    auto active = exchangers_.find(session_id);
+                    if (active == exchangers_.end() || active->second != exchanger) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionNotFound);
+                        return false;
+                    }
+
                     // O(1) check: if this session already has a lease for a different address,
                     // reject the binding to avoid a session owning multiple IPv6 entries in ipv6s_.
                     auto lease_it = ipv6_leases_.find(session_id);
@@ -990,27 +1084,99 @@ namespace ppp {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6LeaseConflict);
                         return false;
                     }
+#if defined(_LINUX)
+                    transit_tap = ipv6_transit_tap_;
+#endif
                 }
 
+#if defined(_LINUX)
+                if (NULLPTR == transit_tap) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitTapOpenFailed);
+                    return false;
+                }
+                bool route_ok = AddIPv6TransitRouteOnTap(transit_tap, ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
+#else
                 bool route_ok = AddIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
+#endif
                 if (!route_ok) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteAddFailed);
                     return false;
                 }
 
+#if defined(_LINUX)
+                ppp::tap::TapLinux::NeighborMutationResult neighbor_result =
+                    ppp::tap::TapLinux::AddIPv6PermanentNeighbor(transit_tap->GetId(), ip_key);
+                if (neighbor_result == ppp::tap::TapLinux::NeighborMutationResult::Failed) {
+                    DeleteIPv6TransitRouteOnTap(transit_tap, ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
+                    return false;
+                }
+                bool permanent_neighbor_created = neighbor_result == ppp::tap::TapLinux::NeighborMutationResult::Changed;
+#endif
+
                 bool proxy_required = AppConfiguration::IPv6Mode_Gua == mode;
                 bool proxy_ok = !proxy_required || AddIPv6NeighborProxy(ip);
                 if (!proxy_ok) {
-                    DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
-                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyAddFailed);
+                    ppp::diagnostics::ErrorCode failure_code = ppp::diagnostics::GetLastErrorCode();
+#if defined(_LINUX)
+                    if (permanent_neighbor_created &&
+                        !ppp::tap::TapLinux::DeleteIPv6PermanentNeighbor(transit_tap->GetId(), ip_key)) {
+                        SynchronizedObjectScope scope(syncobj_);
+                        if (ipv6_transit_tap_ == transit_tap) {
+                            ipv6_transit_neighbor_owned_.insert(ip_key);
+                        }
                     }
+                    DeleteIPv6TransitRouteOnTap(transit_tap, ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
+#else
+                    DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
+#endif
+                    ppp::diagnostics::SetLastErrorCode(
+                        failure_code == ppp::diagnostics::ErrorCode::Success
+                            ? ppp::diagnostics::ErrorCode::IPv6NeighborProxyAddFailed
+                            : failure_code);
                     return false;
                 }
 
+                bool can_publish = false;
                 {
                     SynchronizedObjectScope scope(syncobj_);
-                    ipv6s_[ip_key] = exchanger;
+                    auto active = exchangers_.find(session_id);
+                    auto existing = ipv6s_.find(ip_key);
+                    bool destination_available = existing == ipv6s_.end() ||
+                        !existing->second || existing->second == exchanger;
+                    can_publish = !disposed_.load(std::memory_order_acquire) &&
+                        active != exchangers_.end() && active->second == exchanger &&
+                        destination_available;
+#if defined(_LINUX)
+                    can_publish = can_publish && ipv6_transit_tap_ == transit_tap;
+#endif
+                    if (can_publish) {
+                        ipv6s_[ip_key] = exchanger;
+#if defined(_LINUX)
+                        if (permanent_neighbor_created) {
+                            ipv6_transit_neighbor_owned_.insert(ip_key);
+                        }
+#endif
+                    }
+                }
+
+                if (!can_publish) {
+                    if (proxy_required) {
+                        DeleteIPv6NeighborProxy(ip);
+                    }
+#if defined(_LINUX)
+                    if (permanent_neighbor_created &&
+                        !ppp::tap::TapLinux::DeleteIPv6PermanentNeighbor(transit_tap->GetId(), ip_key)) {
+                        SynchronizedObjectScope scope(syncobj_);
+                        if (ipv6_transit_tap_ == transit_tap) {
+                            ipv6_transit_neighbor_owned_.insert(ip_key);
+                        }
+                    }
+                    DeleteIPv6TransitRouteOnTap(transit_tap, ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
+#else
+                    DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
+#endif
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                    return false;
                 }
 
                 ppp::telemetry::Count("server.ipv6.assigned", 1);
@@ -1022,12 +1188,11 @@ namespace ppp {
              * @brief Removes one IPv6 exchanger binding using explicit extension data.
              * @param session_id Session identifier.
              * @param extensions Extension object containing assigned IPv6 address.
-             * @return true when teardown succeeds for both route and neighbor proxy.
+             * @return true when route, owned permanent neighbor, and proxy teardown succeeds.
              *
              * @note Two-phase locking: the map entry is erased under syncobj_ to guarantee
-             *       atomic removal visibility, then the OS-level route/proxy teardown
-             *       (potentially slow shell calls on Linux) runs outside the lock to
-             *       prevent holding syncobj_ for hundreds of milliseconds per client.
+             *       atomic removal visibility, then the OS-level route/neighbor/proxy teardown
+             *       runs outside the lock to avoid blocking peers during kernel operations.
              */
             bool VirtualEthernetSwitcher::DeleteIPv6Exchanger(const Int128& session_id, const VirtualEthernetInformationExtensions& extensions) noexcept {
                 ppp::string session_guid = auxiliary::StringAuxiliary::Int128ToGuidString(session_id);
@@ -1037,13 +1202,25 @@ namespace ppp {
                     return false;
                 }
 
+#if defined(_LINUX)
+                SynchronizedObjectScope lifecycle_scope(ipv6_transit_lifecycle_syncobj_);
+#endif
                 const boost::asio::ip::address& ip = extensions.AssignedIPv6Address;
                 std::string ip_std = ip.to_string();
                 ppp::string ip_key(ip_std.data(), ip_std.size());
 
+#if defined(_LINUX)
+                bool permanent_neighbor_owned = false;
+                ITapPtr transit_tap;
+#endif
                 {
                     /** @brief Hold the lock only long enough to validate and erase the map entry. */
                     SynchronizedObjectScope scope(syncobj_);
+                    if (disposed_.load(std::memory_order_acquire)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                        return false;
+                    }
+
                     auto tail = ipv6s_.find(ip_key);
                     if (tail == ipv6s_.end()) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionNotFound);
@@ -1056,18 +1233,46 @@ namespace ppp {
                     }
 
                     ipv6s_.erase(tail);
+#if defined(_LINUX)
+                    permanent_neighbor_owned = ipv6_transit_neighbor_owned_.count(ip_key) > 0;
+                    transit_tap = ipv6_transit_tap_;
+#endif
                 }
 
                 /**
                  * @brief OS-level teardown runs outside syncobj_ to avoid prolonged lock hold.
                  *
-                 * On Linux, DeleteIPv6TransitRoute and DeleteIPv6NeighborProxy may invoke
-                 * shell commands that block for tens to hundreds of milliseconds.  Running
-                 * them here (after the lock is released) ensures other threads are not
-                 * blocked waiting for syncobj_ during this teardown.
+                 * The lifecycle mutex keeps Finalize() from replacing or disposing the TAP while
+                 * route and neighbor deletion runs against the snapshotted identity.
                  */
+#if defined(_LINUX)
+                bool route_removed = DeleteIPv6TransitRouteOnTap(
+                    transit_tap, ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
+#else
                 bool route_removed = DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
+#endif
                 bool proxy_removed = DeleteIPv6NeighborProxy(ip);
+                bool permanent_neighbor_removed = true;
+#if defined(_LINUX)
+                if (permanent_neighbor_owned) {
+                    permanent_neighbor_removed = NULLPTR != transit_tap &&
+                        ppp::tap::TapLinux::DeleteIPv6PermanentNeighbor(transit_tap->GetId(), ip_key);
+                }
+
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    bool identity_valid = !disposed_.load(std::memory_order_acquire) &&
+                        ipv6_transit_tap_ == transit_tap;
+                    if (identity_valid && permanent_neighbor_owned && permanent_neighbor_removed) {
+                        ipv6_transit_neighbor_owned_.erase(ip_key);
+                    }
+                    elif (!identity_valid) {
+                        permanent_neighbor_removed = false;
+                    }
+                    // On failure the ownership record is deliberately retained for Finalize()
+                    // or a later cleanup attempt.
+                }
+#endif
 
                 ppp::telemetry::Count("server.ipv6.withdrawn", 1);
                 ppp::telemetry::Log(Level::kDebug, "server", "ipv6 withdrawn");
@@ -1081,7 +1286,7 @@ namespace ppp {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NeighborProxyDeleteFailed);
                 }
 
-                return route_removed && proxy_removed;
+                return route_removed && proxy_removed && permanent_neighbor_removed;
             }
 
             /**
@@ -1093,12 +1298,15 @@ namespace ppp {
                 bool any          = false;
                 bool released_any = false;
 
+#if defined(_LINUX)
+                SynchronizedObjectScope lifecycle_scope(ipv6_transit_lifecycle_syncobj_);
+                ITapPtr transit_tap;
+#endif
                 /**
                  * @note  Two-phase pattern: IPv6 addresses to clean up are collected and
-                 *        map entries are erased while syncobj_ is held; the blocking
-                 *        DeleteIPv6TransitRoute() / DeleteIPv6NeighborProxy() shell commands
-                 *        (fork+exec) are then executed OUTSIDE the lock.  This avoids
-                 *        holding syncobj_ across operations that can block for 10s–100s of ms.
+                 *        map entries are erased while syncobj_ is held; route, permanent
+                 *        neighbor, and proxy cleanup then executes OUTSIDE the lock. This
+                 *        avoids holding syncobj_ across potentially blocking kernel operations.
                  *
                  *        RevokeIPv6Lease() MUST NOT be called here because it also acquires
                  *        syncobj_ — doing so on a non-recursive std::mutex would cause an
@@ -1107,11 +1315,19 @@ namespace ppp {
                  *        region to satisfy the same invariant without re-entering the mutex.
                  */
 
-                // Collect IPv6 addresses to clean up under the lock, then process outside.
-                ppp::vector<boost::asio::ip::address> cleanup_ipv6_addresses;
+                ppp::vector<std::pair<boost::asio::ip::address, ppp::string>> cleanup_ipv6_entries;
+#if defined(_LINUX)
+                ppp::unordered_set<ppp::string> cleanup_owned_neighbors;
+#endif
 
                 {
                     SynchronizedObjectScope scope(syncobj_);
+                    if (disposed_.load(std::memory_order_acquire)) {
+                        return false;
+                    }
+#if defined(_LINUX)
+                    transit_tap = ipv6_transit_tap_;
+#endif
                     for (auto tail = ipv6s_.begin(); tail != ipv6s_.end();) {
                         VirtualEthernetExchangerPtr current = tail->second;
                         if (!current || current->GetId() != session_id) {
@@ -1122,8 +1338,13 @@ namespace ppp {
                         boost::system::error_code ec;
                         boost::asio::ip::address ip = StringToAddress(tail->first, ec);
                         if (!ec && ip.is_v6()) {
-                            cleanup_ipv6_addresses.emplace_back(ip);
+                            cleanup_ipv6_entries.emplace_back(ip, tail->first);
                         }
+#if defined(_LINUX)
+                        if (ipv6_transit_neighbor_owned_.count(tail->first) > 0) {
+                            cleanup_owned_neighbors.insert(tail->first);
+                        }
+#endif
 
                         tail = ipv6s_.erase(tail);
                         released_any = true;
@@ -1144,13 +1365,39 @@ namespace ppp {
                     }
                 }
 
-                // Perform blocking shell commands OUTSIDE the lock to avoid holding
-                // syncobj_ across fork()+exec() which can block for 10s–100s of ms.
-                for (const boost::asio::ip::address& ip : cleanup_ipv6_addresses) {
-                    DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
-                    DeleteIPv6NeighborProxy(ip);
+#if defined(_LINUX)
+                ppp::unordered_set<ppp::string> removed_owned_neighbors;
+#endif
+                // Perform route and neighbor cleanup outside the table lock. The lifecycle
+                // lock keeps the snapshotted TAP alive and prevents identity replacement.
+                for (const auto& entry : cleanup_ipv6_entries) {
+#if defined(_LINUX)
+                    DeleteIPv6TransitRouteOnTap(
+                        transit_tap, entry.first, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
+#else
+                    DeleteIPv6TransitRoute(entry.first, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
+#endif
+                    DeleteIPv6NeighborProxy(entry.first);
+#if defined(_LINUX)
+                    if (cleanup_owned_neighbors.count(entry.second) > 0 && NULLPTR != transit_tap &&
+                        ppp::tap::TapLinux::DeleteIPv6PermanentNeighbor(transit_tap->GetId(), entry.second)) {
+                        removed_owned_neighbors.insert(entry.second);
+                    }
+#endif
                 }
 
+#if defined(_LINUX)
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (!disposed_.load(std::memory_order_acquire) && ipv6_transit_tap_ == transit_tap) {
+                        for (const ppp::string& ip_key : removed_owned_neighbors) {
+                            ipv6_transit_neighbor_owned_.erase(ip_key);
+                        }
+                    }
+                    // Failed deletions stay owned so Finalize() can retry them even though
+                    // their exchanger mappings have already been removed.
+                }
+#endif
                 return any;
             }
 
@@ -1246,36 +1493,35 @@ namespace ppp {
                 }
 
                 const auto& ipv6 = configuration_->server.ipv6;
-                if (!IsIPv6ServerEnabled()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ModeInvalid);
-                    return false;
-                }
-
                 AppConfiguration::IPv6Mode mode = ipv6.mode;
                 if (!(AppConfiguration::IPv6Mode_Nat66 == mode || AppConfiguration::IPv6Mode_Gua == mode)) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ModeInvalid);
                     return false;
                 }
 
-                ITapPtr tap = ipv6_transit_tap_;
-                if (NULLPTR == tap) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitTapOpenFailed);
-                    return false;
+                SynchronizedObjectScope lifecycle_scope(ipv6_transit_lifecycle_syncobj_);
+                ITapPtr tap;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (disposed_.load(std::memory_order_acquire)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                        return false;
+                    }
+                    tap = ipv6_transit_tap_;
                 }
 
-                std::string ip_std = ip.to_string();
-                ppp::string ip_str(ip_std.data(), ip_std.size());
-                prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
-                auto started_at = std::chrono::steady_clock::now();
-                bool ok = ppp::tap::TapLinux::AddRoute6(tap->GetId(), ip_str, prefix_length, ppp::string());
-                if (ok) {
-                    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
-                    ppp::telemetry::Count("server.route.added", 1);
-                    ppp::telemetry::Histogram("server.route.add.us", elapsed);
-                    ppp::telemetry::Log(Level::kDebug, "server", "route added");
+                bool ok = AddIPv6TransitRouteOnTap(tap, ip, prefix_length);
+                bool identity_valid = false;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    identity_valid = !disposed_.load(std::memory_order_acquire) && ipv6_transit_tap_ == tap;
                 }
-                else {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteAddFailed);
+                if (!identity_valid) {
+                    if (ok) {
+                        DeleteIPv6TransitRouteOnTap(tap, ip, prefix_length);
+                    }
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitTapOpenFailed);
+                    return false;
                 }
                 return ok;
 #else
@@ -1299,36 +1545,30 @@ namespace ppp {
                 }
 
                 const auto& ipv6 = configuration_->server.ipv6;
-                if (!IsIPv6ServerEnabled()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ModeInvalid);
-                    return false;
-                }
-
                 AppConfiguration::IPv6Mode mode = ipv6.mode;
                 if (!(AppConfiguration::IPv6Mode_Nat66 == mode || AppConfiguration::IPv6Mode_Gua == mode)) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ModeInvalid);
                     return false;
                 }
 
-                ITapPtr tap = ipv6_transit_tap_;
-                if (NULLPTR == tap) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitTapOpenFailed);
-                    return false;
+                SynchronizedObjectScope lifecycle_scope(ipv6_transit_lifecycle_syncobj_);
+                ITapPtr tap;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (disposed_.load(std::memory_order_acquire)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                        return false;
+                    }
+                    tap = ipv6_transit_tap_;
                 }
 
-                std::string ip_std = ip.to_string();
-                ppp::string ip_str(ip_std.data(), ip_std.size());
-                prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, prefix_length));
-                auto started_at = std::chrono::steady_clock::now();
-                bool ok = ppp::tap::TapLinux::DeleteRoute6(tap->GetId(), ip_str, prefix_length, ppp::string());
-                if (ok) {
-                    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at).count();
-                    ppp::telemetry::Count("server.route.deleted", 1);
-                    ppp::telemetry::Histogram("server.route.delete.us", elapsed);
-                    ppp::telemetry::Log(Level::kDebug, "server", "route deleted");
-                }
-                else {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitRouteDeleteFailed);
+                bool ok = DeleteIPv6TransitRouteOnTap(tap, ip, prefix_length);
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (disposed_.load(std::memory_order_acquire) || ipv6_transit_tap_ != tap) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitTapOpenFailed);
+                        return false;
+                    }
                 }
                 return ok;
 #else
@@ -1338,18 +1578,17 @@ namespace ppp {
             }
 
             /**
-             * @brief Clears all IPv6 exchanger mappings and related lease/request state.
+             * @brief Snapshots all mapped and orphan-owned IPv6 cleanup keys, then clears mappings.
              */
-            void VirtualEthernetSwitcher::ClearIPv6ExchangersUnsafe() noexcept {
+            void VirtualEthernetSwitcher::ClearIPv6ExchangersUnsafe(
+                ppp::unordered_set<ppp::string>& cleanup_keys,
+                ppp::unordered_set<ppp::string>& cleanup_owned_neighbors) noexcept {
                 for (const auto& kv : ipv6s_) {
-                    boost::system::error_code ec;
-                    boost::asio::ip::address ip = StringToAddress(kv.first, ec);
-                    if (ec || !ip.is_v6()) {
-                        continue;
-                    }
-
-                    DeleteIPv6TransitRoute(ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
-                    DeleteIPv6NeighborProxy(ip);
+                    cleanup_keys.insert(kv.first);
+                }
+                for (const ppp::string& ip_key : ipv6_transit_neighbor_owned_) {
+                    cleanup_keys.insert(ip_key);
+                    cleanup_owned_neighbors.insert(ip_key);
                 }
 
                 ipv6s_.clear();
@@ -1525,6 +1764,205 @@ namespace ppp {
             static constexpr int STATUS_RUNING = +1;
             static constexpr int STATUS_RUNNING_SWAP = +0;
 
+            bool VirtualEthernetSwitcher::AuthenticatePlainTransport(
+                const ITransmissionPtr& transmission, const Int128& session_id,
+                YieldContext& y) noexcept {
+                using ppp::app::protocol::TransportAuthAction;
+                using ppp::app::protocol::TransportAuthCarrier;
+                using ppp::app::protocol::TransportAuthControl;
+                using ppp::app::protocol::TransportAuthNegotiationContext;
+                using ppp::app::protocol::TransportAuthResponder;
+                using ppp::transmissions::AuthenticatedCarrierKind;
+
+                if (NULLPTR == transmission || NULLPTR == configuration_) {
+                    ppp::diagnostics::SetLastErrorCode(
+                        ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    return false;
+                }
+
+                const AuthenticatedCarrierKind kind =
+                    transmission->GetAuthenticatedCarrierKind();
+                const bool plain_carrier = kind == AuthenticatedCarrierKind::Tcp ||
+                    kind == AuthenticatedCarrierKind::WebSocket;
+                if (!plain_carrier || transmission->IsServerLoopbackIngress() ||
+                    !configuration_->server.transport_auth.enabled ||
+                    !transmission->PeerSupportsTransportAuthV1() ||
+                    !transmission->PeerEnablesTransportAuthV1()) {
+                    return true;
+                }
+
+                ppp::app::protocol::SessionResumeId binary_session_id{};
+                if (!BuildSessionResumeId(session_id, binary_session_id)) {
+                    ppp::diagnostics::SetLastErrorCode(
+                        ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+                    return false;
+                }
+
+                const auto& strand = transmission->GetStrand();
+                if (NULLPTR == strand) {
+                    ppp::diagnostics::SetLastErrorCode(
+                        ppp::diagnostics::ErrorCode::SessionTransportMissing);
+                    return false;
+                }
+
+                static constexpr int HandshakePending = 0;
+                static constexpr int HandshakeCompleted = 1;
+                static constexpr int HandshakeTimedOut = 2;
+                std::shared_ptr<std::atomic_int> handshake_state =
+                    make_shared_object<std::atomic_int>(HandshakePending);
+                std::shared_ptr<boost::asio::steady_timer> handshake_timer =
+                    make_shared_object<boost::asio::steady_timer>(*strand);
+                if (NULLPTR == handshake_state || NULLPTR == handshake_timer) {
+                    ppp::diagnostics::SetLastErrorCode(
+                        ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                    return false;
+                }
+
+                handshake_timer->expires_after(std::chrono::milliseconds(
+                    std::max(1, configuration_->transport_auth.handshake_timeout_ms)));
+                handshake_timer->async_wait(
+                    [transmission, handshake_state](const boost::system::error_code& ec) noexcept {
+                        int expected = HandshakePending;
+                        if (!ec && handshake_state->compare_exchange_strong(
+                                expected, HandshakeTimedOut, std::memory_order_acq_rel)) {
+                            transmission->Dispose();
+                        }
+                    });
+
+                auto finish = [&]() noexcept {
+                    int expected = HandshakePending;
+                    const bool timed_out = !handshake_state->compare_exchange_strong(
+                        expected, HandshakeCompleted, std::memory_order_acq_rel) &&
+                        expected == HandshakeTimedOut;
+                    handshake_timer->cancel();
+                    if (timed_out) {
+                        ppp::diagnostics::SetLastErrorCode(
+                            ppp::diagnostics::ErrorCode::SocketTimeout);
+                    }
+                    return !timed_out;
+                };
+
+                auto read_control = [&](TransportAuthControl& control,
+                    bool& envelope_received) noexcept {
+                    InformationEnvelope envelope;
+                    if (!ppp::app::protocol::VirtualEthernetLinklayer::ReadInformation(
+                            transmission, envelope, y)) {
+                        return false;
+                    }
+                    envelope_received = true;
+                    VirtualEthernetInformationExtensions extensions = envelope.Extensions;
+                    control = extensions.TransportAuth;
+                    extensions.TransportAuth.Clear();
+                    return control.HasAny() && !extensions.HasAny();
+                };
+
+                std::shared_ptr<ppp::app::protocol::VirtualEthernetLinklayer> writer =
+                    make_shared_object<ppp::app::protocol::VirtualEthernetLinklayer>(
+                        configuration_, transmission->GetContext(), session_id);
+                auto send_control = [&](const TransportAuthControl& control) noexcept {
+                    if (NULLPTR == writer || !control.Valid()) {
+                        return false;
+                    }
+                    InformationEnvelope envelope;
+                    envelope.Base.Clear();
+                    envelope.Base.IncomingTraffic = std::numeric_limits<UInt64>::max();
+                    envelope.Base.OutgoingTraffic = std::numeric_limits<UInt64>::max();
+                    envelope.Base.ExpiredTime = std::numeric_limits<UInt32>::max();
+                    envelope.Extensions.Clear();
+                    envelope.Extensions.TransportAuth = control;
+                    envelope.ExtendedJson = envelope.Extensions.ToJson();
+                    return writer->DoInformation(transmission, envelope, y);
+                };
+
+                auto canonical_token = [](const ppp::string& token) noexcept {
+                    if (token.size() != ppp::app::protocol::TransportAuthTokenHexLength) {
+                        return false;
+                    }
+                    for (char value : token) {
+                        if (!((value >= '0' && value <= '9') ||
+                                (value >= 'a' && value <= 'f'))) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
+                auto reject = [&](const ppp::string* token) noexcept {
+                    TransportAuthControl control;
+                    control.Clear();
+                    control.action = TransportAuthAction::Reject;
+                    control.reason = "authentication-failed";
+                    if (NULLPTR != token && canonical_token(*token)) {
+                        control.token = *token;
+                    }
+                    (void)send_control(control);
+                };
+
+                TransportAuthNegotiationContext auth_context;
+                auth_context.carrier = kind == AuthenticatedCarrierKind::Tcp
+                    ? TransportAuthCarrier::Tcp
+                    : TransportAuthCarrier::WebSocket;
+                auth_context.session_id = binary_session_id;
+                auth_context.token.clear();
+                TransportAuthResponder responder(
+                    configuration_->transport_auth_keyring, auth_context);
+
+                bool advertisement_received = false;
+                bool proof_received = false;
+                TransportAuthControl advertisement;
+                TransportAuthControl response;
+                bool authenticated = read_control(
+                    advertisement, advertisement_received);
+                bool reject_sent = false;
+                if (authenticated) {
+                    authenticated = responder.ConsumeAdvertisement(
+                        advertisement, response);
+                    if (!authenticated) {
+                        (void)send_control(response);
+                        reject_sent = true;
+                    }
+                }
+                if (authenticated) {
+                    authenticated = send_control(response);
+                }
+
+                TransportAuthControl proof;
+                if (authenticated) {
+                    authenticated = read_control(proof, proof_received);
+                }
+                if (authenticated) {
+                    authenticated = responder.ConsumeClientProof(proof, response);
+                    if (!authenticated) {
+                        (void)send_control(response);
+                        reject_sent = true;
+                    }
+                }
+
+                ppp::cryptography::noise::NoisePskHandshakeResult result;
+                if (authenticated) {
+                    authenticated = responder.TakeNoiseResult(result) &&
+                        transmission->InstallNoiseAuthenticatedCarrierBinding(
+                            std::move(result));
+                }
+                if (authenticated) {
+                    authenticated = send_control(response);
+                }
+
+                if (!authenticated && advertisement_received && !reject_sent) {
+                    const ppp::string* token = canonical_token(advertisement.token)
+                        ? &advertisement.token
+                        : NULLPTR;
+                    reject(token);
+                }
+                if (!authenticated &&
+                    ppp::diagnostics::GetLastErrorCode() ==
+                        ppp::diagnostics::ErrorCode::Success) {
+                    ppp::diagnostics::SetLastErrorCode(
+                        ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
+                }
+                (void)proof_received;
+                return finish() && authenticated;
+            }
+
             /**
              * @brief Handles one accepted transport: handshake, establish, or connect.
              * @param context I/O context associated with the accepted socket.
@@ -1570,6 +2008,11 @@ namespace ppp {
 
                     ppp::telemetry::Count("server.session.rejected", 1);
                     ppp::telemetry::Log(Level::kInfo, "server", "session rejected");
+                    return STATUS_ERROR;
+                }
+
+                if (!AuthenticatePlainTransport(transmission, session_id, y)) {
+                    ppp::telemetry::Count("server.transport_auth.rejected", 1);
                     return STATUS_ERROR;
                 }
 
@@ -1640,7 +2083,15 @@ namespace ppp {
 
                     auto allocator = transmission->BufferAllocator;
                     auto self = shared_from_this();
-                    return YieldContext::Spawn(allocator.get(), *context,
+                    auto& strand = transmission->GetStrand();
+                    if (NULLPTR == strand) {
+                        strand = make_shared_object<ppp::threading::Executors::Strand>(
+                            context->get_executor());
+                        if (NULLPTR == strand) {
+                            return false;
+                        }
+                    }
+                    return YieldContext::Spawn(allocator.get(), *context, strand.get(),
                         [self, this, context, transmission](YieldContext& y) noexcept {
                             int status = Run(context, transmission, y);
                             if (status != STATUS_RUNNING_SWAP) {
@@ -2456,7 +2907,14 @@ namespace ppp {
              * @return true when packet is emitted to TAP.
              */
             bool VirtualEthernetSwitcher::SendIPv6TransitPacket(Byte* packet, int packet_length) noexcept {
-                ITapPtr tap = ipv6_transit_tap_;
+                ITapPtr tap;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (disposed_.load(std::memory_order_acquire)) {
+                        return false;
+                    }
+                    tap = ipv6_transit_tap_;
+                }
                 if (NULLPTR == tap || NULLPTR == packet || packet_length < ppp::ipv6::IPv6_HEADER_MIN_SIZE) {
                     return false;
                 }
@@ -2548,8 +3006,13 @@ namespace ppp {
                     return false;
                 }
 
+                VirtualEthernetExchangerPtr exchanger = FindIPv6Exchanger(destination);
+                if (NULLPTR == exchanger) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6SubnetForwardFailed);
+                    return false;
+                }
+
                 const auto& ipv6 = configuration_->server.ipv6;
-                AppConfiguration::IPv6Mode mode = ipv6.mode;
                 boost::system::error_code prefix_ec;
                 ppp::string prefix_string = ipv6.cidr;
                 std::size_t slash = prefix_string.find('/');
@@ -2559,45 +3022,17 @@ namespace ppp {
                 boost::asio::ip::address prefix = StringToAddress(prefix_string, prefix_ec);
                 if (!prefix_ec && prefix.is_v6()) {
                     int allowed_prefix_length = std::max<int>(ppp::ipv6::IPv6_MIN_PREFIX_LENGTH, std::min<int>(ppp::ipv6::IPv6_MAX_PREFIX_LENGTH, ipv6.prefix_length));
-                    if (!ppp::ipv6::PrefixMatch(destination, prefix.to_v6(), allowed_prefix_length)) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6SubnetForwardFailed);
-                        return false;
-                    }
-
-                    // Reject unspecified, multicast, loopback, and link-local source
-                    // addresses; link-local (fe80::/10) addresses are scoped to a single
-                    // L2 segment and must not be routed across the virtual fabric.
-                    if (source.is_unspecified() || source.is_multicast() || source.is_loopback() || source.is_link_local()) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6SubnetForwardFailed);
-                        return false;
-                    }
-
                     boost::asio::ip::address transit_gateway = GetIPv6TransitGateway();
-                    bool source_is_transit_gateway = transit_gateway.is_v6() && source == transit_gateway.to_v6();
-                    bool source_in_prefix = ppp::ipv6::PrefixMatch(source, prefix.to_v6(), allowed_prefix_length);
-                    if (!source_is_transit_gateway && !source_in_prefix) {
+                    if (!ipv6_transit_policy::IsPacketAllowed(
+                        source,
+                        destination,
+                        prefix.to_v6(),
+                        allowed_prefix_length,
+                        &transit_gateway,
+                        true)) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6SubnetForwardFailed);
                         return false;
                     }
-
-                    if (!source_is_transit_gateway && source_in_prefix) {
-                        VirtualEthernetExchangerPtr source_owner = FindIPv6Exchanger(source);
-                        if (NULLPTR == source_owner) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6SubnetForwardFailed);
-                            return false;
-                        }
-
-                        if (AppConfiguration::IPv6Mode_Nat66 == mode && !configuration_->server.subnet) {
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6SubnetForwardFailed);
-                            return false;
-                        }
-                    }
-                }
-
-                VirtualEthernetExchangerPtr exchanger = FindIPv6Exchanger(destination);
-                if (NULLPTR == exchanger) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6SubnetForwardFailed);
-                    return false;
                 }
 
                 ITransmissionPtr transmission = exchanger->GetTransmission();
@@ -2630,6 +3065,18 @@ namespace ppp {
              */
             bool VirtualEthernetSwitcher::OpenIPv6TransitIfNeed() noexcept {
 #if defined(_LINUX)
+                SynchronizedObjectScope lifecycle_scope(ipv6_transit_lifecycle_syncobj_);
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (disposed_.load(std::memory_order_acquire)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                        return false;
+                    }
+                    if (NULLPTR != ipv6_transit_tap_) {
+                        return true;
+                    }
+                }
+
                 const auto& ipv6 = configuration_->server.ipv6;
                 AppConfiguration::IPv6Mode mode = ipv6.mode;
                 bool enable_transit = IsIPv6ServerEnabled() && (mode == AppConfiguration::IPv6Mode_Nat66 || mode == AppConfiguration::IPv6Mode_Gua);
@@ -2719,7 +3166,19 @@ namespace ppp {
                     return false;
                 }
 
-                ipv6_transit_tap_ = tap;
+                bool published = false;
+                {
+                    SynchronizedObjectScope scope(syncobj_);
+                    if (!disposed_.load(std::memory_order_acquire) && NULLPTR == ipv6_transit_tap_) {
+                        ipv6_transit_tap_ = tap;
+                        published = true;
+                    }
+                }
+                if (!published) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitTapOpenFailed);
+                    tap->Dispose();
+                    return false;
+                }
 #else
                 if (IsIPv6ServerEnabled()) {
                 }
@@ -3301,6 +3760,12 @@ namespace ppp {
                     return NULLPTR;
                 }
 
+                boost::system::error_code remote_endpoint_error;
+                const auto remote_endpoint = socket->remote_endpoint(remote_endpoint_error);
+                if (remote_endpoint_error || remote_endpoint.address().is_loopback()) {
+                    transmission->MarkServerLoopbackIngress();
+                }
+
                 transmission->Statistics = NewStatistics();
                 return transmission;
             }
@@ -3419,37 +3884,28 @@ namespace ppp {
                 VirtualEthernetLoggerPtr logger;
                 VirtualEthernetExchangerTable exchangers;
                 VirtualEthernetNetworkTcpipConnectionTable connections;
+                ppp::unordered_set<ppp::string> ipv6_cleanup_keys;
+                ppp::unordered_set<ppp::string> ipv6_cleanup_owned_neighbors;
 
-                // Snapshot acceptors under the lock so that socket close syscalls
-                // (which may block or invoke OS callbacks) run outside syncobj_.
+                // Snapshot acceptors and TAP-backed cleanup state under the table lock. Kernel
+                // operations run later without syncobj_, while the lifecycle lock prevents a
+                // concurrent Add/Delete/Open from changing the TAP identity.
                 std::shared_ptr<boost::asio::ip::tcp::acceptor> acceptors_snapshot[NetworkAcceptorCategories_Max];
 
-                for (;;) {
+                {
+                    SynchronizedObjectScope lifecycle_scope(ipv6_transit_lifecycle_syncobj_);
+                    for (;;) {
                     SynchronizedObjectScope scope(syncobj_);
                     disposed_ = true;
 
-                    // Swap all acceptors into local snapshot and null the members.
-                    // Actual close (socket syscall) happens after the lock is released.
                     for (int i = NetworkAcceptorCategories_Min; i < NetworkAcceptorCategories_Max; i++) {
                         acceptors_snapshot[i] = std::move(acceptors_[i]);
                         acceptors_[i].reset();
                     }
 
-                    cache          = std::move(namespace_cache_);
-
-                    /**
-                     * @brief IPv6 exchanger teardown must run BEFORE ipv6_transit_tap_ is moved.
-                     *
-                     * ClearIPv6ExchangersUnsafe() calls DeleteIPv6TransitRoute() and
-                     * DeleteIPv6NeighborProxy(), both of which read the member ipv6_transit_tap_.
-                     * Moving (nulling) it first causes those calls to silently fail and leaves
-                     * kernel route/neighbor-proxy entries permanently installed — a resource leak.
-                     *
-                     * Running this under the lock is acceptable: Finalize() is a one-time
-                     * shutdown path; disposed_ = true has already been set above, so no other
-                     * thread will attempt to access the IPv6 exchanger table concurrently.
-                     */
-                    ClearIPv6ExchangersUnsafe();
+                    cache = std::move(namespace_cache_);
+                    ipv6_transit_tap = ipv6_transit_tap_;
+                    ClearIPv6ExchangersUnsafe(ipv6_cleanup_keys, ipv6_cleanup_owned_neighbors);
 
                     // Release all IPv4 leases before moving exchangers out.
                     for (const auto& kv : exchangers_) {
@@ -3458,9 +3914,8 @@ namespace ppp {
                         }
                     }
 
-                    ipv6_transit_tap = std::move(ipv6_transit_tap_);
-                    nats             = std::move(nats_);
-                    logger           = std::move(logger_);
+                    nats   = std::move(nats_);
+                    logger = std::move(logger_);
 
                     exchangers = std::move(exchangers_);
                     exchangers_.clear();
@@ -3474,6 +3929,39 @@ namespace ppp {
                     peer_prefix_rib_.Clear();
                     static_echo_allocateds_.clear();
                     break;
+                }
+
+#if defined(_LINUX)
+                for (const ppp::string& ip_key : ipv6_cleanup_keys) {
+                    boost::system::error_code ec;
+                    boost::asio::ip::address ip = StringToAddress(ip_key, ec);
+                    if (ec || !ip.is_v6()) {
+                        continue;
+                    }
+
+                    DeleteIPv6TransitRouteOnTap(
+                        ipv6_transit_tap, ip, ppp::ipv6::IPv6_MAX_PREFIX_LENGTH);
+                    DeleteIPv6NeighborProxy(ip);
+
+                    if (ipv6_cleanup_owned_neighbors.count(ip_key) > 0 &&
+                        NULLPTR != ipv6_transit_tap &&
+                        ppp::tap::TapLinux::DeleteIPv6PermanentNeighbor(ipv6_transit_tap->GetId(), ip_key)) {
+                        SynchronizedObjectScope scope(syncobj_);
+                        if (ipv6_transit_tap_ == ipv6_transit_tap) {
+                            ipv6_transit_neighbor_owned_.erase(ip_key);
+                        }
+                    }
+                    // Failed permanent-neighbor deletions remain in the ownership set. This is
+                    // the final in-process retry, so the record is not falsely marked clean.
+                }
+#endif
+
+                    {
+                        SynchronizedObjectScope scope(syncobj_);
+                        if (ipv6_transit_tap_ == ipv6_transit_tap) {
+                            ipv6_transit_tap_.reset();
+                        }
+                    }
                 }
 
                 // Close snapshotted acceptors outside the lock to avoid holding syncobj_

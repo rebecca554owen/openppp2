@@ -96,6 +96,7 @@ builds/cmake-check/
 AGENTS.md
 CLAUDE.md
 .claude/
+.gitnexus/
 .gitnexusignore
 dist/
 stash-backups/

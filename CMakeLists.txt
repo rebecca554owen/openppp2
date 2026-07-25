@@ -193,6 +193,7 @@ ENDIF()
 OPTION(ENABLE_TESTS "Build unit tests (GTest)" OFF)
 OPTION(ENABLE_VMUX_CHURN_TEST "Build the root-linked VMUX carrier churn test" OFF)
 OPTION(ENABLE_VMUX_RECEIVE_SEMANTICS_TEST "Build the root-linked VMUX receive-semantics test" OFF)
+OPTION(ENABLE_SESSION_ROAMING_E2E_TEST "Build the root-linked L3 session roaming E2E test" OFF)
 OPTION(ENABLE_COVERAGE "Enable LLVM source coverage instrumentation" OFF)
 IF(ENABLE_COVERAGE AND NOT MSVC)
     INCLUDE(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Coverage.cmake)
@@ -609,6 +610,22 @@ IF(ENABLE_VMUX_RECEIVE_SEMANTICS_TEST)
             "-Wl,--exclude-libs,ALL")
     ENDIF()
     ADD_TEST(NAME vmux_receive_semantics_test COMMAND vmux_receive_semantics_test)
+ENDIF()
+
+IF(ENABLE_SESSION_ROAMING_E2E_TEST)
+    ENABLE_TESTING()
+    ADD_EXECUTABLE(session_roaming_switcher_e2e_test
+        tests/cpp/session_roaming_switcher_e2e_test.cpp)
+    TARGET_LINK_LIBRARIES(session_roaming_switcher_e2e_test openppp2_lib)
+    IF((ENABLE_ASAN OR ENABLE_UBSAN) AND PLATFORM_SYSTEM_LINUX)
+        TARGET_LINK_LIBRARIES(session_roaming_switcher_e2e_test z zstd)
+    ENDIF()
+    TARGET_COMPILE_DEFINITIONS(session_roaming_switcher_e2e_test PRIVATE
+        OPENPPP2_TEST_CERTIFICATE="${PROJECT_SOURCE_DIR}/starrylink.net.pem"
+        OPENPPP2_TEST_PRIVATE_KEY="${PROJECT_SOURCE_DIR}/starrylink.net.key")
+    ADD_TEST(NAME session_roaming_switcher_e2e_test
+        COMMAND session_roaming_switcher_e2e_test)
+    SET_TESTS_PROPERTIES(session_roaming_switcher_e2e_test PROPERTIES TIMEOUT 120)
 ENDIF()
 
 IF(ENABLE_TESTS)

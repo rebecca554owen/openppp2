@@ -77,7 +77,7 @@ python3 benchmarks/vmux/parse_results.py --rollout-gate <results...>
 
 默认 `run.sh` 调用是 dry-run：它校验计划，但不会改变网络状态，也不会写结果。真实运行需要 `--execute`、外部 `iperf3` server、可执行的 preparation hook、endpoint manifest，以及本次运行采集的 telemetry。parser 校验提交工件和阈值；它本身不证明物理设备测量或 tunnel 配置确实发生。
 
-仓库源码提供了 harness、parser 和正确性/tooling 测试，但没有合格的 Linux + mobile 吞吐/p99 证据包。因此本文不声称性能已通过，也不把任何历史 raw commit 或 sanitizer 运行结果作为发布证据。
+仓库源码提供了 harness、parser 和正确性/tooling 测试，但没有合格的 Linux + mobile 吞吐/p99 证据包。提交 `ded25d6` 仍作为已记录的兼容性/正确性基线；它不是合格的发布性能证据包，也不表示默认值修改门槛已经通过。因此本文不声称性能已通过，也不把任何历史 raw commit 或 sanitizer 运行结果作为发布证据。
 
 ## 默认值变更规则
 

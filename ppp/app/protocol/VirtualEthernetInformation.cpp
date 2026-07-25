@@ -83,6 +83,68 @@ namespace {
         return true;
     }
 
+    static bool IsTransportAuthMethodToken(const ppp::string& value) noexcept {
+        if (value.empty() ||
+            value.size() > ppp::app::protocol::TransportAuthControl::MaximumMethodLength) {
+            return false;
+        }
+        for (char ch : value) {
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-')) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static bool IsTransportAuthKeyId(const ppp::string& value) noexcept {
+        if (value.empty() ||
+            value.size() > ppp::app::protocol::TransportAuthControl::MaximumKeyIdLength ||
+            !((value.front() >= 'a' && value.front() <= 'z') ||
+                (value.front() >= '0' && value.front() <= '9'))) {
+            return false;
+        }
+        for (char ch : value) {
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
+                ch == '.' || ch == '_' || ch == '-')) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static bool IsTransportAuthToken(const ppp::string& value) noexcept {
+        return value.size() <=
+            ppp::app::protocol::TransportAuthControl::MaximumTokenSize &&
+            IsCanonicalLowerHex(value,
+                ppp::app::protocol::TransportAuthControl::TokenHexLength);
+    }
+
+    static bool IsTransportAuthMessage(const ppp::string& value) noexcept {
+        if (value.empty() || (value.size() & 1) != 0 ||
+            value.size() / 2 > ppp::app::protocol::TransportAuthControl::MaximumMessageBytes) {
+            return false;
+        }
+        for (char ch : value) {
+            if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static bool IsTransportAuthReason(const ppp::string& value) noexcept {
+        if (value.empty() ||
+            value.size() > ppp::app::protocol::TransportAuthControl::MaximumReasonLength) {
+            return false;
+        }
+        for (char ch : value) {
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-')) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     static ppp::string P2PIPv4ToString(uint32_t ip) noexcept {
         if (ip == 0) {
             return ppp::string();
@@ -204,6 +266,7 @@ namespace ppp {
                 ClientIPv4Req.Clear();
                 ClientIPv4Assign.Clear();
                 P2P.Clear();
+                TransportAuth.Clear();
                 SessionResume.Clear();
                 PeerRouteAnnounce.Clear();
                 PeerRouteTable.Clear();
@@ -227,6 +290,7 @@ namespace ppp {
                     ClientIPv4Req.HasAny() ||
                     ClientIPv4Assign.HasAny() ||
                     P2P.HasAny() ||
+                    TransportAuth.HasAny() ||
                     SessionResume.HasAny() ||
                     PeerRouteAnnounce.HasAny() ||
                     PeerRouteTable.HasAny();
@@ -295,6 +359,12 @@ namespace ppp {
                     Json::Value p2p;
                     P2P.ToJson(p2p);
                     json["p2p"] = p2p;
+                }
+
+                if (TransportAuth.Valid()) {
+                    Json::Value transport_auth;
+                    TransportAuth.ToJson(transport_auth);
+                    json["transport-auth"] = transport_auth;
                 }
 
                 if (SessionResume.Valid()) {
@@ -418,6 +488,11 @@ namespace ppp {
 
                 if (json.isMember("p2p") && json["p2p"].isObject()) {
                     P2PControlMessage::FromJson(value.P2P, json["p2p"]);
+                }
+
+                if (json.isMember("transport-auth") &&
+                    !TransportAuthControl::FromJson(value.TransportAuth, json["transport-auth"])) {
+                    return false;
                 }
 
                 if (json.isMember("session-resume") &&
@@ -564,6 +639,306 @@ namespace ppp {
                 }
 
                 return value.HasAny();
+            }
+
+            // ---- Transport authentication control ----
+
+            void TransportAuthControl::Clear() noexcept {
+                version = ProtocolVersion;
+                action = Action::None;
+                method.clear();
+                methods.clear();
+                key_id.clear();
+                token.clear();
+                sequence = 0;
+                message.clear();
+                proof.clear();
+                reason.clear();
+            }
+
+            bool TransportAuthControl::HasAny() const noexcept {
+                return action != Action::None || !token.empty();
+            }
+
+            bool TransportAuthControl::Valid() const noexcept {
+                if (version != ProtocolVersion || action == Action::None) {
+                    return false;
+                }
+
+                bool methods_valid = !methods.empty() && methods.size() <= MaximumMethods;
+                for (std::size_t i = 0; methods_valid && i < methods.size(); ++i) {
+                    if (!IsTransportAuthMethodToken(methods[i])) {
+                        methods_valid = false;
+                        break;
+                    }
+                    for (std::size_t j = 0; j < i; ++j) {
+                        if (methods[j] == methods[i]) {
+                            methods_valid = false;
+                            break;
+                        }
+                    }
+                }
+
+                const bool method_valid = IsTransportAuthMethodToken(method);
+                const bool key_id_valid = IsTransportAuthKeyId(key_id);
+                const bool token_valid = IsTransportAuthToken(token);
+                const bool message_valid = IsTransportAuthMessage(message);
+                switch (action) {
+                    case Action::Advertise: {
+                        if (!methods_valid || !token_valid || !proof.empty() || !reason.empty()) {
+                            return false;
+                        }
+                        const bool capability_only = method.empty() && key_id.empty() &&
+                            sequence == 0 && message.empty();
+                        bool method_advertised = false;
+                        for (const ppp::string& advertised : methods) {
+                            method_advertised = method_advertised || advertised == method;
+                        }
+                        const bool initiator_message = method_valid && method_advertised &&
+                            key_id_valid && sequence == 1 && message_valid;
+                        return capability_only || initiator_message;
+                    }
+                    case Action::Select:
+                        return methods.empty() && method_valid && key_id_valid && token_valid &&
+                            sequence == 2 && message_valid && proof.empty() && reason.empty();
+                    case Action::Success:
+                        return methods.empty() && method_valid && key_id_valid && token_valid &&
+                            sequence == 0 && message.empty() && reason.empty() &&
+                            (proof.empty() || IsCanonicalLowerHex(proof, 64));
+                    case Action::Reject:
+                        return methods.empty() && method.empty() && key_id.empty() &&
+                            (token.empty() || token_valid) && sequence == 0 && message.empty() &&
+                            proof.empty() && IsTransportAuthReason(reason);
+                    default:
+                        return false;
+                }
+            }
+
+            const char* TransportAuthControl::ActionToString(Action action) noexcept {
+                switch (action) {
+                    case Action::Advertise: return "advertise";
+                    case Action::Select: return "select";
+                    case Action::Success: return "success";
+                    case Action::Reject: return "reject";
+                    default: return "";
+                }
+            }
+
+            bool TransportAuthControl::ActionFromString(
+                const ppp::string& text, Action& action) noexcept {
+                if (text == "advertise") action = Action::Advertise;
+                else if (text == "select") action = Action::Select;
+                else if (text == "success") action = Action::Success;
+                else if (text == "reject") action = Action::Reject;
+                else {
+                    action = Action::None;
+                    return false;
+                }
+                return true;
+            }
+
+            void TransportAuthControl::ToJson(Json::Value& json) const noexcept {
+                if (!Valid()) {
+                    return;
+                }
+
+                json["version"] = Json::UInt(version);
+                json["action"] = Json::Value(ActionToString(action));
+                if (!method.empty()) {
+                    json["method"] = Json::Value(method.c_str());
+                }
+                if (!methods.empty()) {
+                    Json::Value array(Json::arrayValue);
+                    for (const ppp::string& advertised : methods) {
+                        array.append(Json::Value(advertised.c_str()));
+                    }
+                    json["methods"] = array;
+                }
+                if (!key_id.empty()) {
+                    json["key-id"] = Json::Value(key_id.c_str());
+                }
+                if (!token.empty()) {
+                    json["token"] = Json::Value(token.c_str());
+                }
+                if (sequence != 0) {
+                    json["sequence"] = Json::UInt(sequence);
+                }
+                if (!message.empty()) {
+                    json["message"] = Json::Value(message.c_str());
+                }
+                if (!proof.empty()) {
+                    json["proof"] = Json::Value(proof.c_str());
+                }
+                if (!reason.empty()) {
+                    json["reason"] = Json::Value(reason.c_str());
+                }
+            }
+
+            ppp::string TransportAuthControl::ToJson() const noexcept {
+                Json::Value json;
+                ToJson(json);
+                return JsonAuxiliary::ToString(json);
+            }
+
+            bool TransportAuthControl::FromJson(
+                TransportAuthControl& value, const ppp::string& json) noexcept {
+                value.Clear();
+                if (json.empty()) {
+                    return false;
+                }
+                return FromJson(value, JsonAuxiliary::FromString(json));
+            }
+
+            bool TransportAuthControl::FromJson(
+                TransportAuthControl& value, const Json::Value& json) noexcept {
+                value.Clear();
+                if (!json.isObject()) {
+                    return false;
+                }
+
+                for (const auto& name : json.getMemberNames()) {
+                    if (name != "version" && name != "action" && name != "method" &&
+                        name != "methods" && name != "key-id" && name != "token" &&
+                        name != "sequence" && name != "message" && name != "proof" &&
+                        name != "reason") {
+                        return false;
+                    }
+                }
+
+                const bool has_version = json.isMember("version");
+                const bool has_action = json.isMember("action");
+                const bool has_method = json.isMember("method");
+                const bool has_methods = json.isMember("methods");
+                const bool has_key_id = json.isMember("key-id");
+                const bool has_token = json.isMember("token");
+                const bool has_sequence = json.isMember("sequence");
+                const bool has_message = json.isMember("message");
+                const bool has_proof = json.isMember("proof");
+                const bool has_reason = json.isMember("reason");
+
+                TransportAuthControl parsed;
+                std::uint32_t parsed_version = 0;
+                if (!has_version || !ParseJsonUInt32(json["version"], parsed_version) ||
+                    parsed_version != ProtocolVersion || !has_action ||
+                    !json["action"].isString() ||
+                    !ActionFromString(json["action"].asString(), parsed.action)) {
+                    return false;
+                }
+
+                if (has_method) {
+                    if (!json["method"].isString()) {
+                        return false;
+                    }
+                    parsed.method = json["method"].asString();
+                    if (!IsTransportAuthMethodToken(parsed.method)) {
+                        return false;
+                    }
+                }
+                if (has_methods) {
+                    const Json::Value& advertised = json["methods"];
+                    if (!advertised.isArray() || advertised.empty() ||
+                        advertised.size() > MaximumMethods) {
+                        return false;
+                    }
+                    for (Json::ArrayIndex i = 0; i < advertised.size(); ++i) {
+                        if (!advertised[i].isString()) {
+                            return false;
+                        }
+                        const ppp::string candidate = advertised[i].asString();
+                        if (!IsTransportAuthMethodToken(candidate)) {
+                            return false;
+                        }
+                        for (const ppp::string& existing : parsed.methods) {
+                            if (existing == candidate) {
+                                return false;
+                            }
+                        }
+                        parsed.methods.emplace_back(candidate);
+                    }
+                }
+                if (has_key_id) {
+                    if (!json["key-id"].isString()) {
+                        return false;
+                    }
+                    parsed.key_id = json["key-id"].asString();
+                    if (!IsTransportAuthKeyId(parsed.key_id)) {
+                        return false;
+                    }
+                }
+                if (has_token) {
+                    if (!json["token"].isString()) {
+                        return false;
+                    }
+                    parsed.token = json["token"].asString();
+                    if (!IsTransportAuthToken(parsed.token)) {
+                        return false;
+                    }
+                }
+                if (has_sequence &&
+                    !ParseJsonUInt32(json["sequence"], parsed.sequence)) {
+                    return false;
+                }
+                if (has_message) {
+                    if (!json["message"].isString()) {
+                        return false;
+                    }
+                    parsed.message = json["message"].asString();
+                    if (!IsTransportAuthMessage(parsed.message)) {
+                        return false;
+                    }
+                }
+                if (has_proof) {
+                    if (!json["proof"].isString()) {
+                        return false;
+                    }
+                    parsed.proof = json["proof"].asString();
+                    if (!IsCanonicalLowerHex(parsed.proof, 64)) {
+                        return false;
+                    }
+                }
+                if (has_reason) {
+                    if (!json["reason"].isString()) {
+                        return false;
+                    }
+                    parsed.reason = json["reason"].asString();
+                    if (!IsTransportAuthReason(parsed.reason)) {
+                        return false;
+                    }
+                }
+
+                bool fields_valid = false;
+                switch (parsed.action) {
+                    case Action::Advertise: {
+                        const bool capability_only = has_methods && !has_method && !has_key_id &&
+                            has_token && !has_sequence && !has_message && !has_proof && !has_reason;
+                        const bool initiator_message = has_methods && has_method && has_key_id &&
+                            has_token && has_sequence && parsed.sequence == 1 && has_message &&
+                            !has_proof && !has_reason;
+                        fields_valid = capability_only || initiator_message;
+                        break;
+                    }
+                    case Action::Select:
+                        fields_valid = !has_methods && has_method && has_key_id && has_token &&
+                            has_sequence && parsed.sequence == 2 && has_message &&
+                            !has_proof && !has_reason;
+                        break;
+                    case Action::Success:
+                        fields_valid = !has_methods && has_method && has_key_id && has_token &&
+                            !has_sequence && !has_message && !has_reason;
+                        break;
+                    case Action::Reject:
+                        fields_valid = !has_methods && !has_method && !has_key_id &&
+                            !has_sequence && !has_message && !has_proof && has_reason;
+                        break;
+                    default:
+                        break;
+                }
+
+                if (!fields_valid || !parsed.Valid()) {
+                    return false;
+                }
+                value = std::move(parsed);
+                return true;
             }
 
             // ---- Session resume control ----

@@ -1,4 +1,5 @@
 #include <ppp/app/client/ClientConnectionTeardown.h>
+#include <ppp/app/client/AssignedAddressManager.h>
 #include <ppp/app/client/ClientNetworkInterfaceResolver.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/route/RouteCoordinator.h>
@@ -96,6 +97,14 @@ namespace ppp {
                     bool route_cleanup_complete = true;
 #if !defined(_ANDROID) && !defined(_IPHONE)
                     owner_->RestoreAssignedIPv6();
+                    route_cleanup_complete =
+                        !owner_->address_manager_->HasPendingIPv6Cleanup();
+#if defined(_WIN32)
+                    const bool windows_ipv6_stopped = owner_->StopWindowsIPv6Routes();
+                    route_cleanup_complete = windows_ipv6_stopped &&
+                        !owner_->HasPendingWindowsIPv6Cleanup() &&
+                        route_cleanup_complete;
+#endif
                     const route::RouteStateSnapshot route_snapshot =
                         owner_->route_coordinator_->Snapshot();
                     const bool routes_applied = route_snapshot.applied;
@@ -103,7 +112,7 @@ namespace ppp {
                         routes_applied || !route_snapshot.default_routes.empty();
                     owner_->route_coordinator_->MarkApplyReady(false);
                     if (rollback_pending) {
-                        route_cleanup_complete = owner_->DeleteRoute();
+                        route_cleanup_complete = owner_->DeleteRoute() && route_cleanup_complete;
                     }
 
                     const ClientTeardownRouteActions route_actions =

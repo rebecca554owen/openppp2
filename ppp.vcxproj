@@ -488,6 +488,7 @@
     <ClCompile Include="ppp\app\client\VEthernetNetworkTcpipConnection.cpp" />
     <ClCompile Include="ppp\app\client\VEthernetNetworkTcpipStack.cpp" />
     <ClCompile Include="ppp\app\protocol\SessionResumeAuthenticator.cpp" />
+    <ClCompile Include="ppp\app\protocol\TransportAuthNegotiation.cpp" />
     <ClCompile Include="ppp\app\protocol\VirtualEthernetInformation.cpp" />
     <ClCompile Include="ppp\app\protocol\VirtualEthernetLinklayer.cpp" />
     <ClCompile Include="ppp\app\protocol\VirtualEthernetTcpipConnection.cpp" />
@@ -503,9 +504,11 @@
     <ClCompile Include="ppp\auxiliary\StringAuxiliary.cpp" />
     <ClCompile Include="ppp\auxiliary\UriAuxiliary.cpp" />
     <ClCompile Include="ppp\configurations\AppConfiguration.cpp" />
+    <ClCompile Include="ppp\configurations\TransportAuthConfiguration.cpp" />
     <ClCompile Include="ppp\coroutines\YieldContext.cpp" />
     <ClCompile Include="ppp\cryptography\Ciphertext.cpp" />
     <ClCompile Include="ppp\cryptography\EVP.cpp" />
+    <ClCompile Include="ppp\cryptography\noise\NoisePsk.cpp" />
     <ClCompile Include="ppp\cryptography\md5.cpp" />
     <ClCompile Include="ppp\cryptography\rc4.cpp" />
     <ClCompile Include="ppp\cryptography\digest.cpp" />
@@ -537,6 +540,7 @@
     <ClCompile Include="ppp\transmissions\ITcpipTransmission.cpp" />
     <ClCompile Include="ppp\transmissions\ITransmission.cpp" />
     <ClCompile Include="ppp\transmissions\ITransmissionQoS.cpp" />
+    <ClCompile Include="ppp\transmissions\NoisePskAuthenticatedCarrierBinding.cpp" />
     <ClCompile Include="ppp\transmissions\IWebsocketTransmission.cpp" />
     <ClCompile Include="ppp\transmissions\proxys\IForwarding.cpp" />
     <ClCompile Include="ppp\p2p\P2PChannel.cpp" />
@@ -557,12 +561,14 @@
     <ClCompile Include="ppp\p2p\P2PSocketProtector.cpp" />
     <ClCompile Include="ppp\p2p\P2PStunClient.cpp" />
     <ClCompile Include="ppp\ipv6\IPv6Auxiliary.cpp" />
+    <ClCompile Include="ppp\ipv6\IPv6RouteTransaction.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneConnection.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneController.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneLspX.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneLspY.cpp" />
     <ClCompile Include="windows\ppp\app\client\lsp\PaperAirplaneRoot.cpp" />
     <ClCompile Include="windows\ppp\ipv6\WIN32_IPv6Auxiliary.cpp" />
+    <ClCompile Include="windows\ppp\ipv6\WindowsIPv6RouteOwner.cpp" />
     <ClCompile Include="windows\ppp\net\proxies\HttpProxy.cpp" />
     <ClCompile Include="windows\ppp\net\QoSS.cpp" />
     <ClCompile Include="windows\ppp\net\Win32SocketAcceptor.cpp" />
@@ -859,6 +865,7 @@
     <ClInclude Include="ppp\app\server\VirtualInternetControlMessageProtocol.h" />
     <ClInclude Include="ppp\auxiliary\JsonAuxiliary.h" />
     <ClInclude Include="ppp\app\protocol\SessionResumeAuthenticator.h" />
+    <ClInclude Include="ppp\app\protocol\TransportAuthNegotiation.h" />
     <ClInclude Include="ppp\app\protocol\VirtualEthernetInformation.h" />
     <ClInclude Include="ppp\app\protocol\VirtualEthernetInformationFwd.h" />
     <ClInclude Include="ppp\app\ConsoleUI.h" />
@@ -883,6 +890,7 @@
     <ClInclude Include="ppp\configurations\AppConfigurationFwd.h" />
     <ClInclude Include="ppp\configurations\AppConfiguration.h" />
     <ClInclude Include="ppp\configurations\MappingConfiguration.h" />
+    <ClInclude Include="ppp\configurations\TransportAuthConfiguration.h" />
     <ClInclude Include="ppp\p2p\P2PDefs.h" />
     <ClInclude Include="ppp\app\mux\IMuxTransport.h" />
     <ClInclude Include="ppp\app\mux\MuxCoordinator.h" />
@@ -908,6 +916,7 @@
     <ClInclude Include="ppp\coroutines\asio\asio.h" />
     <ClInclude Include="ppp\coroutines\YieldContext.h" />
     <ClInclude Include="ppp\cryptography\EVP.h" />
+    <ClInclude Include="ppp\cryptography\noise\NoisePsk.h" />
     <ClInclude Include="ppp\cryptography\md5.h" />
     <ClInclude Include="ppp\cryptography\rc4.h" />
     <ClInclude Include="ppp\cryptography\digest.h" />
@@ -941,9 +950,11 @@
     <ClCompile Include="windows\ppp\tap\TapWindows.cpp" />
     <ClInclude Include="ppp\threading\Timer.h" />
     <ClInclude Include="ppp\net\asio\IAsynchronousWriteIoQueue.h" />
+    <ClInclude Include="ppp\transmissions\IAuthenticatedCarrierBinding.h" />
     <ClInclude Include="ppp\transmissions\ITcpipTransmission.h" />
     <ClInclude Include="ppp\transmissions\ITransmission.h" />
     <ClInclude Include="ppp\transmissions\IWebsocketTransmission.h" />
+    <ClInclude Include="ppp\transmissions\NoisePskAuthenticatedCarrierBinding.h" />
     <ClInclude Include="ppp\transmissions\proxys\IForwarding.h" />
     <ClInclude Include="ppp\transmissions\templates\WebSocket.h" />
     <ClInclude Include="resource.h" />
@@ -953,6 +964,9 @@
     <ClInclude Include="windows\ppp\app\client\lsp\PaperAirplaneLspY.h" />
     <ClInclude Include="windows\ppp\app\client\lsp\PaperAirplaneRoot.h" />
     <ClInclude Include="windows\ppp\ipv6\IPv6Auxiliary.h" />
+    <ClInclude Include="ppp\ipv6\IPv6ClientPolicy.h" />
+    <ClInclude Include="ppp\ipv6\IPv6RouteTransaction.h" />
+    <ClInclude Include="windows\ppp\ipv6\WindowsIPv6RouteOwner.h" />
     <ClInclude Include="windows\ppp\net\proxies\HttpProxy.h" />
     <ClInclude Include="windows\ppp\net\QoSS.h" />
     <ClInclude Include="windows\ppp\tap\tap-windows.h" />

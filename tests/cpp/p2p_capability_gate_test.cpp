@@ -4,6 +4,7 @@
 #include <ppp/p2p/P2PCapabilityGate.h>
 #include <ppp/p2p/P2PDefs.h>
 #include <ppp/p2p/P2PSocketProtector.h>
+#include <ppp/transmissions/IAuthenticatedCarrierBinding.h>
 #include <ppp/transmissions/ITransmission.h>
 
 #include <type_traits>
@@ -71,7 +72,16 @@ BOOST_AUTO_TEST_CASE(direct_requires_authenticated_exporter_and_socket_protectio
 }
 
 BOOST_AUTO_TEST_CASE(transmission_exporter_contract_is_explicit) {
+    using Binding = ppp::transmissions::IAuthenticatedCarrierBinding;
     using Transmission = ppp::transmissions::ITransmission;
+    static_assert(std::has_virtual_destructor_v<Binding>);
+    static_assert(std::is_same_v<decltype(&Binding::HasAuthenticatedSessionExporter),
+        bool (Binding::*)() const noexcept>);
+    static_assert(std::is_same_v<decltype(&Binding::ExportAuthenticatedSessionKey),
+        bool (Binding::*)(const char*, const std::uint8_t*, std::size_t,
+            std::uint8_t*, std::size_t) noexcept>);
+    static_assert(std::is_base_of_v<Binding, Transmission>);
+    static_assert(std::is_convertible_v<Transmission*, Binding*>);
     static_assert(std::is_same_v<decltype(&Transmission::HasAuthenticatedSessionExporter),
         bool (Transmission::*)() const noexcept>);
     static_assert(std::is_same_v<decltype(&Transmission::ExportAuthenticatedSessionKey),

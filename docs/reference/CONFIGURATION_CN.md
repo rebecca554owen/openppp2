@@ -66,6 +66,9 @@ client, virr, vbgp, telemetry, p2p, dns, geo-rules, routing
 | `websocket.ssl.verify-peer` | `true` |
 | `websocket.ssl.ciphersuites` | `GetDefaultCipherSuites()` |
 | `client.session_resume.enabled` / `server.session_resume.enabled` | `false` / `false` |
+| `client.transport-auth.enabled` / `server.transport-auth.enabled` | `false` / `false` |
+| `transport-auth.handshake-timeout-ms` | `5000` 毫秒（限制到 `1000..30000`） |
+| `transport-auth.keys` | `[]` |
 | `server.session_resume.grace_ms` | `60000` 毫秒 |
 | `routing.rules` | `""`（关闭 human policy） |
 | `routing.tcp-domain-sniff` | `false` |
@@ -92,9 +95,11 @@ Human domain 规则不要求启用 `dns.fake-ip.enabled`。Fake IP 关闭时，�
 
 ## 认证 L3 会话漫游
 
-`client.session_resume.enabled` 与 `server.session_resume.enabled` 是相互独立的总开关，默认均为 `false`。只有双方启用并在 WSS 上协商 v1 capability，且具体 `ISslWebsocketTransmission` 提供认证 TLS session exporter 时才启用 roaming。plain TCP、plain WebSocket、CDN、无 exporter 的 WSS 与 capability 不一致都 fail closed，回到普通 fresh-session 行为。
+`client.session_resume.enabled` 与 `server.session_resume.enabled` 是相互独立的总开关，默认均为 `false`。只有双方协商 v1 capability 且 carrier 提供认证 binding 时才启用 roaming。WSS 继续使用 TLS exporter；plain TCP 和 plain WebSocket 只有在双方对应的 `transport-auth.enabled` 策略也开启时才能使用 `noise-psk-v1`。旧 peer、策略关闭或不一致、无 exporter 的 WSS、未认证 plain carrier 都 fail closed，回到普通 fresh-session 行为。Noise 一旦被选择，认证失败时同一次 resume 尝试绝不降级为未认证 roaming。
 
-`server.session_resume.grace_ms` 限制服务端在合格 carrier 故障后只保留 L3 session/IP/NAT/UDP-manager 状态的时长；FRP mapping 和 VMUX 仍会关闭。认证 root 只驻留进程内且不序列化，因此服务端重启必然 fresh authenticate。启用 roaming 时，WSS listener 固定到 switcher owner `io_context`，以避免跨 executor handoff，但可能降低 accept/handshake 并行度。协议、威胁模型与 rollout 限制见 [认证 L3 会话漫游](../design/session-recovery/l3-roaming.md)。
+`transport-auth.keys` 最多接受八个条目：一个 `active` key、最多两个用于轮换的 `verify-only` key，以及可选的 `revoked` 元数据。key ID 长度为 1–63 个字符，首字符必须是小写字母或数字，其余只能使用 `[a-z0-9._-]`。每个 active 或 verify-only `secret-file` 必须恰好包含 64 个小写十六进制字符。在 POSIX 上，该文件必须是当前 uid 拥有的普通非符号链接文件，且 group/other 不得有任何权限（通常为 `0600`）。Windows 当前不支持 secret-file 加载，启用 transport authentication 会 fail closed。`transport-auth.handshake-timeout-ms` 限制在 1–30 秒。CDN/proxy ingress 暂不自动纳入；服务端 loopback 或无法分类的 ingress 不具备认证 roaming 资格。
+
+`server.session_resume.grace_ms` 限制服务端在合格 carrier 故障后只保留 L3 session/IP/NAT/UDP-manager 状态的时长；FRP mapping 和 VMUX 仍会关闭。认证 root 只驻留进程内且不序列化，因此服务端重启必然 fresh authenticate。启用 roaming 时，WSS listener 固定到 switcher owner `io_context`，以避免跨 executor handoff，但可能降低 accept/handshake 并行度。协议、威胁模型与 rollout 限制见 [认证 L3 会话漫游](../design/session-recovery/l3-roaming.md)和 [Noise PSK carrier 兼容性](../design/session-recovery/noise-psk-carrier-compatibility.md)。
 
 ## 安全相关示例片段
 
