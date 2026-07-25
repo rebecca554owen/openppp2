@@ -16,6 +16,7 @@ are intentionally not indexed in this repository snapshot; they are not current-
 stable-reference claims.
 
 - [Authenticated L3 session roaming](session-recovery/l3-roaming.md)
+- [Noise/PSK authenticated carrier compatibility](session-recovery/noise-psk-carrier-compatibility.md)
 - [P2P direct-channel protocol](p2p-direct-channel/protocol.md)
 - [P2P direct-channel state machine](p2p-direct-channel/state-machine.md)
 - [P2P direct-channel threat model](p2p-direct-channel/threat-model.md)

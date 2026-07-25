@@ -344,6 +344,8 @@ namespace ppp {
             config.key.delta_encode = true;
             config.key.shuffle_data = true;
             config.key.simd_auto = true;
+            config.transport_auth.Clear();
+            config.transport_auth_keyring.reset();
 
             config.server.log = "";
             config.server.node = 0;
@@ -367,6 +369,7 @@ namespace ppp {
             config.server.peer_routing.distribute = true;
             config.server.session_resume.enabled = false;
             config.server.session_resume.grace_ms = 60000;
+            config.server.transport_auth.enabled = false;
 
             config.client.mappings.clear();
             config.client.guid = StringAuxiliary::Int128ToGuidString(MAKE_OWORD(UINT64_MAX, UINT64_MAX));
@@ -377,6 +380,7 @@ namespace ppp {
             config.client.reconnections.max_delay = 15;
             config.client.reconnections.jitter_percent = 20;
             config.client.session_resume.enabled = false;
+            config.client.transport_auth.enabled = false;
             config.client.http_proxy.bind = "";
             config.client.http_proxy.port = PPP_DEFAULT_HTTP_PROXY_PORT;
             config.client.socks_proxy.bind = "";
@@ -678,6 +682,7 @@ namespace ppp {
          */
         bool AppConfiguration::Loaded() noexcept {
             AppConfiguration& config = *this;
+            std::shared_ptr<const TransportAuthKeyringSnapshot> transport_auth_candidate;
             if (config.concurrent < 1) {
                 config.concurrent = Thread::GetProcessorCount();
             }
@@ -838,6 +843,18 @@ namespace ppp {
             }
             config.client.reconnections.jitter_percent =
                 std::max(0, std::min(100, config.client.reconnections.jitter_percent));
+
+            const bool transport_auth_enabled =
+                config.client.transport_auth.enabled || config.server.transport_auth.enabled;
+            if (!config.transport_auth.Normalize(transport_auth_enabled)) {
+                return false;
+            }
+            if (transport_auth_enabled) {
+                transport_auth_candidate = BuildTransportAuthKeyringSnapshot(config.transport_auth);
+                if (!transport_auth_candidate) {
+                    return false;
+                }
+            }
 
             int* pts[] = {
                 &config.tcp.listen.port,
@@ -1195,6 +1212,7 @@ namespace ppp {
 
             config._lcgmods[LCGMOD_TYPE_TRANSMISSION] = ppp::cryptography::ssea::lcgmod(config.key.kf, EVP_HEADER_MSS_MIN_MOD, EVP_HEADER_MSS_MAX_MOD);
             config._lcgmods[LCGMOD_TYPE_STATIC] = ppp::cryptography::ssea::lcgmod(config.key.kf, VEP_HEADER_MSS_MIN_MOD, VEP_HEADER_MSS_MAX_MOD);
+            config.transport_auth_keyring = std::move(transport_auth_candidate);
             return true;
         }
 
@@ -1806,6 +1824,33 @@ namespace ppp {
             AssignBoolIfPresent(config.key.simd_auto, json["key"]["simd-auto"]);
             ppp::cryptography::EVP::SetSimdAuto(config.key.simd_auto);
 
+            const Json::Value& transport_auth_json = json["transport-auth"];
+            if (transport_auth_json.isObject()) {
+                AssignIfPresent(config.transport_auth.handshake_timeout_ms,
+                    transport_auth_json["handshake-timeout-ms"]);
+                const Json::Value& keys_json = transport_auth_json["keys"];
+                if (!keys_json.isNull()) {
+                    if (!keys_json.isArray()) {
+                        return false;
+                    }
+                    config.transport_auth.keys.clear();
+                    for (Json::ArrayIndex i = 0; i < keys_json.size(); ++i) {
+                        const Json::Value& key_json = keys_json[i];
+                        if (!key_json.isObject()) {
+                            return false;
+                        }
+                        TransportAuthKeyMetadata metadata;
+                        metadata.id = JsonAuxiliary::AsValue<std::string>(key_json["id"]);
+                        metadata.secret_file = JsonAuxiliary::AsValue<std::string>(key_json["secret-file"]);
+                        const std::string state = JsonAuxiliary::AsValue<std::string>(key_json["state"]);
+                        if (!TryParseTransportAuthKeyState(state, metadata.state)) {
+                            return false;
+                        }
+                        config.transport_auth.keys.emplace_back(std::move(metadata));
+                    }
+                }
+            }
+
             config.server.log = JsonAuxiliary::AsValue<ppp::string>(json["server"]["log"]);
             config.server.node = JsonAuxiliary::AsValue<int>(json["server"]["node"]);
             AssignBoolIfPresent(config.server.subnet, json["server"]["subnet"]);
@@ -1850,6 +1895,8 @@ namespace ppp {
                 json["server"]["session_resume"]["enabled"]);
             AssignIfPresent(config.server.session_resume.grace_ms,
                 json["server"]["session_resume"]["grace_ms"]);
+            AssignBoolIfPresent(config.server.transport_auth.enabled,
+                json["server"]["transport-auth"]["enabled"]);
 
             LoadAllMappings(config, json["client"]["mappings"]);
             LoadAllRoutes(config.client.routes, json["client"]["routes"]);
@@ -1864,6 +1911,8 @@ namespace ppp {
                 json["client"]["reconnections"]["jitter_percent"]);
             AssignBoolIfPresent(config.client.session_resume.enabled,
                 json["client"]["session_resume"]["enabled"]);
+            AssignBoolIfPresent(config.client.transport_auth.enabled,
+                json["client"]["transport-auth"]["enabled"]);
             config.client.guid = JsonAuxiliary::AsValue<ppp::string>(json["client"]["guid"]);
             config.client.server = JsonAuxiliary::AsValue<ppp::string>(json["client"]["server"]);
             config.client.server_proxy = JsonAuxiliary::AsValue<ppp::string>(json["client"]["server-proxy"]);
@@ -2187,6 +2236,25 @@ namespace ppp {
             key["simd-auto"] = config.key.simd_auto;
             root["key"] = key;
 
+            if (config.client.transport_auth.enabled || config.server.transport_auth.enabled ||
+                config.transport_auth.handshake_timeout_ms != TransportAuthConfiguration::DefaultHandshakeTimeoutMs ||
+                !config.transport_auth.keys.empty()) {
+                Json::Value transport_auth;
+                transport_auth["handshake-timeout-ms"] = config.transport_auth.handshake_timeout_ms;
+                Json::Value keys(Json::arrayValue);
+                for (const TransportAuthKeyMetadata& metadata : config.transport_auth.keys) {
+                    Json::Value item;
+                    item["id"] = metadata.id.c_str();
+                    item["state"] = TransportAuthKeyStateToString(metadata.state);
+                    if (!metadata.secret_file.empty()) {
+                        item["secret-file"] = metadata.secret_file.c_str();
+                    }
+                    keys.append(item);
+                }
+                transport_auth["keys"] = keys;
+                root["transport-auth"] = transport_auth;
+            }
+
             // Set server structure
             Json::Value server;
             server["log"] = config.server.log;
@@ -2236,6 +2304,9 @@ namespace ppp {
             }
             server["session_resume"]["enabled"] = config.server.session_resume.enabled;
             server["session_resume"]["grace_ms"] = config.server.session_resume.grace_ms;
+            if (config.server.transport_auth.enabled) {
+                server["transport-auth"]["enabled"] = true;
+            }
             root["server"] = server;
 
             // Set client structure
@@ -2296,6 +2367,9 @@ namespace ppp {
             client["reconnections"]["max_delay"] = config.client.reconnections.max_delay;
             client["reconnections"]["jitter_percent"] = config.client.reconnections.jitter_percent;
             client["session_resume"]["enabled"] = config.client.session_resume.enabled;
+            if (config.client.transport_auth.enabled) {
+                client["transport-auth"]["enabled"] = true;
+            }
             client["guid"] = config.client.guid;
             client["server"] = config.client.server;
             client["server-proxy"] = config.client.server_proxy;

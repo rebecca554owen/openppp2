@@ -143,6 +143,9 @@ namespace ppp {
                 void                                                    MarkFinalize() noexcept { finalize_ = true; }
 
             private:
+                /** @brief Schedules one SENDTO frame on the transmission coroutine strand. */
+                bool                                                    SendToClient(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& destinationEP, const Byte* packet, int packet_length) noexcept;
+
                 /** @brief Closes the UDP socket and releases the transmission reference. */
                 void                                                    Finalize() noexcept;
 

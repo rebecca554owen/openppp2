@@ -61,16 +61,51 @@ namespace ppp {
                 }
             }
 
+            bool VirtualEthernetDatagramPort::SendToClient(
+                const ITransmissionPtr& transmission,
+                const boost::asio::ip::udp::endpoint& destinationEP,
+                const Byte* packet, int packet_length) noexcept {
+                if (NULLPTR == transmission || packet_length < 0 ||
+                    (NULLPTR == packet && packet_length != 0)) {
+                    return false;
+                }
+
+                std::shared_ptr<boost::asio::io_context> context = transmission->GetContext();
+                ITransmission::StrandPtr strand = transmission->GetStrand();
+                if (NULLPTR == context || NULLPTR == strand) {
+                    return false;
+                }
+
+                auto payload = std::make_shared<std::vector<Byte>>();
+                if (packet_length > 0) {
+                    payload->assign(packet, packet + packet_length);
+                }
+
+                udp::ServerUdpRelayHostPorts ports = ports_;
+                VirtualEthernetExchangerPtr exchanger = exchanger_;
+                boost::asio::ip::udp::endpoint sourceEP = sourceEP_;
+                return YieldContext::Spawn(NULLPTR, *context, strand.get(),
+                    [ports = std::move(ports), exchanger = std::move(exchanger),
+                     transmission, sourceEP, destinationEP, payload, packet_length](
+                        YieldContext& y) noexcept {
+                        (void)exchanger;
+                        Byte* data = packet_length > 0 ? payload->data() : NULLPTR;
+                        if (!ports.do_send_to(transmission, sourceEP, destinationEP,
+                                data, packet_length, y)) {
+                            transmission->Dispose();
+                        }
+                    });
+            }
+
             /**
              * @brief Closes socket, sends a close signal when needed, and unregisters this port.
              */
             void VirtualEthernetDatagramPort::Finalize() noexcept {
                 std::shared_ptr<ITransmission> transmission = std::move(transmission_); 
                 if (sendto_ && !finalize_) {
-                    if (NULLPTR != transmission) {
-                        if (!ports_.do_send_to(transmission, sourceEP_, sourceEP_, NULLPTR, 0, nullof<YieldContext>())) {
-                            transmission->Dispose();
-                        }
+                    if (NULLPTR != transmission &&
+                        !SendToClient(transmission, sourceEP_, NULLPTR, 0)) {
+                        transmission->Dispose();
                     }
                 }
 
@@ -186,7 +221,8 @@ namespace ppp {
                             }
 
                             boost::asio::ip::udp::endpoint remoteEP = Ipep::V6ToV4(remoteEP_);
-                            if (ports_.do_send_to(transmission, sourceEP_, remoteEP, buffer_.get(), bytes_transferred, nullof<YieldContext>())) {
+                            if (SendToClient(transmission, remoteEP,
+                                    buffer_.get(), bytes_transferred)) {
                                 Update();
                             }
                             else {

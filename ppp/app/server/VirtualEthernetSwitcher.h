@@ -466,6 +466,11 @@ namespace ppp {
                  */
                 int                                                     Run(const ContextPtr& context, const ITransmissionPtr& transmission, YieldContext& y) noexcept;
                 /**
+                 * @brief Authenticates a negotiated plain TCP/WebSocket carrier before session dispatch.
+                 * @return True for a completed authentication or a policy-gated legacy bypass.
+                 */
+                bool                                                    AuthenticatePlainTransport(const ITransmissionPtr& transmission, const Int128& session_id, YieldContext& y) noexcept;
+                /**
                  * @brief Removes an exchanger from the table by raw pointer key.
                  * @param exchanger Raw pointer used as the lookup key.
                  * @return Shared pointer to the removed exchanger; null if not found.
