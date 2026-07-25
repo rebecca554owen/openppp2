@@ -1,6 +1,7 @@
 #include <ppp/stdafx.h>
 #include <ppp/app/client/route/RouteCoordinator.h>
 #include <ppp/app/client/route/RouteSpecs.h>
+#include <ppp/app/client/routing/HumanRoutingRouteSpecs.h>
 #include <ppp/diagnostics/Telemetry.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
 
@@ -258,26 +259,16 @@ namespace ppp {
 
                     const RouteStateSnapshot snapshot = Snapshot();
                     const std::vector<RouteSpec> rib_specs = BuildRouteSpecs(snapshot.rib);
+                    const routing::HumanRoutingRouteSpecPlan human_plan =
+                        routing::BuildHumanRoutingRouteSpecs(
+                            input,
+                            routing::HumanRoutingRouteEnvironment::Desktop);
+                    if (human_plan.invalid_count != 0) {
+                        return false;
+                    }
                     DnsRouteSpecPlan dns_plan = BuildDnsRouteSpecs(input);
-                    std::vector<RouteSpec> specs;
-                    specs.reserve(rib_specs.size() + dns_plan.routes.size());
-                    auto append_unique = [&specs](const RouteSpec& route) {
-                        const auto same = [&route](const RouteSpec& value) noexcept {
-                            return value.network == route.network &&
-                                value.gateway == route.gateway &&
-                                value.prefix == route.prefix &&
-                                value.interface_name == route.interface_name;
-                        };
-                        if (std::find_if(specs.begin(), specs.end(), same) == specs.end()) {
-                            specs.emplace_back(route);
-                        }
-                    };
-                    for (const RouteSpec& route : rib_specs) {
-                        append_unique(route);
-                    }
-                    for (const RouteSpec& route : dns_plan.routes) {
-                        append_unique(route);
-                    }
+                    const std::vector<RouteSpec> specs = MergeRouteSpecs(
+                        rib_specs, human_plan.routes, dns_plan.routes);
                     {
                         std::lock_guard<std::mutex> operation_lock(operation_mutex_);
                         if (!platform_) {

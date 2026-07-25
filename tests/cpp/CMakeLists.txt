@@ -412,7 +412,6 @@ openppp2_add_cpp_test(client_connection_teardown_state_test SOURCES
 openppp2_add_cpp_test(route_coordinator_test SOURCES
     route_coordinator_test.cpp
     support/ppp_test_stubs.cpp
-    support/route_coordinator_platform_stub.cpp
     "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/route/RouteCoordinator.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/route/RouteCoordinator_mobile.cpp"
@@ -420,6 +419,7 @@ openppp2_add_cpp_test(route_coordinator_test SOURCES
     "${OPENPPP2_ROOT}/ppp/app/client/route/WindowsRoutePlatform.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/route/RouteSpecs.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/route/RouteState.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/client/routing/HumanRoutingRouteSpecs.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
 target_compile_definitions(route_coordinator_test PRIVATE
     OPENPPP2_ROUTE_TEST_MOBILE)
@@ -555,3 +555,42 @@ target_link_libraries(vdns_request_lifecycle_test PRIVATE Threads::Threads)
 openppp2_add_cpp_test(mapping_port_connect_reentrancy_test SOURCES
     mapping_port_connect_reentrancy_test.cpp)
 target_link_libraries(mapping_port_connect_reentrancy_test PRIVATE Threads::Threads)
+openppp2_add_cpp_test(geo_data_reader_test SOURCES
+    geo_data_reader_test.cpp
+    "${OPENPPP2_ROOT}/ppp/app/client/routing/GeoDataReader.cpp")
+openppp2_add_cpp_test(human_routing_rules_test SOURCES
+    human_routing_rules_test.cpp
+    support/ppp_test_stubs.cpp
+    "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/client/routing/GeoDataReader.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/client/routing/HumanRoutingRules.cpp"
+    "${OPENPPP2_ROOT}/ppp/dns/DnsProviderCatalog.cpp")
+target_link_libraries(human_routing_rules_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(tcp_routing_selector_test SOURCES
+    tcp_routing_selector_test.cpp
+    "${OPENPPP2_ROOT}/ppp/app/client/routing/TcpRoutingSelector.cpp")
+openppp2_add_cpp_test(udp_routing_selector_test SOURCES
+    udp_routing_selector_test.cpp
+    "${OPENPPP2_ROOT}/ppp/app/client/routing/UdpRoutingSelector.cpp")
+openppp2_add_cpp_test(human_dns_query_policy_test SOURCES
+    human_dns_query_policy_test.cpp)
+openppp2_add_cpp_test(protocol_sniffer_test SOURCES
+    protocol_sniffer_test.cpp
+    "${OPENPPP2_ROOT}/ppp/app/client/routing/ProtocolSniffer.cpp")
+openppp2_add_cpp_test(client_underlying_socket_protector_test SOURCES
+    client_underlying_socket_protector_test.cpp
+    "${OPENPPP2_ROOT}/ppp/app/client/ClientUnderlyingSocketProtector.cpp")
+target_link_libraries(client_underlying_socket_protector_test PRIVATE
+    Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(rinetd_socket_protector_contract_test SOURCES
+    rinetd_socket_protector_contract_test.cpp)
+set_tests_properties(rinetd_socket_protector_contract_test PROPERTIES
+    WORKING_DIRECTORY "${OPENPPP2_ROOT}")
+openppp2_add_cpp_test(tcp_domain_sniff_lifecycle_test SOURCES
+    tcp_domain_sniff_lifecycle_test.cpp)
+set_tests_properties(tcp_domain_sniff_lifecycle_test PROPERTIES
+    WORKING_DIRECTORY "${OPENPPP2_ROOT}")
+openppp2_add_cpp_test(app_configuration_routing_test SOURCES
+    app_configuration_routing_test.cpp)
+set_tests_properties(app_configuration_routing_test PROPERTIES
+    WORKING_DIRECTORY "${OPENPPP2_ROOT}")

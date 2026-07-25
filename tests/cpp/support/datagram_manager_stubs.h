@@ -24,6 +24,7 @@ namespace ppp {
                         std::atomic<int> onmessage{0};
                         std::atomic<int> finalize{0};
                         std::atomic<int> rebind{0};
+                        std::atomic<int> last_action{-1};
                         std::atomic<const void*> transmission{nullptr};
 
                         void Reset() noexcept;

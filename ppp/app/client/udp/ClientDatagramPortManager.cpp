@@ -102,6 +102,12 @@ namespace ppp {
 
                 bool ClientDatagramPortManager::SendTo(const boost::asio::ip::udp::endpoint& source,
                     const boost::asio::ip::udp::endpoint& destination, const void* packet, int packet_size) noexcept {
+                    return SendTo(source, destination, packet, packet_size, routing::RoutingAction::Auto);
+                }
+
+                bool ClientDatagramPortManager::SendTo(const boost::asio::ip::udp::endpoint& source,
+                    const boost::asio::ip::udp::endpoint& destination, const void* packet, int packet_size,
+                    routing::RoutingAction action) noexcept {
                     if (NULLPTR == packet || packet_size < 1) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                     }
@@ -120,7 +126,7 @@ namespace ppp {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpMappingFailed);
                     }
 
-                    return datagram->SendTo(packet, packet_size, destination);
+                    return datagram->SendTo(packet, packet_size, destination, action);
                 }
 
                 bool ClientDatagramPortManager::ReceiveFromDestination(const boost::asio::ip::udp::endpoint& source,

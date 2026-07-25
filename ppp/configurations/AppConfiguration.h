@@ -319,6 +319,10 @@ namespace ppp {
                 int                                                         migration_grace_ms;     ///< NAT rebind grace period in ms (default 5000).
                 int                                                         buffer_pool_count;      ///< Buffer pool count per channel (default 64).
             }                                                               p2p;            ///< Optional P2P virtual-subnet coordination settings.
+            struct {
+                ppp::string                                                 rules;            ///< Explicit human-readable routing rules file path; empty preserves legacy routing inputs.
+                bool                                                        tcp_domain_sniff; ///< Inspect initial TCP payloads for routing domains when true; default false.
+            }                                                               routing;          ///< Unified human routing rules configuration.
             /**
              * @brief GeoIP/GeoSite rule generation configuration (Phase G).
              *
@@ -327,8 +331,8 @@ namespace ppp {
              * to the existing bypass and dns-rules loading paths.
              *
              * Binary geoip.dat/geosite.dat files can also be downloaded and
-             * cached for future parsers; Phase G does not parse those binary
-             * dat files yet.
+             * are parsed by the human routing rules parser when referenced by
+             * its GeoIP or GeoSite declarations.
              */
             struct GeoRulesConfiguration final {
                 bool                                                        enabled;               ///< Enable geo-rules generation; default false (no-op).

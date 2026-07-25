@@ -418,6 +418,9 @@ namespace ppp {
             config.p2p.migration_grace_ms = 5000;
             config.p2p.buffer_pool_count = 64;
 
+            config.routing.rules = "";
+            config.routing.tcp_domain_sniff = false;
+
             config.dns.servers.domestic = "doh.pub";
             config.dns.servers.foreign = "cloudflare";
             config.dns.servers.domestic_entries.clear();
@@ -546,6 +549,7 @@ namespace ppp {
                     &config.dns.servers.domestic,
                     &config.dns.servers.foreign,
                     &config.dns.ecs.override_ip,
+                    &config.routing.rules,
                     &config.geo_rules.country,
                     &config.geo_rules.geoip_dat,
                     &config.geo_rules.geosite_dat,
@@ -1882,6 +1886,8 @@ namespace ppp {
             AssignIfPresent(config.virr.update_interval, json["virr"]["update-interval"]);
             AssignIfPresent(config.virr.retry_interval, json["virr"]["retry-interval"]);
             AssignIfPresent(config.vbgp.update_interval, json["vbgp"]["update-interval"]);
+            AssignIfPresent(config.routing.rules, json["routing"]["rules"]);
+            AssignBoolIfPresent(config.routing.tcp_domain_sniff, json["routing"]["tcp-domain-sniff"]);
 
             AssignBoolIfPresent(config.telemetry.enabled, json["telemetry"]["enabled"]);
             AssignIfPresent(config.telemetry.level, json["telemetry"]["level"]);
@@ -2314,6 +2320,9 @@ namespace ppp {
             Json::Value vbgp;
             vbgp["update-interval"] = config.vbgp.update_interval;
             root["vbgp"] = vbgp;
+
+            root["routing"]["rules"] = config.routing.rules;
+            root["routing"]["tcp-domain-sniff"] = config.routing.tcp_domain_sniff;
 
             Json::Value telemetry;
             telemetry["enabled"] = config.telemetry.enabled;

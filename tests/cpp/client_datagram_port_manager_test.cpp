@@ -216,6 +216,34 @@ BOOST_AUTO_TEST_CASE(send_to_creates_port_and_forwards) {
     BOOST_TEST(spy_ns::DatagramPortSpyInstance().sendto == 1);
 }
 
+BOOST_AUTO_TEST_CASE(send_to_forwards_each_datagram_routing_action) {
+    spy_ns::DatagramPortSpyInstance().Reset();
+    udp_client::ClientDatagramPortManager m(MakeFilledPorts());
+    const auto source = Ep("10.0.0.13", 1700);
+    const auto destination = Ep("8.8.8.8", 53);
+    unsigned char packet = 1;
+    auto& spy = spy_ns::DatagramPortSpyInstance();
+
+    BOOST_REQUIRE(m.SendTo(source, destination, &packet, 1,
+        ppp::app::client::routing::RoutingAction::Direct));
+    const auto port = m.GetDatagramPort(source);
+    BOOST_REQUIRE((port != nullptr));
+    BOOST_TEST(spy.last_action.load() ==
+        static_cast<int>(ppp::app::client::routing::RoutingAction::Direct));
+
+    BOOST_REQUIRE(m.SendTo(source, destination, &packet, 1,
+        ppp::app::client::routing::RoutingAction::Proxy));
+    BOOST_TEST((m.GetDatagramPort(source) == port));
+    BOOST_TEST(spy.last_action.load() ==
+        static_cast<int>(ppp::app::client::routing::RoutingAction::Proxy));
+
+    BOOST_REQUIRE(m.SendTo(source, destination, &packet, 1));
+    BOOST_TEST((m.GetDatagramPort(source) == port));
+    BOOST_TEST(spy.last_action.load() ==
+        static_cast<int>(ppp::app::client::routing::RoutingAction::Auto));
+    BOOST_TEST(spy.sendto.load() == 3);
+}
+
 BOOST_AUTO_TEST_CASE(receive_empty_packet_finalizes_port) {
     spy_ns::DatagramPortSpyInstance().Reset();
     udp_client::ClientDatagramPortManager m(MakeFilledPorts());

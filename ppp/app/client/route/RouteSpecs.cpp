@@ -2,6 +2,9 @@
 #include <ppp/app/client/route/RouteSpecs.h>
 #include <ppp/net/native/rib.h>
 
+#include <map>
+#include <set>
+
 namespace ppp::app::client::route {
 
 std::vector<RouteSpec> BuildRouteSpecs(
@@ -135,6 +138,54 @@ DnsRouteSpecPlan BuildDnsRouteSpecs(const RoutePlanInput& input) noexcept {
     }
 
     return plan;
+}
+
+std::vector<RouteSpec> MergeRouteSpecs(
+    const std::vector<RouteSpec>& legacy,
+    const std::vector<RouteSpec>& human,
+    const std::vector<RouteSpec>& dns_and_fake) noexcept {
+    using RouteKey = std::pair<uint32_t, int>;
+
+    std::map<RouteKey, RouteSpec> merged;
+    std::set<RouteKey> protected_legacy_hosts;
+    for (const RouteSpec& route : legacy) {
+        const RouteKey key(route.network, route.prefix);
+        merged[key] = route;
+        if (route.prefix == 32) {
+            protected_legacy_hosts.emplace(key);
+        }
+    }
+
+    auto overlay = [&merged, &protected_legacy_hosts](
+        const std::vector<RouteSpec>& routes) {
+        for (const RouteSpec& route : routes) {
+            const RouteKey key(route.network, route.prefix);
+            // The legacy RIB does not retain remote-route provenance, so every
+            // pre-existing /32 is protected conservatively. The cost is that a
+            // human /32 cannot override an ordinary legacy host route either.
+            if (route.prefix == 32 &&
+                protected_legacy_hosts.find(key) != protected_legacy_hosts.end()) {
+                continue;
+            }
+            merged[key] = route;
+        }
+    };
+    overlay(human);
+    overlay(dns_and_fake);
+
+    std::vector<RouteSpec> routes;
+    routes.reserve(merged.size());
+    for (const auto& item : merged) {
+        routes.emplace_back(item.second);
+    }
+    std::sort(routes.begin(), routes.end(),
+        [](const RouteSpec& left, const RouteSpec& right) noexcept {
+            return std::make_tuple(ntohl(left.network), left.prefix,
+                       ntohl(left.gateway), left.interface_name) <
+                std::make_tuple(ntohl(right.network), right.prefix,
+                       ntohl(right.gateway), right.interface_name);
+        });
+    return routes;
 }
 
 }

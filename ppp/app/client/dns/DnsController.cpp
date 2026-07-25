@@ -65,6 +65,22 @@ boost::asio::ip::address DnsController::RewriteFakeIpAddress(
     return policy_ ? policy_->RewriteFakeIpAddress(address) : address;
 }
 
+std::shared_ptr<const routing::HumanRoutingRules> DnsController::GetHumanRoutingRules() const noexcept {
+    return policy_ ? policy_->GetHumanRoutingRules() : nullptr;
+}
+
+bool DnsController::ResolveDestination(
+    const ppp::net::IPEndPoint& endpoint,
+    routing::ResolvedDestination& destination) const noexcept {
+    if (policy_) {
+        return policy_->ResolveDestination(endpoint, destination);
+    }
+    destination = routing::ResolvedDestination{};
+    destination.original_endpoint = endpoint;
+    destination.connect_endpoint = endpoint;
+    return true;
+}
+
 bool DnsController::GetFakeIpRoute(uint32_t& network, int& prefix) const noexcept {
     return policy_ && policy_->GetFakeIpRoute(network, prefix);
 }

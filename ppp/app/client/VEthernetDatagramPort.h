@@ -40,6 +40,7 @@
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/transmissions/ITransmission.h>
 #include <ppp/app/client/udp/UdpRelayHost.h>
+#include <ppp/app/client/routing/UdpRoutingSelector.h>
 
 #if defined(_ANDROID)
 #include <linux/ppp/net/ProtectorNetwork.h>
@@ -106,6 +107,7 @@ namespace ppp {
                     std::shared_ptr<Byte>                               packet;        ///< Datagram payload buffer.
                     int                                                 packet_length = 0; ///< Payload length in bytes.
                     boost::asio::ip::udp::endpoint                      destinationEP; ///< Target UDP endpoint.
+                    routing::RoutingAction                              action = routing::RoutingAction::Auto; ///< Per-datagram routing policy.
                 }                                                       Message;
 
                 /** @brief Queue of pending outbound messages on Android. */
@@ -182,7 +184,7 @@ namespace ppp {
                 virtual void                                            Dispose() noexcept;
 
                 /**
-                 * @brief Sends a UDP payload to the destination endpoint via the remote exchanger.
+                 * @brief Sends a UDP payload using the legacy automatic routing policy.
                  *
                  * @param packet        Payload buffer pointer.
                  * @param packet_length Payload length in bytes.
@@ -191,6 +193,18 @@ namespace ppp {
                  * @note Refreshes the inactivity timeout on success.
                  */
                 virtual bool                                            SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept;
+
+                /**
+                 * @brief Sends a UDP payload using the supplied per-datagram routing action.
+                 *
+                 * @param packet        Payload buffer pointer.
+                 * @param packet_length Payload length in bytes.
+                 * @param destinationEP Target UDP endpoint on the remote network.
+                 * @param action        Routing action evaluated independently for this datagram.
+                 * @return true if the selected path accepted the datagram; false on error or
+                 *         when direct routing is unsupported and therefore rejected fail-closed.
+                 */
+                virtual bool                                            SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP, routing::RoutingAction action) noexcept;
 
                 /**
                  * @brief Replaces the tunnel carrier while retaining this logical UDP flow.
@@ -205,8 +219,9 @@ namespace ppp {
                  * @brief Opens the Android protected UDP socket and starts the loopback receive loop.
                  *
                  * @param y  Coroutine yield context; blocks until the socket is ready.
-                 * @return true if the socket was opened and the receive loop started; false otherwise.
-                 * @note Must be called from a coroutine before any SendTo() calls on Android.
+                 * @return true if the socket was protected and the receive loop started; false otherwise.
+                 * @note ProtectorNetwork is mandatory: a missing protector or failed Protect() call
+                 *       fails closed before readiness, queued-message flush, or receive-loop startup.
                  */
                 bool                                                    Open(ppp::coroutines::YieldContext& y) noexcept;
 
