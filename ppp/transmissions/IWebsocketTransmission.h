@@ -29,12 +29,18 @@ namespace ppp {
             virtual ~IWebsocketTransmission()                                          noexcept;
 
         public:
+            AuthenticatedCarrierKind GetAuthenticatedCarrierKind() const noexcept override {
+                return AuthenticatedCarrierKind::WebSocket;
+            }
+
+        public:
             /** @brief Optional host override for websocket handshake. */
             ppp::string                                                 Host;
             /** @brief Optional path override for websocket handshake. */
             ppp::string                                                 Path;
 
         protected:
+            bool ShiftToScheduler() noexcept override;
             /**
              * @brief Performs websocket client/server handshake.
              * @param configuration Runtime websocket configuration.
@@ -88,6 +94,15 @@ namespace ppp {
             ppp::string                                                 Path;
 
         public:
+            AuthenticatedCarrierKind GetAuthenticatedCarrierKind() const noexcept override {
+                return AuthenticatedCarrierKind::TlsWebSocket;
+            }
+            AuthenticatedCarrierMethod GetAuthenticatedCarrierMethod() const noexcept override {
+                return AuthenticatedCarrierMethod::TlsExporterV1;
+            }
+            bool IsAuthenticatedCarrierBindingActive() const noexcept override {
+                return HasAuthenticatedSessionExporter();
+            }
             void Dispose() noexcept override;
             bool HasAuthenticatedSessionExporter() const noexcept override;
             bool ExportAuthenticatedSessionKey(
@@ -101,6 +116,7 @@ namespace ppp {
             std::atomic_bool exporter_disabled_{false};
 
         protected:
+            bool ShiftToScheduler() noexcept override;
             /**
              * @brief Performs TLS websocket client/server handshake.
              * @param configuration Runtime websocket configuration.

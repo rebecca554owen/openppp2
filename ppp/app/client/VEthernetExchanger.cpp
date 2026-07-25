@@ -9,6 +9,7 @@
 #include <ppp/app/protocol/VirtualEthernetPacket.h>
 #include <ppp/app/protocol/VirtualEthernetPathMtu.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
+#include <ppp/app/protocol/TransportAuthNegotiation.h>
 #include <ppp/app/mux/MuxTransportAdapter.h>
 #include <ppp/app/mux/MuxCoordinator.h>
 #include <ppp/app/P2PCandidateAdapter.h>
@@ -46,6 +47,7 @@
 #include <limits>
 
 #include <openssl/crypto.h>
+#include <openssl/rand.h>
 
 #include <ppp/transmissions/ITcpipTransmission.h>
 #include <ppp/transmissions/IWebsocketTransmission.h>
@@ -582,6 +584,113 @@ namespace ppp {
                 return DoInformation(transmission, envelope, y);
             }
 
+            bool VEthernetExchanger::AuthenticatePlainTransport(
+                const ITransmissionPtr& transmission,
+                YieldContext& y) noexcept {
+                using ppp::app::protocol::TransportAuthCarrier;
+                using ppp::app::protocol::TransportAuthControl;
+                using ppp::app::protocol::TransportAuthInitiator;
+                using ppp::app::protocol::TransportAuthNegotiationContext;
+
+                const auto fail = [&transmission](
+                    ppp::diagnostics::ErrorCode error) noexcept -> bool {
+                    ppp::diagnostics::SetLastErrorCode(error);
+                    if (transmission) {
+                        transmission->Dispose();
+                    }
+                    return false;
+                };
+                if (!transmission) {
+                    return fail(ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                }
+
+                TransportAuthNegotiationContext context;
+                const auto kind = transmission->GetAuthenticatedCarrierKind();
+                if (kind == ppp::transmissions::AuthenticatedCarrierKind::Tcp) {
+                    context.carrier = TransportAuthCarrier::Tcp;
+                }
+                elif(kind == ppp::transmissions::AuthenticatedCarrierKind::WebSocket) {
+                    context.carrier = TransportAuthCarrier::WebSocket;
+                }
+                else {
+                    return fail(ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                }
+                ppp::p2p::Int128ToBytes(GetId(), context.session_id.data());
+
+                std::array<std::uint8_t, 16> random_token{};
+                SessionResumeArrayCleanser random_token_cleanser(random_token);
+                if (RAND_bytes(random_token.data(), static_cast<int>(random_token.size())) != 1) {
+                    return fail(ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                }
+                const ppp::string encoded_token = EncodeSessionResumeHex(random_token);
+                context.token.assign(encoded_token.data(), encoded_token.size());
+
+                AppConfigurationPtr configuration = GetConfiguration();
+                TransportAuthInitiator initiator(
+                    configuration ? configuration->transport_auth_keyring : nullptr,
+                    context);
+                const auto send_control = [this, &transmission, &y](
+                    const TransportAuthControl& control) noexcept -> bool {
+                    InformationEnvelope envelope;
+                    envelope.Base.Clear();
+                    envelope.Extensions.TransportAuth = control;
+                    envelope.ExtendedJson = envelope.Extensions.ToJson();
+                    return DoInformation(transmission, envelope, y);
+                };
+                const auto read_control = [&transmission, &y](
+                    TransportAuthControl& control) noexcept -> bool {
+                    InformationEnvelope envelope;
+                    if (!ReadInformation(transmission, envelope, y)) {
+                        return false;
+                    }
+                    control = envelope.Extensions.TransportAuth;
+                    envelope.Extensions.TransportAuth.Clear();
+                    if (!control.HasAny() || envelope.Extensions.HasAny()) {
+                        ppp::diagnostics::SetLastErrorCode(
+                            ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
+                        return false;
+                    }
+                    return true;
+                };
+
+                TransportAuthControl advertisement;
+                if (!initiator.CreateAdvertisement(advertisement) ||
+                    !send_control(advertisement)) {
+                    return fail(ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                }
+
+                TransportAuthControl selection;
+                TransportAuthControl proof;
+                if (!read_control(selection)) {
+                    const auto error = ppp::diagnostics::GetLastErrorCode() ==
+                        ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid
+                        ? ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid
+                        : ppp::diagnostics::ErrorCode::SessionAuthFailed;
+                    return fail(error);
+                }
+                if (!initiator.ConsumeSelection(selection, proof) ||
+                    !send_control(proof)) {
+                    return fail(ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                }
+
+                TransportAuthControl acknowledgement;
+                if (!read_control(acknowledgement)) {
+                    const auto error = ppp::diagnostics::GetLastErrorCode() ==
+                        ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid
+                        ? ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid
+                        : ppp::diagnostics::ErrorCode::SessionAuthFailed;
+                    return fail(error);
+                }
+                ppp::cryptography::noise::NoisePskHandshakeResult result;
+                if (!initiator.ConsumeAcknowledgement(acknowledgement) ||
+                    !initiator.TakeNoiseResult(result) ||
+                    !transmission->InstallNoiseAuthenticatedCarrierBinding(
+                        std::move(result))) {
+                    return fail(ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                }
+                return true;
+            }
+
             void VEthernetExchanger::ClearSessionResumeState() noexcept {
                 session_resume_pending_.Clear();
                 session_resume_root_.Clear();
@@ -625,14 +734,17 @@ namespace ppp {
                 const ITransmissionPtr& transmission,
                 const InformationEnvelope& offer,
                 YieldContext& y) noexcept {
-                auto ssl = std::dynamic_pointer_cast<ISslWebsocketTransmission>(transmission);
                 SessionResumeId offered_id{};
                 SessionResumeArrayCleanser offered_id_cleanser(offered_id);
                 SessionResumeNonce server_nonce{};
                 SessionResumeArrayCleanser server_nonce_cleanser(server_nonce);
                 SessionResumeId expected_id{};
                 ppp::p2p::Int128ToBytes(GetId(), expected_id.data());
-                if (!ssl || !ssl->HasAuthenticatedSessionExporter() ||
+                if (!transmission || !IsClientSessionRecoveryCarrierEligible(
+                        transmission->GetAuthenticatedCarrierKind(),
+                        transmission->GetAuthenticatedCarrierMethod(),
+                        transmission->IsAuthenticatedCarrierBindingActive(),
+                        transmission->HasAuthenticatedSessionExporter()) ||
                     !DecodeFreshSessionResumeOffer(
                         offer.Extensions.SessionResume, offered_id, server_nonce) ||
                     offered_id != expected_id) {
@@ -642,10 +754,10 @@ namespace ppp {
                 }
 
                 SessionResumeExporter exporter =
-                    [ssl](const char* label, const std::uint8_t* context,
+                    [transmission](const char* label, const std::uint8_t* context,
                         std::size_t context_length, std::uint8_t* output,
                         std::size_t output_length) noexcept -> bool {
-                        return ssl->ExportAuthenticatedSessionKey(
+                        return transmission->ExportAuthenticatedSessionKey(
                             label, context, context_length, output, output_length);
                     };
                 SessionResumeSecret candidate_root;
@@ -697,12 +809,17 @@ namespace ppp {
                 YieldContext& y) noexcept {
                 has_initial_information = false;
                 AppConfigurationPtr configuration = GetConfiguration();
-                auto ssl = std::dynamic_pointer_cast<ISslWebsocketTransmission>(transmission);
+                const bool recovery_carrier_eligible = transmission &&
+                    IsClientSessionRecoveryCarrierEligible(
+                        transmission->GetAuthenticatedCarrierKind(),
+                        transmission->GetAuthenticatedCarrierMethod(),
+                        transmission->IsAuthenticatedCarrierBindingActive(),
+                        transmission->HasAuthenticatedSessionExporter());
                 const ClientSessionResumePreamble preamble =
                     SelectClientSessionResumePreamble(configuration &&
                         configuration->client.session_resume.enabled,
                         switcher_ && switcher_->IsVNet(),
-                        ssl && ssl->HasAuthenticatedSessionExporter(),
+                        recovery_carrier_eligible,
                         session_resume_armed_, session_resume_root_.IsSet());
                 if (preamble == ClientSessionResumePreamble::Legacy) {
                     ClearSessionResumeState();
@@ -743,10 +860,10 @@ namespace ppp {
                 }
 
                 SessionResumeExporter exporter =
-                    [ssl](const char* label, const std::uint8_t* context,
+                    [transmission](const char* label, const std::uint8_t* context,
                         std::size_t context_length, std::uint8_t* output,
                         std::size_t output_length) noexcept -> bool {
-                        return ssl->ExportAuthenticatedSessionKey(
+                        return transmission->ExportAuthenticatedSessionKey(
                             label, context, context_length, output, output_length);
                     };
                 SessionResumeCandidateBinding candidate_binding{};
@@ -1261,8 +1378,50 @@ namespace ppp {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkPortInvalid, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
+#if defined(_WIN32)
+                bool windows_ipv6_route_staged = false;
+                if (role == ppp::transmissions::TcpTransmissionRole::Main) {
+                    const bool had_takeover = switcher_->HasActiveWindowsIPv6Takeover();
+                    boost::asio::ip::tcp::endpoint egress_endpoint = remoteEP;
+                    if (const auto forwarding = switcher_->GetForwarding(); forwarding) {
+                        egress_endpoint = forwarding->GetProxyEndPoint();
+                    }
+                    const boost::asio::ip::address egress_address = egress_endpoint.address();
+                    const bool proven_external =
+                        !IPEndPoint::IsInvalid(egress_address) &&
+                        !egress_address.is_unspecified() &&
+                        !egress_address.is_multicast() &&
+                        !egress_address.is_loopback();
+                    const bool staged = switcher_->StageWindowsIPv6Egress(
+                        egress_endpoint, proven_external);
+                    const bool protected_route = staged && switcher_->EnsureWindowsIPv6Sink();
+                    if (protected_route) {
+                        windows_ipv6_route_staged = true;
+                    }
+                    else {
+                        switcher_->RollbackWindowsIPv6Egress();
+                        // Initial protection is best-effort. Once takeover exists, or an exact
+                        // rollback is pending, never connect a candidate without a safe egress.
+                        if (had_takeover || switcher_->HasPendingWindowsIPv6Cleanup()) {
+                            return ppp::diagnostics::SetLastError(
+                                ppp::diagnostics::ErrorCode::RouteAddFailed,
+                                VEthernetExchanger::ITransmissionPtr(NULLPTR));
+                        }
+                    }
+                }
+#endif
+                auto rollback_windows_ipv6_route = [&]() noexcept {
+#if defined(_WIN32)
+                    if (windows_ipv6_route_staged) {
+                        switcher_->RollbackWindowsIPv6Egress();
+                        windows_ipv6_route_staged = false;
+                    }
+#endif
+                };
+
                 std::shared_ptr<boost::asio::ip::tcp::socket> socket = NewAsynchronousSocket(context, strand, remoteEP.protocol(), y);
                 if (!socket) {
+                    rollback_windows_ipv6_route();
                     return NULLPTR;
                 }
 
@@ -1274,6 +1433,7 @@ namespace ppp {
                     auto protector_network = switcher_->GetProtectorNetwork();
                     if (NULLPTR != protector_network) {
                         if (!protector_network->Protect(socket->native_handle(), y)) {
+                            rollback_windows_ipv6_route();
                             return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelProtectionConfigureFailed, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                         }
                     }
@@ -1285,6 +1445,7 @@ namespace ppp {
 
                 AppConfigurationPtr configuration = GetConfiguration();
                 if (NULLPTR == configuration) {
+                    rollback_windows_ipv6_route();
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::AppConfigurationMissing, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
@@ -1296,6 +1457,7 @@ namespace ppp {
                     ? make_shared_object<boost::asio::steady_timer>(*strand)
                     : make_shared_object<boost::asio::steady_timer>(*context);
                 if (NULLPTR == connect_state || NULLPTR == connect_timer) {
+                    rollback_windows_ipv6_route();
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
@@ -1315,19 +1477,24 @@ namespace ppp {
                 int expected = ConnectPending;
                 const bool timed_out = !connect_state->compare_exchange_strong(
                     expected, ConnectCompleted, std::memory_order_acq_rel) && expected == ConnectTimedOut;
-                boost::system::error_code cancel_ec;
-                connect_timer->cancel(cancel_ec);
+                connect_timer->cancel();
                 if (!ok || timed_out) {
                     const ppp::diagnostics::ErrorCode error = timed_out
                         ? ppp::diagnostics::ErrorCode::TcpConnectTimeout
                         : ppp::diagnostics::ErrorCode::TcpConnectFailed;
                     ppp::telemetry::Count("client_exchanger.connect.fail.tcp", 1);
                     ppp::telemetry::Log(Level::kInfo, "client_exchanger", "tcp connect failed: %s:%d address=%s error=%d", hostname.c_str(), remotePort, remoteIP.to_string().c_str(), (int)error);
+                    rollback_windows_ipv6_route();
                     return ppp::diagnostics::SetLastError(error, VEthernetExchanger::ITransmissionPtr(NULLPTR));
                 }
 
                 ppp::telemetry::Log(Level::kInfo, "client_exchanger", "tcp connected: %s:%d role=%s", hostname.c_str(), remotePort, TransmissionRoleName(role));
-                return NewTransmission(context, strand, socket, protocol_type, hostname, path, role);
+                ITransmissionPtr transmission = NewTransmission(
+                    context, strand, socket, protocol_type, hostname, path, role);
+                if (!transmission) {
+                    rollback_windows_ipv6_route();
+                }
+                return transmission;
             }
 
             /** @brief Starts main asynchronous exchanger loop. */
@@ -1823,21 +1990,30 @@ namespace ppp {
                         std::shared_ptr<boost::asio::steady_timer> handshake_timer =
                             make_shared_object<boost::asio::steady_timer>(*strand);
                         bool established = false;
+                        bool transport_auth_failed = false;
                         if (NULLPTR == handshake_state || NULLPTR == handshake_timer) {
                             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         }
                         else {
-                            const int64_t handshake_timeout_ms = std::max<int64_t>(1,
+                            const auto arm_handshake_timer =
+                                [transmission, handshake_state, handshake_timer](
+                                    int64_t timeout_ms) noexcept {
+                                    handshake_timer->expires_after(
+                                        std::chrono::milliseconds(std::max<int64_t>(1, timeout_ms)));
+                                    handshake_timer->async_wait(
+                                        [transmission, handshake_state](
+                                            const boost::system::error_code& ec) noexcept {
+                                            int expected = HandshakePending;
+                                            if (ec == boost::system::errc::success &&
+                                                handshake_state->compare_exchange_strong(
+                                                    expected, HandshakeTimedOut,
+                                                    std::memory_order_acq_rel)) {
+                                                transmission->Dispose();
+                                            }
+                                        });
+                                };
+                            arm_handshake_timer(
                                 static_cast<int64_t>(configuration->tcp.connect.timeout) * 1000);
-                            handshake_timer->expires_after(std::chrono::milliseconds(handshake_timeout_ms));
-                            handshake_timer->async_wait(
-                                [transmission, handshake_state](const boost::system::error_code& ec) noexcept {
-                                    int expected = HandshakePending;
-                                    if (ec == boost::system::errc::success &&
-                                        handshake_state->compare_exchange_strong(expected, HandshakeTimedOut, std::memory_order_acq_rel)) {
-                                        transmission->Dispose();
-                                    }
-                                });
 
                             InformationEnvelope initial_information;
                             bool has_initial_information = false;
@@ -1845,14 +2021,28 @@ namespace ppp {
                             SessionResumeNegotiationResult negotiation =
                                 SessionResumeNegotiationResult::Fresh;
                             established = transmission->HandshakeServer(y, GetId(), true);
+                            if (established && ShouldRunClientTransportAuth(
+                                    transmission->GetAuthenticatedCarrierKind(),
+                                    configuration->client.transport_auth.enabled,
+                                    transmission->PeerSupportsTransportAuthV1(),
+                                    transmission->PeerEnablesTransportAuthV1())) {
+                                arm_handshake_timer(
+                                    configuration->transport_auth.handshake_timeout_ms);
+                                established = AuthenticatePlainTransport(transmission, y);
+                                transport_auth_failed = !established;
+                            }
                             if (established) {
-                                auto ssl = std::dynamic_pointer_cast<ISslWebsocketTransmission>(
-                                    transmission);
+                                const bool recovery_carrier_eligible =
+                                    IsClientSessionRecoveryCarrierEligible(
+                                        transmission->GetAuthenticatedCarrierKind(),
+                                        transmission->GetAuthenticatedCarrierMethod(),
+                                        transmission->IsAuthenticatedCarrierBindingActive(),
+                                        transmission->HasAuthenticatedSessionExporter());
                                 const ClientSessionResumePreamble preamble =
                                     SelectClientSessionResumePreamble(
                                         configuration->client.session_resume.enabled,
                                         switcher_->IsVNet(),
-                                        ssl && ssl->HasAuthenticatedSessionExporter(),
+                                        recovery_carrier_eligible,
                                         session_resume_armed_, session_resume_root_.IsSet());
                                 if (preamble == ClientSessionResumePreamble::FreshProbe) {
                                     established = EchoLanToRemoteExchanger(
@@ -1892,16 +2082,26 @@ namespace ppp {
                             int expected = HandshakePending;
                             const bool handshake_timed_out = !handshake_state->compare_exchange_strong(
                                 expected, HandshakeCompleted, std::memory_order_acq_rel) && expected == HandshakeTimedOut;
-                            boost::system::error_code cancel_ec;
-                            handshake_timer->cancel(cancel_ec);
+                            handshake_timer->cancel();
                             if (handshake_timed_out) {
                                 established = false;
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketTimeout);
                             }
                         }
 
+#if defined(_WIN32)
+                        if (established && !switcher_->CommitWindowsIPv6Egress()) {
+                            switcher_->RollbackWindowsIPv6Egress();
+                            established = false;
+                            ppp::diagnostics::SetLastErrorCode(
+                                ppp::diagnostics::ErrorCode::RouteAddFailed);
+                        }
                         if (!established) {
-                            if (IsTerminalSessionResumeError(
+                            switcher_->RollbackWindowsIPv6Egress();
+                        }
+#endif
+                        if (!established) {
+                            if (!transport_auth_failed && IsTerminalSessionResumeError(
                                     ppp::diagnostics::GetLastErrorCode())) {
                                 ClearSessionResumeState();
                             }

@@ -34,6 +34,7 @@ namespace ppp
 
         public:
             static bool                             IsWintun() noexcept;
+            bool                                    IsWintunBackend() noexcept;
             static ppp::string                      FindComponentId() noexcept;
             static ppp::string                      FindComponentId(const ppp::string& key) noexcept;
             static bool                             FindAllComponentIds(ppp::unordered_set<ppp::string>& componentIds) noexcept;

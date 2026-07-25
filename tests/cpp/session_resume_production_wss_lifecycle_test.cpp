@@ -4,6 +4,7 @@
 #include <ppp/app/protocol/SessionResumeAuthenticator.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/transmissions/IAuthenticatedCarrierBinding.h>
 #include <ppp/transmissions/IWebsocketTransmission.h>
 
 #include <boost/asio/executor_work_guard.hpp>
@@ -260,16 +261,17 @@ BOOST_AUTO_TEST_CASE(exporter_is_gated_by_application_handshake_and_dispose) {
     const ppp::Int128 session_id = static_cast<ppp::Int128>(0x12345678);
     const protocol::SessionResumeId id = MakeSessionId();
     ProductionWssPair pair(session_id);
+    std::shared_ptr<transmissions::IAuthenticatedCarrierBinding> binding = pair.Client();
 
     std::array<std::uint8_t, 32> output{};
-    BOOST_TEST(!pair.Client()->HasAuthenticatedSessionExporter());
-    BOOST_TEST(!pair.Client()->ExportAuthenticatedSessionKey(
+    BOOST_TEST(!binding->HasAuthenticatedSessionExporter());
+    BOOST_TEST(!binding->ExportAuthenticatedSessionKey(
         "openppp2-test", id.data(), id.size(), output.data(), output.size()));
 
     BOOST_REQUIRE(pair.Handshake());
     BOOST_TEST(pair.Client()->IsHandshakeComplete());
     BOOST_TEST(pair.Server()->IsHandshakeComplete());
-    BOOST_TEST(pair.Client()->HasAuthenticatedSessionExporter());
+    BOOST_TEST(binding->HasAuthenticatedSessionExporter());
     BOOST_TEST(pair.Server()->HasAuthenticatedSessionExporter());
 
     protocol::SessionResumeSecret client_root{};
@@ -280,10 +282,28 @@ BOOST_AUTO_TEST_CASE(exporter_is_gated_by_application_handshake_and_dispose) {
         protocol::SessionResumeSecretSize) == 0);
 
     pair.Dispose();
-    BOOST_TEST(!pair.Client()->HasAuthenticatedSessionExporter());
+    BOOST_TEST(!binding->HasAuthenticatedSessionExporter());
     output.fill(0);
-    BOOST_TEST(!pair.Client()->ExportAuthenticatedSessionKey(
+    BOOST_TEST(!binding->ExportAuthenticatedSessionKey(
         "openppp2-test", id.data(), id.size(), output.data(), output.size()));
+}
+
+BOOST_AUTO_TEST_CASE(loopback_ingress_disables_wss_tls_exporter) {
+    const ppp::Int128 session_id = static_cast<ppp::Int128>(0xabcdef);
+    const protocol::SessionResumeId id = MakeSessionId();
+    ProductionWssPair pair(session_id);
+    BOOST_REQUIRE(pair.Handshake());
+    BOOST_TEST(pair.Server()->HasAuthenticatedSessionExporter());
+
+    pair.Server()->MarkServerLoopbackIngress();
+    BOOST_TEST(pair.Server()->IsServerLoopbackIngress());
+    BOOST_TEST(!pair.Server()->HasAuthenticatedSessionExporter());
+
+    std::array<std::uint8_t, 32> output{};
+    BOOST_TEST(!pair.Server()->ExportAuthenticatedSessionKey(
+        protocol::SessionResumeRootExporterLabel,
+        id.data(), id.size(), output.data(), output.size()));
+    pair.Dispose();
 }
 
 BOOST_AUTO_TEST_CASE(production_framed_io_and_new_carrier_binding) {

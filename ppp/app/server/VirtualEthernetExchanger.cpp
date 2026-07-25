@@ -134,12 +134,50 @@ namespace {
         return DecodeLowerHex(canonical, binary);
     }
 
+    static bool IsConfiguredRecoveryCarrier(
+        const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
+        const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept {
+        if (!configuration || !configuration->server.session_resume.enabled ||
+            !transmission || transmission->IsServerLoopbackIngress() ||
+            !transmission->IsAuthenticatedCarrierBindingActive() ||
+            !transmission->HasAuthenticatedSessionExporter()) {
+            return false;
+        }
+
+        using ppp::transmissions::AuthenticatedCarrierKind;
+        using ppp::transmissions::AuthenticatedCarrierMethod;
+        const AuthenticatedCarrierKind kind = transmission->GetAuthenticatedCarrierKind();
+        const AuthenticatedCarrierMethod method = transmission->GetAuthenticatedCarrierMethod();
+        return (kind == AuthenticatedCarrierKind::TlsWebSocket &&
+                method == AuthenticatedCarrierMethod::TlsExporterV1) ||
+            ((kind == AuthenticatedCarrierKind::Tcp ||
+                 kind == AuthenticatedCarrierKind::WebSocket) &&
+                method == AuthenticatedCarrierMethod::NoisePskV1);
+    }
+
+    static bool IsRecoveryCapableCarrier(
+        const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
+        const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept {
+        if (!configuration || !configuration->server.session_resume.enabled ||
+            !transmission || transmission->IsServerLoopbackIngress()) {
+            return false;
+        }
+
+        using ppp::transmissions::AuthenticatedCarrierKind;
+        using ppp::transmissions::AuthenticatedCarrierMethod;
+        const AuthenticatedCarrierKind kind = transmission->GetAuthenticatedCarrierKind();
+        const AuthenticatedCarrierMethod method = transmission->GetAuthenticatedCarrierMethod();
+        return (kind == AuthenticatedCarrierKind::TlsWebSocket &&
+                method == AuthenticatedCarrierMethod::TlsExporterV1) ||
+            ((kind == AuthenticatedCarrierKind::Tcp ||
+                 kind == AuthenticatedCarrierKind::WebSocket) &&
+                method == AuthenticatedCarrierMethod::NoisePskV1);
+    }
+
     static bool IsEligibleRecoveryCarrier(
         const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
         const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept {
-        return configuration && configuration->server.session_resume.enabled && transmission &&
-            std::dynamic_pointer_cast<ppp::transmissions::ISslWebsocketTransmission>(transmission) &&
-            transmission->HasAuthenticatedSessionExporter();
+        return IsConfiguredRecoveryCarrier(configuration, transmission);
     }
 
     static SessionResumeExporter MakeSessionResumeExporter(
@@ -731,7 +769,7 @@ namespace ppp {
                 };
 
                 AppConfigurationPtr configuration = GetConfiguration();
-                const bool eligible = IsEligibleRecoveryCarrier(configuration, transmission);
+                const bool eligible = IsRecoveryCapableCarrier(configuration, transmission);
                 const UInt64 grace = eligible
                     ? static_cast<UInt64>(configuration->server.session_resume.grace_ms)
                     : 0;
@@ -1096,6 +1134,14 @@ namespace ppp {
                 }
 
                 const VirtualEthernetInformationExtensions& request = information.Extensions;
+                if (request.TransportAuth.HasAny()) {
+                    // Transport authentication is consumed before Establish(). Any later or
+                    // repeated control is a protocol violation and cannot be downgraded to INFO.
+                    ppp::diagnostics::SetLastErrorCode(
+                        ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
+                    return false;
+                }
+
                 const SessionResumeControl& resume = request.SessionResume;
                 if (resume.HasAny()) {
                     VirtualEthernetInformationExtensions other_extensions = request;
@@ -1502,7 +1548,9 @@ namespace ppp {
                     return switcher_->SendIPv6TransitPacket(packet, packet_length);
                 }
 
-                if (!configuration->server.subnet && configuration->server.ipv6.mode != AppConfiguration::IPv6Mode_Gua) {
+                if (!configuration->server.subnet &&
+                    configuration->server.ipv6.mode != AppConfiguration::IPv6Mode_Gua &&
+                    configuration->server.ipv6.mode != AppConfiguration::IPv6Mode_Nat66) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6ModeInvalid);
                     return false;
                 }

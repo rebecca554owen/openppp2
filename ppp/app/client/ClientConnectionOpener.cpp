@@ -1,5 +1,6 @@
 #include <ppp/app/client/ClientConnectionOpener.h>
 #include <ppp/app/client/ClientNetworkInterfaceResolver.h>
+#include <ppp/app/client/RemoteEndpointLoader.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/route/RouteCoordinator.h>
 #include <ppp/app/client/VEthernetExchanger.h>
@@ -83,6 +84,10 @@ namespace ppp {
                 if (NULLPTR == owner_->tun_ni_) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
                 }
+#if defined(_WIN32)
+                // Route-only IPv6 protection is best-effort; binding failure must not block the VPN.
+                owner_->BindWindowsIPv6RouteOwner();
+#endif
                 }
 #endif
 
@@ -108,12 +113,24 @@ namespace ppp {
                 }
 #endif
 #endif
-                // Instantiate and open the internal virtual Ethernet switch that needs to be switcher to the remote.
+                // Instantiate the exchanger. Windows prepares forwarding first so the
+                // main coroutine can never cache or pin the logical server instead of the proxy.
                 std::shared_ptr<VEthernetExchanger> exchanger = owner_->NewExchanger();
                 if (NULLPTR == exchanger) {
                     return false;
                 }
-                elif(!exchanger->Open()) {
+                owner_->exchanger_ = exchanger;
+
+#if defined(_WIN32)
+                if (!owner_->remote_endpoint_loader_->PrepareForwarding()) {
+                    owner_->exchanger_.reset();
+                    IDisposable::DisposeReferences(qos, exchanger);
+                    return false;
+                }
+#endif
+
+                if (!exchanger->Open()) {
+                    owner_->exchanger_.reset();
                     IDisposable::DisposeReferences(qos, exchanger);
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionOpenFailed);
                 }

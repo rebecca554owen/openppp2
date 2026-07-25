@@ -209,29 +209,31 @@ namespace ppp {
                 return true;
             }
 
-            static bool SendNetlinkRequest(struct nlmsghdr& header, ppp::diagnostics::ErrorCode failure_code, bool missing_ok) noexcept {
+            static int SendNetlinkRequestStatus(struct nlmsghdr& header, ppp::diagnostics::ErrorCode failure_code) noexcept {
                 int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
                 if (fd < 0) {
                     ppp::diagnostics::SetLastErrorCode(failure_code);
-                    return false;
+                    return errno > 0 ? errno : EIO;
                 }
 
                 struct sockaddr_nl local_addr;
                 memset(&local_addr, 0, sizeof(local_addr));
                 local_addr.nl_family = AF_NETLINK;
                 if (bind(fd, reinterpret_cast<struct sockaddr*>(&local_addr), sizeof(local_addr)) < 0) {
+                    int error = errno;
                     ::close(fd);
                     ppp::diagnostics::SetLastErrorCode(failure_code);
-                    return false;
+                    return error > 0 ? error : EIO;
                 }
 
                 struct timeval timeout;
                 memset(&timeout, 0, sizeof(timeout));
                 timeout.tv_sec = 1;
                 if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout)) < 0) {
+                    int error = errno;
                     ::close(fd);
                     ppp::diagnostics::SetLastErrorCode(failure_code);
-                    return false;
+                    return error > 0 ? error : EIO;
                 }
 
                 header.nlmsg_flags |= NLM_F_REQUEST | NLM_F_ACK;
@@ -255,9 +257,10 @@ namespace ppp {
                 msg.msg_iovlen = 1;
 
                 if (sendmsg(fd, &msg, 0) < 0) {
+                    int error = errno;
                     ::close(fd);
                     ppp::diagnostics::SetLastErrorCode(failure_code);
-                    return false;
+                    return error > 0 ? error : EIO;
                 }
 
                 Byte buffer[4096];
@@ -268,14 +271,15 @@ namespace ppp {
                             continue;
                         }
 
+                        int error = errno;
                         ::close(fd);
                         ppp::diagnostics::SetLastErrorCode(failure_code);
-                        return false;
+                        return error > 0 ? error : EIO;
                     }
                     if (received == 0) {
                         ::close(fd);
                         ppp::diagnostics::SetLastErrorCode(failure_code);
-                        return false;
+                        return EIO;
                     }
 
                     int remaining = static_cast<int>(received);
@@ -290,26 +294,31 @@ namespace ppp {
                             if (response->nlmsg_len < NLMSG_LENGTH(sizeof(struct nlmsgerr))) {
                                 ::close(fd);
                                 ppp::diagnostics::SetLastErrorCode(failure_code);
-                                return false;
+                                return EIO;
                             }
 
                             struct nlmsgerr* error = reinterpret_cast<struct nlmsgerr*>(NLMSG_DATA(response));
                             int error_code = error->error;
                             ::close(fd);
-                            if (error_code == 0 || (missing_ok && (error_code == -ENOENT || error_code == -ESRCH))) {
-                                return true;
-                            }
-
-                            ppp::diagnostics::SetLastErrorCode(failure_code);
-                            return false;
+                            return error_code < 0 ? -error_code : error_code;
                         }
 
                         if (response->nlmsg_type == NLMSG_DONE) {
                             ::close(fd);
-                            return true;
+                            return 0;
                         }
                     }
                 }
+            }
+
+            static bool SendNetlinkRequest(struct nlmsghdr& header, ppp::diagnostics::ErrorCode failure_code, bool missing_ok) noexcept {
+                int error = SendNetlinkRequestStatus(header, failure_code);
+                if (error == 0 || (missing_ok && (error == ENOENT || error == ESRCH))) {
+                    return true;
+                }
+
+                ppp::diagnostics::SetLastErrorCode(failure_code);
+                return false;
             }
 
             static bool DeleteIPv6AddressByNetlink(const ppp::string& ifrName, const ppp::string& addressIP, int prefix_length) noexcept {
@@ -432,6 +441,201 @@ namespace ppp {
                 }
 
                 return SendNetlinkRequest(request.header, ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed, false);
+            }
+
+            static bool QueryIPv6PermanentNeighborByNetlink(int interface_index, const struct in6_addr& address, bool& exact_exists) noexcept {
+                exact_exists = false;
+
+                int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
+                if (fd < 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    return false;
+                }
+
+                struct sockaddr_nl local_addr;
+                memset(&local_addr, 0, sizeof(local_addr));
+                local_addr.nl_family = AF_NETLINK;
+                if (bind(fd, reinterpret_cast<struct sockaddr*>(&local_addr), sizeof(local_addr)) < 0) {
+                    ::close(fd);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    return false;
+                }
+
+                struct timeval timeout;
+                memset(&timeout, 0, sizeof(timeout));
+                timeout.tv_sec = 1;
+                if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout)) < 0) {
+                    ::close(fd);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    return false;
+                }
+
+                NetlinkRequest<64> request;
+                memset(&request, 0, sizeof(request));
+                request.header.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg));
+                request.header.nlmsg_type = RTM_GETNEIGH;
+                request.header.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+                request.header.nlmsg_seq = static_cast<unsigned int>(std::chrono::steady_clock::now().time_since_epoch().count());
+
+                struct ndmsg* query = reinterpret_cast<struct ndmsg*>(NLMSG_DATA(&request.header));
+                query->ndm_family = AF_INET6;
+                query->ndm_ifindex = interface_index;
+
+                struct sockaddr_nl kernel_addr;
+                memset(&kernel_addr, 0, sizeof(kernel_addr));
+                kernel_addr.nl_family = AF_NETLINK;
+
+                struct iovec iov;
+                memset(&iov, 0, sizeof(iov));
+                iov.iov_base = &request.header;
+                iov.iov_len = request.header.nlmsg_len;
+
+                struct msghdr msg;
+                memset(&msg, 0, sizeof(msg));
+                msg.msg_name = &kernel_addr;
+                msg.msg_namelen = sizeof(kernel_addr);
+                msg.msg_iov = &iov;
+                msg.msg_iovlen = 1;
+                if (sendmsg(fd, &msg, 0) < 0) {
+                    ::close(fd);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    return false;
+                }
+
+                Byte buffer[8192];
+                for (;;) {
+                    ssize_t received = recv(fd, buffer, sizeof(buffer), 0);
+                    if (received < 0) {
+                        if (errno == EINTR) {
+                            continue;
+                        }
+                        ::close(fd);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                        return false;
+                    }
+                    if (received == 0) {
+                        ::close(fd);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                        return false;
+                    }
+
+                    int remaining = static_cast<int>(received);
+                    for (struct nlmsghdr* response = reinterpret_cast<struct nlmsghdr*>(buffer);
+                        NLMSG_OK(response, remaining);
+                        response = NLMSG_NEXT(response, remaining)) {
+                        if (response->nlmsg_seq != request.header.nlmsg_seq) {
+                            continue;
+                        }
+                        if (response->nlmsg_type == NLMSG_DONE) {
+                            ::close(fd);
+                            return true;
+                        }
+                        if (response->nlmsg_type == NLMSG_ERROR) {
+                            ::close(fd);
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                            return false;
+                        }
+                        if (response->nlmsg_type != RTM_NEWNEIGH || response->nlmsg_len < NLMSG_LENGTH(sizeof(struct ndmsg))) {
+                            continue;
+                        }
+
+                        struct ndmsg* neighbor = reinterpret_cast<struct ndmsg*>(NLMSG_DATA(response));
+                        if (neighbor->ndm_family != AF_INET6 || neighbor->ndm_ifindex != interface_index ||
+                            (neighbor->ndm_flags & NTF_PROXY) != 0 || (neighbor->ndm_state & NUD_PERMANENT) == 0) {
+                            continue;
+                        }
+
+                        bool destination_matches = false;
+                        int attributes_length = NLMSG_PAYLOAD(response, sizeof(struct ndmsg));
+                        struct rtattr* attribute = reinterpret_cast<struct rtattr*>(
+                            reinterpret_cast<Byte*>(neighbor) + NLMSG_ALIGN(sizeof(struct ndmsg)));
+                        for (; RTA_OK(attribute, attributes_length); attribute = RTA_NEXT(attribute, attributes_length)) {
+                            if (attribute->rta_type == NDA_DST && RTA_PAYLOAD(attribute) == sizeof(address)) {
+                                destination_matches = memcmp(RTA_DATA(attribute), &address, sizeof(address)) == 0;
+                            }
+                        }
+
+                        if (destination_matches) {
+                            exact_exists = true;
+                            ::close(fd);
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            static TapLinux::NeighborMutationResult AddIPv6PermanentNeighborByNetlink(const ppp::string& ifrName, const ppp::string& addressIP) noexcept {
+                int interface_index = GetInterfaceIndexByName(ifrName);
+                if (interface_index < 0) {
+                    return TapLinux::NeighborMutationResult::Failed;
+                }
+
+                struct in6_addr address;
+                if (!ParseIPv6Address(addressIP, address)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    return TapLinux::NeighborMutationResult::Failed;
+                }
+
+                NetlinkRequest<256> request;
+                memset(&request, 0, sizeof(request));
+                request.header.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg));
+                request.header.nlmsg_type = RTM_NEWNEIGH;
+                request.header.nlmsg_flags = NLM_F_CREATE | NLM_F_EXCL;
+
+                struct ndmsg* message = reinterpret_cast<struct ndmsg*>(NLMSG_DATA(&request.header));
+                message->ndm_family = AF_INET6;
+                message->ndm_ifindex = interface_index;
+                message->ndm_state = NUD_PERMANENT;
+                message->ndm_flags = 0;
+
+                const Byte dummy_lladdr[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x00 };
+                if (!AppendNetlinkAttribute(request.header, sizeof(request), NDA_DST, &address, sizeof(address)) ||
+                    !AppendNetlinkAttribute(request.header, sizeof(request), NDA_LLADDR, dummy_lladdr, sizeof(dummy_lladdr))) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    return TapLinux::NeighborMutationResult::Failed;
+                }
+
+                int error = SendNetlinkRequestStatus(request.header, ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                bool query_succeeded = false;
+                bool exact_exists = false;
+                if (error == EEXIST) {
+                    query_succeeded = QueryIPv6PermanentNeighborByNetlink(interface_index, address, exact_exists);
+                }
+
+                TapLinux::NeighborMutationResult result = TapLinux::ClassifyPermanentNeighborAddResult(error, query_succeeded, exact_exists);
+                if (result == TapLinux::NeighborMutationResult::Failed) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                }
+                return result;
+            }
+
+            static bool DeleteIPv6PermanentNeighborByNetlink(const ppp::string& ifrName, const ppp::string& addressIP) noexcept {
+                int interface_index = GetInterfaceIndexByName(ifrName);
+                if (interface_index < 0) {
+                    return false;
+                }
+
+                struct in6_addr address;
+                if (!ParseIPv6Address(addressIP, address)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    return false;
+                }
+
+                NetlinkRequest<256> request;
+                memset(&request, 0, sizeof(request));
+                request.header.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg));
+                request.header.nlmsg_type = RTM_DELNEIGH;
+
+                struct ndmsg* message = reinterpret_cast<struct ndmsg*>(NLMSG_DATA(&request.header));
+                message->ndm_family = AF_INET6;
+                message->ndm_ifindex = interface_index;
+
+                if (!AppendNetlinkAttribute(request.header, sizeof(request), NDA_DST, &address, sizeof(address))) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                    return false;
+                }
+
+                return SendNetlinkRequest(request.header, ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed, true);
             }
 
             static ppp::string GetProxyNdpPath(const ppp::string& ifrName) noexcept {
@@ -870,6 +1074,34 @@ namespace ppp {
             }
             else {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+            }
+            return ok;
+        }
+
+        TapLinux::NeighborMutationResult TapLinux::AddIPv6PermanentNeighbor(const ppp::string& ifrName, const ppp::string& addressIP) noexcept {
+            ppp::telemetry::SpanScope span("tap.ipv6.neighbor.permanent.add");
+            if (!IsSafeInterfaceName(ifrName) || !IsSafeShellToken(addressIP)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                return NeighborMutationResult::Failed;
+            }
+
+            NeighborMutationResult result = AddIPv6PermanentNeighborByNetlink(ifrName, addressIP);
+            if (result == NeighborMutationResult::Changed) {
+                ppp::telemetry::Log(Level::kDebug, "tap", "permanent ipv6 neighbor added: %s", addressIP.data());
+            }
+            return result;
+        }
+
+        bool TapLinux::DeleteIPv6PermanentNeighbor(const ppp::string& ifrName, const ppp::string& addressIP) noexcept {
+            ppp::telemetry::SpanScope span("tap.ipv6.neighbor.permanent.delete");
+            if (!IsSafeInterfaceName(ifrName) || !IsSafeShellToken(addressIP)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6NDPProxyFailed);
+                return false;
+            }
+
+            bool ok = DeleteIPv6PermanentNeighborByNetlink(ifrName, addressIP);
+            if (ok) {
+                ppp::telemetry::Log(Level::kDebug, "tap", "permanent ipv6 neighbor deleted: %s", addressIP.data());
             }
             return ok;
         }

@@ -19,22 +19,17 @@ void RemoteEndpointLoader::Bind(VEthernetNetworkSwitcher* owner) noexcept {
     owner_ = owner;
 }
 
-bool RemoteEndpointLoader::Apply(const boost::asio::ip::address& gw) noexcept {
-    using ProtocolType = VEthernetExchanger::ProtocolType;
-
-    // This function must be executed after the remote exchanger object has been created.
-    std::shared_ptr<VEthernetExchanger> exchanger = owner_->exchanger_;
-    if (NULLPTR == exchanger) {
-        return false;
+bool RemoteEndpointLoader::PrepareForwarding() noexcept {
+    if (owner_->forwarding_) {
+        return true;
     }
 
-    // Initialize and try the proxy forwarding object if the link does require proxy forwarding services.
     VEthernetNetworkSwitcher::IForwardingPtr forwarding =
         make_shared_object<IForwarding>(owner_->GetContext(), owner_->configuration_);
     if (NULLPTR == forwarding) {
         return false;
     }
-    elif(forwarding->Open()) {
+    if (forwarding->Open()) {
         owner_->forwarding_ = forwarding;
 #if defined(_LINUX)
         forwarding->ProtectorNetwork = owner_->GetProtectorNetwork();
@@ -42,8 +37,20 @@ bool RemoteEndpointLoader::Apply(const boost::asio::ip::address& gw) noexcept {
     }
     else {
         forwarding->Dispose();
-        forwarding.reset();
     }
+    return true;
+}
+
+bool RemoteEndpointLoader::Apply(const boost::asio::ip::address& gw) noexcept {
+    using ProtocolType = VEthernetExchanger::ProtocolType;
+
+    // This function must be executed after the remote exchanger object has been created.
+    std::shared_ptr<VEthernetExchanger> exchanger = owner_->exchanger_;
+    if (NULLPTR == exchanger || !PrepareForwarding()) {
+        return false;
+    }
+
+    VEthernetNetworkSwitcher::IForwardingPtr forwarding = owner_->forwarding_;
 
     boost::asio::ip::tcp::endpoint remoteEP;
     ppp::string hostname;

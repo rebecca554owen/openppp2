@@ -180,9 +180,15 @@ bool PrepareClientLoopbackEnvironment(
     if (!success) {
         client_out.reset();
         if (NULLPTR != ethernet) {
-            ethernet->Dispose();
+            std::shared_ptr<ppp::tap::ITap> failed_tap = std::move(tap);
+            ethernet->Dispose(
+                [failed_tap](bool) noexcept {
+                    if (NULLPTR != failed_tap) {
+                        failed_tap->Dispose();
+                    }
+                });
         }
-        if (NULLPTR != tap) {
+        elif (NULLPTR != tap) {
             tap->Dispose();
         }
     }

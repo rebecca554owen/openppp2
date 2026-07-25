@@ -38,6 +38,10 @@ set(OPENPPP2_AGGREGATOR_LOADER_TEST_SUPPORT
     "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/SwitcherTimeoutRegistry.cpp")
 
+set(OPENPPP2_TRANSPORT_AUTH_BINDING_SOURCES
+    "${OPENPPP2_ROOT}/ppp/cryptography/noise/NoisePsk.cpp"
+    "${OPENPPP2_ROOT}/ppp/transmissions/NoisePskAuthenticatedCarrierBinding.cpp")
+
 function(openppp2_add_cpp_test target)
     cmake_parse_arguments(ARG "" "" "SOURCES" ${ARGN})
     add_executable(${target} ${ARG_SOURCES})
@@ -114,6 +118,100 @@ openppp2_add_cpp_test(session_resume_information_test SOURCES
     "${OPENPPP2_ROOT}/common/json/src/json_value.cpp"
     "${OPENPPP2_ROOT}/common/json/src/json_writer.cpp")
 target_link_libraries(session_resume_information_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(transport_auth_information_test SOURCES
+    transport_auth_information_test.cpp
+    support/peer_prefix_route_test_stubs.cpp
+    support/peer_prefix_json_test_stubs.cpp
+    "${OPENPPP2_ROOT}/ppp/app/protocol/VirtualEthernetInformation.cpp"
+    "${OPENPPP2_ROOT}/ppp/auxiliary/JsonAuxiliary.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_reader.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_value.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_writer.cpp")
+target_link_libraries(transport_auth_information_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(noise_psk_handshake_test SOURCES
+    noise_psk_handshake_test.cpp
+    "${OPENPPP2_ROOT}/ppp/cryptography/noise/NoisePsk.cpp")
+target_link_libraries(noise_psk_handshake_test PRIVATE OpenSSL::Crypto)
+openppp2_add_cpp_test(noise_psk_exporter_test SOURCES
+    noise_psk_exporter_test.cpp
+    "${OPENPPP2_ROOT}/ppp/cryptography/noise/NoisePsk.cpp")
+target_link_libraries(noise_psk_exporter_test PRIVATE OpenSSL::Crypto)
+openppp2_add_cpp_test(transport_auth_keyring_test SOURCES
+    transport_auth_keyring_test.cpp
+    "${OPENPPP2_ROOT}/ppp/configurations/TransportAuthConfiguration.cpp")
+target_link_libraries(transport_auth_keyring_test PRIVATE OpenSSL::Crypto)
+file(GENERATE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/transport_auth_configuration_test_stubs.cpp"
+    CONTENT [=[
+#include <ppp/coroutines/YieldContext.h>
+#include <ppp/net/asio/vdns.h>
+#include <ppp/threading/Executors.h>
+
+namespace ppp::coroutines {
+bool YieldContext::R() noexcept { return false; }
+bool YieldContext::Suspend() noexcept { return false; }
+}
+
+namespace ppp::net::asio::vdns {
+IPEndPointVectorPtr servers;
+std::atomic<int> ttl{0};
+std::atomic<bool> enabled{false};
+bool ResolveAsync(
+    boost::asio::io_context&,
+    const char*,
+    int,
+    const ppp::vector<boost::asio::ip::udp::endpoint>&,
+    const ppp::function<void(const boost::asio::ip::address&)>&) noexcept {
+    return false;
+}
+}
+
+namespace ppp::threading {
+std::shared_ptr<boost::asio::io_context> Executors::GetCurrent(bool) noexcept { return nullptr; }
+uint64_t Executors::GetTickCount() noexcept { return 0; }
+}
+]=])
+openppp2_add_cpp_test(transport_auth_configuration_test SOURCES
+    transport_auth_configuration_test.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/transport_auth_configuration_test_stubs.cpp"
+    "${OPENPPP2_ROOT}/ppp/configurations/AppConfiguration.cpp"
+    "${OPENPPP2_ROOT}/ppp/configurations/TransportAuthConfiguration.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/ApplicationMode.cpp"
+    "${OPENPPP2_ROOT}/ppp/auxiliary/JsonAuxiliary.cpp"
+    "${OPENPPP2_ROOT}/ppp/auxiliary/StringAuxiliary.cpp"
+    "${OPENPPP2_ROOT}/ppp/auxiliary/UriAuxiliary.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/Ciphertext.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/EVP.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/rc4.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/ssea.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp"
+    "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp"
+    "${OPENPPP2_ROOT}/common/aesni/aes.cpp"
+    "${OPENPPP2_ROOT}/ppp/io/File.cpp"
+    "${OPENPPP2_ROOT}/ppp/net/IPEndPoint.cpp"
+    "${OPENPPP2_ROOT}/ppp/net/Ipep.cpp"
+    "${OPENPPP2_ROOT}/ppp/net/http/HttpClient.cpp"
+    "${OPENPPP2_ROOT}/ppp/Random.cpp"
+    "${OPENPPP2_ROOT}/ppp/ssl/SSL.cpp"
+    "${OPENPPP2_ROOT}/ppp/stdafx.cpp"
+    "${OPENPPP2_ROOT}/ppp/threading/Thread.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_reader.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_value.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_writer.cpp")
+target_compile_options(transport_auth_configuration_test PRIVATE -ffunction-sections -fdata-sections)
+target_link_options(transport_auth_configuration_test PRIVATE -Wl,--gc-sections)
+target_link_libraries(transport_auth_configuration_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(transport_auth_negotiation_test SOURCES
+    transport_auth_negotiation_test.cpp
+    "${OPENPPP2_ROOT}/ppp/app/protocol/TransportAuthNegotiation.cpp"
+    "${OPENPPP2_ROOT}/ppp/configurations/TransportAuthConfiguration.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/noise/NoisePsk.cpp")
+target_link_libraries(transport_auth_negotiation_test PRIVATE OpenSSL::Crypto)
+openppp2_add_cpp_test(client_transport_auth_wiring_policy_test SOURCES
+    client_transport_auth_wiring_policy_test.cpp)
+target_link_libraries(client_transport_auth_wiring_policy_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(session_resume_handshake_state_test SOURCES
     session_resume_handshake_state_test.cpp
     support/peer_prefix_route_test_stubs.cpp
@@ -150,6 +248,7 @@ openppp2_add_cpp_test(session_resume_production_wss_lifecycle_test SOURCES
     support/session_resume_production_wss_test_stubs.cpp
     "${OPENPPP2_ROOT}/ppp/app/protocol/SessionResumeAuthenticator.cpp"
     "${OPENPPP2_ROOT}/ppp/transmissions/ITransmission.cpp"
+    ${OPENPPP2_TRANSPORT_AUTH_BINDING_SOURCES}
     "${OPENPPP2_ROOT}/ppp/transmissions/ITransmissionQoS.cpp"
     "${OPENPPP2_ROOT}/ppp/transmissions/IWebsocketTransmission.cpp"
     "${OPENPPP2_ROOT}/ppp/Random.cpp"
@@ -188,6 +287,33 @@ target_compile_definitions(session_resume_production_wss_lifecycle_test PRIVATE
     OPENPPP2_TEST_PRIVATE_KEY="${OPENPPP2_ROOT}/starrylink.net.key")
 target_link_libraries(session_resume_production_wss_lifecycle_test PRIVATE
     boost_context Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+get_target_property(OPENPPP2_PRODUCTION_WSS_TEST_SOURCES
+    session_resume_production_wss_lifecycle_test SOURCES)
+list(REMOVE_ITEM OPENPPP2_PRODUCTION_WSS_TEST_SOURCES
+    session_resume_production_wss_lifecycle_test.cpp)
+openppp2_add_cpp_test(transport_auth_lifecycle_test SOURCES
+    transport_auth_lifecycle_test.cpp
+    ${OPENPPP2_PRODUCTION_WSS_TEST_SOURCES}
+    "${OPENPPP2_ROOT}/ppp/transmissions/ITcpipTransmission.cpp")
+target_link_libraries(transport_auth_lifecycle_test PRIVATE
+    boost_context Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+if(ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    # These partial-link fixtures intentionally stub allocator users without
+    # linking the allocator implementation that owns its RTTI key function.
+    foreach(_target transport_auth_configuration_test
+                    session_resume_production_wss_lifecycle_test
+                    transport_auth_lifecycle_test)
+        target_compile_options(${_target} PRIVATE -fno-sanitize=vptr)
+    endforeach()
+endif()
+openppp2_add_cpp_test(transport_auth_handshake_capability_test SOURCES
+    transport_auth_handshake_capability_test.cpp
+    ${OPENPPP2_PRODUCTION_WSS_TEST_SOURCES})
+target_compile_definitions(transport_auth_handshake_capability_test PRIVATE
+    OPENPPP2_TEST_CERTIFICATE="${OPENPPP2_ROOT}/starrylink.net.pem"
+    OPENPPP2_TEST_PRIVATE_KEY="${OPENPPP2_ROOT}/starrylink.net.key")
+target_link_libraries(transport_auth_handshake_capability_test PRIVATE
+    boost_context Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(session_resume_establish_transaction_wss_test SOURCES
     session_resume_establish_transaction_wss_test.cpp
     support/session_resume_production_wss_test_stubs.cpp
@@ -197,6 +323,7 @@ openppp2_add_cpp_test(session_resume_establish_transaction_wss_test SOURCES
     "${OPENPPP2_ROOT}/ppp/app/protocol/VirtualEthernetInformation.cpp"
     "${OPENPPP2_ROOT}/ppp/app/protocol/SessionResumeAuthenticator.cpp"
     "${OPENPPP2_ROOT}/ppp/transmissions/ITransmission.cpp"
+    ${OPENPPP2_TRANSPORT_AUTH_BINDING_SOURCES}
     "${OPENPPP2_ROOT}/ppp/transmissions/ITransmissionQoS.cpp"
     "${OPENPPP2_ROOT}/ppp/transmissions/IWebsocketTransmission.cpp"
     "${OPENPPP2_ROOT}/ppp/Random.cpp"
@@ -428,6 +555,12 @@ openppp2_add_cpp_test(linux_route_platform_contract_test SOURCES
     support/linux_route_platform_stubs.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/route/LinuxRoutePlatform.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/route/RouteSpecs.cpp")
+openppp2_add_cpp_test(linux_ipv6_contract_test SOURCES
+    linux_ipv6_contract_test.cpp)
+target_link_libraries(linux_ipv6_contract_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(windows_ipv6_route_transaction_test SOURCES
+    windows_ipv6_route_transaction_test.cpp
+    "${OPENPPP2_ROOT}/ppp/ipv6/IPv6RouteTransaction.cpp")
 openppp2_add_cpp_test(route_platform_adapters_test SOURCES
     route_platform_adapters_test.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/route/WindowsRoutePlatform.cpp"
