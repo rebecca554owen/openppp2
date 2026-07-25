@@ -432,7 +432,7 @@ namespace ppp
                                 return false;
                             }
 
-                            return ppp::app::client::lsp::paper_airplane::PacketInput(*socket,
+                            return ppp::app::client::lsp::paper_airplane::PacketInput(socket,
                                 [self, this, socket](boost::asio::ip::tcp::endpoint& local, boost::asio::ip::tcp::endpoint& remote) noexcept -> int
                                 {
                                     if (disposed_)
@@ -454,8 +454,14 @@ namespace ppp
                 bool PaperAirplaneController::AcceptForwardAcceptor() noexcept
                 {
                     auto self = shared_from_this();
-                    return ppp::net::Socket::AcceptLoopbackSchedulerAsync(acceptors_[1],
-                        [self, this](const ppp::net::Socket::AsioContext& context, const ppp::net::Socket::AsioStrandPtr& strand, const ppp::net::Socket::AsioTcpSocket& socket) noexcept
+                    auto acceptor = acceptors_[1];
+                    if (NULLPTR == acceptor)
+                    {
+                        return false;
+                    }
+
+                    return ppp::net::Socket::AcceptLoopbackSchedulerAsync(*acceptor,
+                        [self, this, acceptor](const ppp::net::Socket::AsioContext& context, const ppp::net::Socket::AsioStrandPtr& strand, const ppp::net::Socket::AsioTcpSocket& socket) noexcept
                         {
                             if (disposed_)
                             {

@@ -21,7 +21,13 @@ namespace ppp::win32::ipv6 {
         const SOCKADDR_INET* destination,
         MIB_IPFORWARD_ROW2* best_route,
         SOCKADDR_INET* best_source) noexcept {
-        return ::GetBestRoute2(interface_luid, interface_index, nullptr,
+        NET_LUID mutable_luid{};
+        NET_LUID* mutable_luid_ptr = nullptr;
+        if (interface_luid != nullptr) {
+            mutable_luid = *interface_luid;
+            mutable_luid_ptr = &mutable_luid;
+        }
+        return ::GetBestRoute2(mutable_luid_ptr, interface_index, nullptr,
             destination, 0, best_route, best_source);
     }
 
@@ -70,11 +76,9 @@ namespace ppp::win32::ipv6 {
             return false;
         }
 
-        MIB_IF_ROW2 tap;
-        ::InitializeMibIfRow(&tap);
+        MIB_IF_ROW2 tap{};
         tap.InterfaceIndex = static_cast<NET_IFINDEX>(tap_interface_index);
-        MIB_IF_ROW2 physical;
-        ::InitializeMibIfRow(&physical);
+        MIB_IF_ROW2 physical{};
         physical.InterfaceIndex = static_cast<NET_IFINDEX>(physical_interface_index);
         if (api_->GetIfEntry2(&tap) != NO_ERROR ||
             api_->GetIfEntry2(&physical) != NO_ERROR ||
@@ -189,8 +193,7 @@ namespace ppp::win32::ipv6 {
 
     bool WindowsIPv6RouteOwner::RevalidateInterface(
         const MIB_IPFORWARD_ROW2& row) noexcept {
-        MIB_IF_ROW2 current;
-        ::InitializeMibIfRow(&current);
+        MIB_IF_ROW2 current{};
         current.InterfaceIndex = row.InterfaceIndex;
         return api_->GetIfEntry2(&current) == NO_ERROR &&
             current.InterfaceIndex == row.InterfaceIndex &&
