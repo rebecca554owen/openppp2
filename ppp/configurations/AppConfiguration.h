@@ -4,6 +4,7 @@
 #include <ppp/threading/BufferswapAllocator.h>
 #include <ppp/configurations/DnsServerEntry.h>
 #include <ppp/configurations/MappingConfiguration.h>
+#include <ppp/configurations/TransportAuthConfiguration.h>
 
 namespace Json {
     class Value;
@@ -207,6 +208,8 @@ namespace ppp {
                 bool                                                        shuffle_data;   ///< Randomly reorder payload blocks within each packet when true.
                 bool                                                        simd_auto;      ///< Transparently run aes-*-cfb via AES-NI when the CPU supports it (default true).
             }                                                               key;            ///< Cryptographic key and cipher configuration.
+            TransportAuthConfiguration                                      transport_auth; ///< Shared transport-auth metadata and keyring references; decoded secrets are never stored here.
+            std::shared_ptr<const TransportAuthKeyringSnapshot>              transport_auth_keyring; ///< Runtime decoded keyring snapshot; never serialized.
             struct {
                 int64_t                                                     size;           ///< Virtual memory file size in bytes; 0 disables vmem backing.
                 ppp::string                                                 path;           ///< File path used for memory-mapped virtual memory backing store.
@@ -251,6 +254,9 @@ namespace ppp {
                     bool                                                    enabled;    ///< Permit same-process recovery of suspended authenticated sessions.
                     int64_t                                                 grace_ms;   ///< Maximum carrier outage grace period in milliseconds.
                 }                                                           session_resume;
+                struct {
+                    bool                                                    enabled;    ///< Require transport-auth PSK during server handshakes.
+                }                                                           transport_auth;
             }                                                               server;         ///< Server-mode specific parameters.
             struct {
                 ppp::string                                                 guid;           ///< Client GUID string used for authentication and session tracking.
@@ -265,6 +271,9 @@ namespace ppp {
                 struct {
                     bool                                                    enabled;        ///< Enable authenticated L3 session roaming on the client.
                 }                                                           session_resume;
+                struct {
+                    bool                                                    enabled;        ///< Require transport-auth PSK during client handshakes.
+                }                                                           transport_auth;
 #if defined(_WIN32)
                 struct {
                     bool                                                    tcp;            ///< Enable Paper Airplane TCP acceleration driver on Windows when true.

@@ -209,6 +209,58 @@ namespace ppp {
                 static bool                                         FromJson(P2PControlMessage& value, const Json::Value& json) noexcept;
             };
 
+            /** @brief Fixed v1 transport authentication control actions. */
+            enum class TransportAuthAction : std::uint8_t {
+                None = 0,
+                Advertise = 1,
+                Select = 2,
+                Success = 3,
+                Reject = 4,
+            };
+
+            /**
+             * @brief Strict v1 carrier-authentication negotiation carried as trailing INFO JSON.
+             *
+             * An advertisement always carries the ordered method set and may also carry the
+             * complete initiator message tuple. Selection carries the responder message tuple.
+             * A success with a proof is the proving form; omitting proof is the server
+             * acknowledgement form. Every non-reject action carries the same 16-byte attempt
+             * token, encoded as 32 canonical lowercase hexadecimal characters. A reject may
+             * omit the token when the attempt is not known.
+             */
+            struct TransportAuthControl {
+                static constexpr std::uint8_t                        ProtocolVersion = 1;
+                static constexpr std::size_t                         MaximumMethods = 4;
+                static constexpr std::size_t                         MaximumMethodLength = 32;
+                static constexpr std::size_t                         MaximumKeyIdLength = 63;
+                static constexpr std::size_t                         MaximumTokenSize = 255;
+                static constexpr std::size_t                         TokenHexLength = 32;
+                static constexpr std::size_t                         MaximumMessageBytes = 128;
+                static constexpr std::size_t                         MaximumReasonLength = 64;
+                using Action = TransportAuthAction;
+
+                std::uint8_t                                        version = ProtocolVersion;
+                Action                                              action = Action::None;
+                ppp::string                                         method;
+                ppp::vector<ppp::string>                            methods;
+                ppp::string                                         key_id;
+                ppp::string                                         token;
+                std::uint32_t                                       sequence = 0;
+                ppp::string                                         message;
+                ppp::string                                         proof;
+                ppp::string                                         reason;
+
+                void                                                Clear() noexcept;
+                bool                                                HasAny() const noexcept;
+                bool                                                Valid() const noexcept;
+                void                                                ToJson(Json::Value& json) const noexcept;
+                ppp::string                                         ToJson() const noexcept;
+                static const char*                                  ActionToString(Action action) noexcept;
+                static bool                                         ActionFromString(const ppp::string& text, Action& action) noexcept;
+                static bool                                         FromJson(TransportAuthControl& value, const ppp::string& json) noexcept;
+                static bool                                         FromJson(TransportAuthControl& value, const Json::Value& json) noexcept;
+            };
+
             /** @brief Fixed v1 action codes used by JSON controls and authenticated transcripts. */
             enum class SessionResumeAction : std::uint8_t {
                 None = 0,
@@ -335,6 +387,9 @@ namespace ppp {
 
                 /** @brief Optional P2P control-plane message. */
                 P2PControlMessage                                   P2P;
+
+                /** @brief Optional carrier authentication negotiation control. */
+                TransportAuthControl                                TransportAuth;
 
                 /** @brief Optional authenticated L3 roaming control. */
                 SessionResumeControl                                SessionResume;

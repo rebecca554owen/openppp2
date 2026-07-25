@@ -50,6 +50,12 @@ namespace ppp {
             virtual void                                                                        Dispose() noexcept override;
             /** @brief Returns the cached remote TCP endpoint. */
             virtual boost::asio::ip::tcp::endpoint                                              GetRemoteEndPoint() noexcept override;
+            /** @brief Main/server sockets are authenticated TCP carriers; child flows are not. */
+            AuthenticatedCarrierKind                                                            GetAuthenticatedCarrierKind() const noexcept override {
+                return role_ == TcpTransmissionRole::Child
+                    ? AuthenticatedCarrierKind::None
+                    : AuthenticatedCarrierKind::Tcp;
+            }
             /**
              * @brief Reads an exact number of bytes from the socket.
              * @param y Coroutine yield context.

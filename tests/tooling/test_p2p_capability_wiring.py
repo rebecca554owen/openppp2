@@ -548,8 +548,11 @@ class P2PCapabilityWiringTests(unittest.TestCase):
         self.assertIn("ProviderOwnedP2PDatagramTransport.swift", workflow)
         self.assertIn("swiftc -typecheck", workflow)
 
-    def test_authenticated_exporter_is_tls_websocket_only_and_disposal_safe(self) -> None:
+    def test_authenticated_exporter_is_carrier_bound_and_disposal_safe(self) -> None:
         exporter_header = self.source("ppp/ssl/TlsSessionExporter.h")
+        binding_header = self.source(
+            "ppp/transmissions/IAuthenticatedCarrierBinding.h"
+        )
         base_header = self.source("ppp/transmissions/ITransmission.h")
         websocket_header = self.source("ppp/transmissions/IWebsocketTransmission.h")
         websocket_source = self.source("ppp/transmissions/IWebsocketTransmission.cpp")
@@ -559,7 +562,20 @@ class P2PCapabilityWiringTests(unittest.TestCase):
             "ppp/net/asio/websocket/websocket_ssl_close_websocket.cpp"
         )
 
+        self.assertIn("class IAuthenticatedCarrierBinding", binding_header)
+        self.assertIn("virtual ~IAuthenticatedCarrierBinding() noexcept", binding_header)
+        self.assertIn("HasAuthenticatedSessionExporter() const noexcept = 0", binding_header)
+        self.assertIn("ExportAuthenticatedSessionKey", binding_header)
+        self.assertIn("public IAuthenticatedCarrierBinding", base_header)
         self.assertIn("IsHandshakeComplete() const noexcept", base_header)
+        self.assertIn(
+            "HasAuthenticatedSessionExporter() const noexcept override;",
+            base_header,
+        )
+        self.assertIn("ExportAuthenticatedSessionKey", base_header)
+        self.assertIn("InstallNoiseAuthenticatedCarrierBinding", base_header)
+        self.assertIn("AuthenticatedCarrierKind::Tcp", tcp_header)
+        self.assertIn("AuthenticatedCarrierKind::WebSocket", websocket_header)
         ssl_class = websocket_header[websocket_header.index("class ISslWebsocketTransmission") :]
         plain_class = websocket_header[
             websocket_header.index("class IWebsocketTransmission") :

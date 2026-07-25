@@ -27,6 +27,8 @@ Use this page to choose the current documentation for the native `ppp` tree. Fol
 | Source reading, builds, tests, and compatibility | [Development](development/README.md) |
 | Interface status, implementation boundaries, and known gaps | [Project interface map](reference/PROJECT_INTERFACE_MAP.md) |
 
+Runtime consumers should also follow the [UI runtime contract](reference/UI_RUNTIME_CONTRACT.md) and its [Chinese peer](reference/UI_RUNTIME_CONTRACT_CN.md).
+
 ## Runtime orientation
 
 The normal native startup path is:

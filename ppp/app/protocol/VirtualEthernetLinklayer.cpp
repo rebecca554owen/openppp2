@@ -741,8 +741,11 @@ namespace ppp {
                 }
                 elif (packet_action == PacketAction_LAN) {           // LAN advertisement
                     if (packet_length >= static_cast<int>(sizeof(uint32_t) * 2)) {
-                        uint32_t* addresses = reinterpret_cast<uint32_t*>(p);
-                        return OnLan(transmission, addresses[0], addresses[1], y);
+                        uint32_t address = 0;
+                        uint32_t mask = 0;
+                        std::memcpy(&address, p, sizeof(address));
+                        std::memcpy(&mask, p + sizeof(address), sizeof(mask));
+                        return OnLan(transmission, address, mask, y);
                     } else {
                         return packet_length == 0;
                     }

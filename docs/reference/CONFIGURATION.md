@@ -64,6 +64,9 @@ For compatibility, `ToJson()` also emits `websocket.verify-peer` alongside the c
 | `websocket.ssl.verify-peer` | `true` |
 | `websocket.ssl.ciphersuites` | `GetDefaultCipherSuites()` |
 | `client.session_resume.enabled` / `server.session_resume.enabled` | `false` / `false` |
+| `client.transport-auth.enabled` / `server.transport-auth.enabled` | `false` / `false` |
+| `transport-auth.handshake-timeout-ms` | `5000` milliseconds (clamped to `1000..30000`) |
+| `transport-auth.keys` | `[]` |
 | `server.session_resume.grace_ms` | `60000` milliseconds |
 | `key.kf` | `154543927` |
 | `key.kh` | `12` |
@@ -80,9 +83,11 @@ For compatibility, `ToJson()` also emits `websocket.verify-peer` alongside the c
 
 ## Authenticated L3 session roaming
 
-`client.session_resume.enabled` and `server.session_resume.enabled` are independent master switches and both default to false. Roaming activates only when both peers enable and negotiate capability v1 over WSS and the concrete `ISslWebsocketTransmission` exposes an authenticated TLS session exporter. Plain TCP, plain WebSocket, CDN paths, WSS without the exporter, and mixed capability states fail closed to ordinary fresh-session behavior.
+`client.session_resume.enabled` and `server.session_resume.enabled` are independent master switches and both default to false. Roaming activates only after both peers negotiate capability v1 and the carrier exposes an authenticated binding. WSS continues to use its TLS exporter. Plain TCP and plain WebSocket can use `noise-psk-v1` only when both peers also set their respective `transport-auth.enabled` policy. A legacy peer, disabled or inconsistent policy, WSS without an exporter, and an unauthenticated plain carrier fail closed to ordinary fresh-session behavior. A selected Noise exchange that fails never downgrades the same resume attempt to unauthenticated roaming.
 
-`server.session_resume.grace_ms` bounds how long the server retains only L3 session/IP/NAT/UDP-manager state after an eligible carrier failure. FRP mappings and VMUX are still closed. The retained authentication root is process-local and never serialized; a server restart therefore forces fresh authentication. When roaming is enabled, the WSS listener is pinned to the switcher's owner `io_context`, which avoids cross-executor handoff but may reduce accept/handshake parallelism. See [Authenticated L3 session roaming](../design/session-recovery/l3-roaming.md) for the protocol, threat model, and rollout limits.
+`transport-auth.keys` accepts at most eight entries with one `active` key, at most two `verify-only` keys for rotation, and optional `revoked` metadata. Key IDs are 1–63 characters, start with a lowercase letter or digit, and otherwise use only `[a-z0-9._-]`. Each active or verify-only `secret-file` must contain exactly 64 lowercase hexadecimal characters. On POSIX it must be a regular, non-symlink file owned by the current uid with no group or other permissions (normally mode `0600`). Secret-file loading is currently unsupported on Windows and enabling transport authentication there fails closed. `transport-auth.handshake-timeout-ms` is clamped to 1–30 seconds. CDN/proxy ingress is deliberately not auto-enabled; loopback or unclassifiable server ingress is ineligible for authenticated roaming.
+
+`server.session_resume.grace_ms` bounds how long the server retains only L3 session/IP/NAT/UDP-manager state after an eligible carrier failure. FRP mappings and VMUX are still closed. The retained authentication root is process-local and never serialized; a server restart therefore forces fresh authentication. When roaming is enabled, the WSS listener is pinned to the switcher's owner `io_context`, which avoids cross-executor handoff but may reduce accept/handshake parallelism. See [Authenticated L3 session roaming](../design/session-recovery/l3-roaming.md) and [Noise PSK carrier compatibility](../design/session-recovery/noise-psk-carrier-compatibility.md) for the protocols, threat model, and rollout limits.
 
 ## Security-sensitive example fragment
 

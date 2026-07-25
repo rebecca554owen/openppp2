@@ -76,6 +76,34 @@ namespace ppp {
             class VEthernetDatagramPort;
             class ClientFrpRegistry;
 
+            inline bool ShouldRunClientTransportAuth(
+                ppp::transmissions::AuthenticatedCarrierKind kind,
+                bool policy_enabled,
+                bool peer_supports_v1,
+                bool peer_enables_v1) noexcept {
+                return policy_enabled && peer_supports_v1 && peer_enables_v1 &&
+                    (kind == ppp::transmissions::AuthenticatedCarrierKind::Tcp ||
+                     kind == ppp::transmissions::AuthenticatedCarrierKind::WebSocket);
+            }
+
+            inline bool IsClientSessionRecoveryCarrierEligible(
+                ppp::transmissions::AuthenticatedCarrierKind kind,
+                ppp::transmissions::AuthenticatedCarrierMethod method,
+                bool binding_active,
+                bool has_exporter) noexcept {
+                if (!binding_active || !has_exporter) {
+                    return false;
+                }
+                if (kind == ppp::transmissions::AuthenticatedCarrierKind::TlsWebSocket) {
+                    return method == ppp::transmissions::AuthenticatedCarrierMethod::TlsExporterV1;
+                }
+                if (kind == ppp::transmissions::AuthenticatedCarrierKind::Tcp ||
+                    kind == ppp::transmissions::AuthenticatedCarrierKind::WebSocket) {
+                    return method == ppp::transmissions::AuthenticatedCarrierMethod::NoisePskV1;
+                }
+                return false;
+            }
+
             namespace udp {
                 class ClientDatagramPortManager;
             }
@@ -702,6 +730,7 @@ namespace ppp {
                     Resumed,
                 };
 
+                bool                                                                    AuthenticatePlainTransport(const ITransmissionPtr& transmission, YieldContext& y) noexcept;
                 void                                                                    ClearSessionResumeState() noexcept;
                 bool                                                                    SendSessionResumeControl(const ITransmissionPtr& transmission, const ppp::app::protocol::SessionResumeTranscriptFields& fields, const ppp::app::protocol::SessionResumeProof& proof, YieldContext& y) noexcept;
                 bool                                                                    AcceptFreshSessionResumeOffer(const ITransmissionPtr& transmission, const InformationEnvelope& offer, YieldContext& y) noexcept;

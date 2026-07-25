@@ -1,4 +1,5 @@
 #include <ppp/transmissions/ITransmission.h>
+#include <ppp/transmissions/NoisePskAuthenticatedCarrierBinding.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
@@ -185,14 +186,19 @@ namespace ppp {
              */
             static std::shared_ptr<Byte> Read(ITransmission* transmission, YieldContext& y, int& outlen) noexcept {
                 outlen = 0;
+                const bool handshaked = transmission->handshaked_.load(std::memory_order_acquire);
                 if (transmission->disposed_.load(std::memory_order_acquire)) {
                     return NULLPTR;
                 }
 
                 std::shared_ptr<Byte> packet;
                 AppConfigurationPtr& cfg = transmission->configuration_;
-                if (!transmission->handshaked_.load(std::memory_order_acquire) || cfg->key.plaintext) {
+                if (!handshaked || cfg->key.plaintext) {
                     packet = base94_decode(transmission, y, outlen);
+                    if (NULLPTR == packet || outlen < 1) {
+                        outlen = 0;
+                        return NULLPTR;
+                    }
                     packet = DecryptBinary(transmission, packet.get(), outlen, outlen);
                 }
                 else {
@@ -1265,7 +1271,106 @@ namespace ppp {
          * @brief Destroys transmission and finalizes internal resources.
          */
         ITransmission::~ITransmission() noexcept {
+            InvalidateAuthenticatedCarrierBinding();
             Finalize();
+        }
+
+        AuthenticatedCarrierMethod ITransmission::GetAuthenticatedCarrierMethod() const noexcept {
+            std::shared_ptr<NoisePskAuthenticatedCarrierBinding> binding;
+            {
+                std::lock_guard<std::mutex> lock(authenticated_carrier_mutex_);
+                binding = noise_authenticated_carrier_binding_;
+            }
+            return binding && binding->IsValid()
+                ? AuthenticatedCarrierMethod::NoisePskV1
+                : AuthenticatedCarrierMethod::None;
+        }
+
+        bool ITransmission::IsAuthenticatedCarrierBindingActive() const noexcept {
+            if (IsServerLoopbackIngress() ||
+                disposed_.load(std::memory_order_acquire) ||
+                finalized_.load(std::memory_order_acquire) ||
+                !IsHandshakeComplete()) {
+                return false;
+            }
+
+            std::shared_ptr<NoisePskAuthenticatedCarrierBinding> binding;
+            {
+                std::lock_guard<std::mutex> lock(authenticated_carrier_mutex_);
+                binding = noise_authenticated_carrier_binding_;
+            }
+            return binding && binding->IsAvailable(context_, strand_);
+        }
+
+        bool ITransmission::HasAuthenticatedSessionExporter() const noexcept {
+            return IsAuthenticatedCarrierBindingActive();
+        }
+
+        bool ITransmission::ExportAuthenticatedSessionKey(
+            const char* label,
+            const std::uint8_t* context,
+            std::size_t context_length,
+            std::uint8_t* output,
+            std::size_t output_length) noexcept {
+            if (IsServerLoopbackIngress() ||
+                disposed_.load(std::memory_order_acquire) ||
+                finalized_.load(std::memory_order_acquire) ||
+                !IsHandshakeComplete()) {
+                return false;
+            }
+
+            std::shared_ptr<NoisePskAuthenticatedCarrierBinding> binding;
+            {
+                std::lock_guard<std::mutex> lock(authenticated_carrier_mutex_);
+                binding = noise_authenticated_carrier_binding_;
+            }
+            return binding && binding->Export(context_, strand_, label, context,
+                context_length, output, output_length);
+        }
+
+        bool ITransmission::InstallNoiseAuthenticatedCarrierBinding(
+            ppp::cryptography::noise::NoisePskHandshakeResult&& result) noexcept {
+            const AuthenticatedCarrierKind carrier = GetAuthenticatedCarrierKind();
+            if ((carrier != AuthenticatedCarrierKind::Tcp &&
+                    carrier != AuthenticatedCarrierKind::WebSocket) ||
+                IsServerLoopbackIngress() ||
+                disposed_.load(std::memory_order_acquire) ||
+                finalized_.load(std::memory_order_acquire) ||
+                GetAuthenticatedCarrierMethod() != AuthenticatedCarrierMethod::None ||
+                !IsHandshakeComplete() || !result.IsValid() ||
+                !context_ || !strand_ || context_->stopped() ||
+                !strand_->running_in_this_thread()) {
+                result.Clear();
+                return false;
+            }
+
+            std::lock_guard<std::mutex> lock(authenticated_carrier_mutex_);
+            if (noise_authenticated_carrier_binding_) {
+                result.Clear();
+                return false;
+            }
+
+            try {
+                noise_authenticated_carrier_binding_ =
+                    std::make_shared<NoisePskAuthenticatedCarrierBinding>(
+                        context_, strand_, std::move(result));
+            }
+            catch (...) {
+                result.Clear();
+                return false;
+            }
+            return noise_authenticated_carrier_binding_->IsValid();
+        }
+
+        void ITransmission::InvalidateAuthenticatedCarrierBinding() noexcept {
+            std::shared_ptr<NoisePskAuthenticatedCarrierBinding> binding;
+            {
+                std::lock_guard<std::mutex> lock(authenticated_carrier_mutex_);
+                binding = std::move(noise_authenticated_carrier_binding_);
+            }
+            if (binding) {
+                binding->Invalidate();
+            }
         }
 
         /**
@@ -1273,6 +1378,7 @@ namespace ppp {
          */
         void ITransmission::Finalize() noexcept {
             ppp::telemetry::SpanScope span("transmission.lifecycle.close");
+            InvalidateAuthenticatedCarrierBinding();
 
             // One-shot guard: only the first caller proceeds; subsequent calls are no-ops.
             bool expected = false;
@@ -1413,6 +1519,10 @@ namespace ppp {
          * @brief Posts asynchronous cleanup of transmission and write queue resources.
          */
         void ITransmission::Dispose() noexcept {
+            InvalidateAuthenticatedCarrierBinding();
+            peer_supports_transport_auth_v1_.store(false, std::memory_order_release);
+            peer_enables_transport_auth_v1_.store(false, std::memory_order_release);
+            disposed_.store(true, std::memory_order_release);
             ppp::telemetry::Log(Level::kInfo, "transmission", "ITransmission disposed");
             ppp::telemetry::Count("transmission.transport.dispose", 1);
 
@@ -1430,6 +1540,7 @@ namespace ppp {
          * @brief Runs client-side handshake state machine and negotiates mux mode.
          */
         Int128 ITransmission::InternalHandshakeClient(YieldContext& y, bool& mux) noexcept {
+            // Historical API name: this path runs on the server application side.
             if (!Transmission_Handshake_Nop(configuration_, this, y)) {
                 return 0;
             }
@@ -1437,6 +1548,9 @@ namespace ppp {
             Int128 sid = Transmission_Handshake_SessionId(configuration_, this, y);
             if (sid) {
                 Int128 ivv = ppp::auxiliary::StringAuxiliary::GuidStringToInt128(GuidGenerate());
+                ivv = TransportAuthHandshakeCapabilityCodec::EncodeServerIvv(
+                    ivv, configuration_->server.transport_auth.enabled &&
+                        !IsServerLoopbackIngress());
                 if (!Transmission_Handshake_SessionId(configuration_, this, y, ivv)) {
                     return 0;
                 }
@@ -1444,6 +1558,11 @@ namespace ppp {
                 Int128 nmux = Transmission_Handshake_SessionId(configuration_, this, y);
                 if (nmux) {
                     mux = (nmux & 1) != 0;
+                    bool peer_supports_transport_auth_v1 = false;
+                    bool peer_enables_transport_auth_v1 = false;
+                    TransportAuthHandshakeCapabilityCodec::DecodeClientNmux(nmux,
+                        peer_supports_transport_auth_v1,
+                        peer_enables_transport_auth_v1);
 
                     // Obfuscation-flag validation, backward-compatible edition.
                     // A new-version client embeds its flag canary in the high 64
@@ -1511,6 +1630,11 @@ namespace ppp {
                         }
                     }
 
+                    peer_supports_transport_auth_v1_.store(
+                        peer_supports_transport_auth_v1, std::memory_order_release);
+                    peer_enables_transport_auth_v1_.store(
+                        peer_supports_transport_auth_v1 && peer_enables_transport_auth_v1,
+                        std::memory_order_release);
                     handshaked_.store(true, std::memory_order_release);
                     return sid;
                 }
@@ -1522,6 +1646,7 @@ namespace ppp {
          * @brief Runs server-side handshake state machine and validates peer state.
          */
         bool ITransmission::InternalHandshakeServer(YieldContext& y, const Int128& session_id, bool mux) noexcept {
+            // Historical API name: this path runs on the client application side.
             if (!Transmission_Handshake_Nop(configuration_, this, y)) {
                 return false;
             }
@@ -1533,22 +1658,18 @@ namespace ppp {
             uint64_t nmux_low = (static_cast<uint64_t>(RandomNext()) << 32) |
                                 static_cast<uint32_t>(RandomNext());
             // Advertise the post-handshake obfuscation-flag canary in nmux high
-            // 64 bits so the peer (if it is a new-version server that looks at
-            // these bits) can reject mismatched key.masked / key.plaintext /
+            // 64 bits so the peer server application (if it is a new version)
+            // can reject mismatched key.masked / key.plaintext /
             // key.delta-encode / key.shuffle-data / key.kf with a clear error
-            // code.  Old servers ignore this region, so the change is fully
-            // backward compatible.  This replaces the previous approach of
-            // running an extra Transmission_Handshake_VerifyFlags exchange,
+            // code.  Old server applications ignore this region, so the change
+            // is fully backward compatible.  This replaces the previous approach
+            // of running an extra Transmission_Handshake_VerifyFlags exchange,
             // which consumed the first post-handshake data packet of legacy
             // clients and therefore broke interop with them.
             uint64_t nmux_high = Transmission_Handshake_FlagCanary(configuration_);
             Int128 nmux = MAKE_OWORD(nmux_low, nmux_high);
-            if (mux) {
-                while ((nmux & 1) == 0) ++nmux;
-            }
-            else {
-                while ((nmux & 1) != 0) ++nmux;
-            }
+            nmux = TransportAuthHandshakeCapabilityCodec::EncodeClientNmux(
+                nmux, mux, configuration_->client.transport_auth.enabled);
 
             if (!Transmission_Handshake_SessionId(configuration_, this, y, nmux)) {
                 return false;
@@ -1556,6 +1677,12 @@ namespace ppp {
 
             Int128 ivv = Transmission_Handshake_SessionId(configuration_, this, y);
             if (ivv != 0) {
+                bool peer_supports_transport_auth_v1 = false;
+                bool peer_enables_transport_auth_v1 = false;
+                TransportAuthHandshakeCapabilityCodec::DecodeServerIvv(ivv,
+                    peer_supports_transport_auth_v1,
+                    peer_enables_transport_auth_v1);
+
                 CiphertextPtr current_protocol = std::atomic_load(&protocol_);
                 CiphertextPtr current_transport = std::atomic_load(&transport_);
                 if (NULLPTR != current_protocol && NULLPTR != current_transport) {
@@ -1579,14 +1706,16 @@ namespace ppp {
                     }
                 }
 
+                peer_supports_transport_auth_v1_.store(
+                    peer_supports_transport_auth_v1, std::memory_order_release);
+                peer_enables_transport_auth_v1_.store(
+                    peer_supports_transport_auth_v1 && peer_enables_transport_auth_v1,
+                    std::memory_order_release);
                 handshaked_.store(true, std::memory_order_release);
-                // NOTE: obfuscation-flag verification is not performed here.
-                // It is performed on the server side only, by inspecting the
-                // canary embedded in the high 64 bits of `nmux` above.  Adding
-                // an extra full-duplex exchange here used to consume the first
-                // post-handshake data packet of legacy clients/servers and
-                // broke backward compatibility; see InternalHandshakeClient
-                // for the mismatch-detection path.
+                // Obfuscation-flag verification is intentionally performed by
+                // the peer server application in InternalHandshakeClient, where
+                // the high 64-bit nmux canary is received. No extra exchange is
+                // added here because it would consume legacy application data.
             }
             return handshaked_.load(std::memory_order_acquire);
         }
@@ -1676,6 +1805,8 @@ namespace ppp {
          * @brief Executes client handshake with timeout protection.
          */
         Int128 ITransmission::HandshakeClient(YieldContext& y, bool& mux) noexcept {
+            peer_supports_transport_auth_v1_.store(false, std::memory_order_release);
+            peer_enables_transport_auth_v1_.store(false, std::memory_order_release);
             mux = false;
             if (!InternalHandshakeTimeoutSet()) {
                 return 0;
@@ -1691,6 +1822,8 @@ namespace ppp {
             ppp::telemetry::Histogram("transmission.handshake.us", handshake_elapsed);
 
             if (!sid) {
+                peer_supports_transport_auth_v1_.store(false, std::memory_order_release);
+                peer_enables_transport_auth_v1_.store(false, std::memory_order_release);
                 ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeClient failed");
                 ppp::telemetry::Count("transmission.handshake.failure", 1);
                 // Only set the generic SessionHandshakeFailed code when the
@@ -1711,6 +1844,8 @@ namespace ppp {
          * @brief Executes server handshake with timeout protection.
          */
         bool ITransmission::HandshakeServer(YieldContext& y, const Int128& session_id, bool mux) noexcept {
+            peer_supports_transport_auth_v1_.store(false, std::memory_order_release);
+            peer_enables_transport_auth_v1_.store(false, std::memory_order_release);
             if (session_id == 0) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionIdInvalid);
                 return false;
@@ -1730,6 +1865,8 @@ namespace ppp {
             ppp::telemetry::Histogram("transmission.handshake.us", handshake_elapsed);
 
             if (!ok) {
+                peer_supports_transport_auth_v1_.store(false, std::memory_order_release);
+                peer_enables_transport_auth_v1_.store(false, std::memory_order_release);
                 ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeServer failed");
                 ppp::telemetry::Count("transmission.handshake.failure", 1);
                 // Preserve specific inner-handshake diagnoses (e.g.
