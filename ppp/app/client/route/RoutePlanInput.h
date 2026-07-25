@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -9,6 +10,7 @@
 #include <boost/asio/ip/address.hpp>
 
 #include <ppp/app/client/route/IRoutePlatform.h>
+#include <ppp/app/client/routing/HumanRoutingRules.h>
 
 namespace ppp::app::client::route {
 
@@ -33,6 +35,7 @@ struct RoutePlanInput final {
     std::string bypass_ip_list;
     std::unordered_set<uint32_t> tunnel_dns;
     std::unordered_set<uint32_t> underlying_dns;
+    std::vector<routing::Ipv4CidrRule> human_ipv4_rules;
     bool has_fake_ip_route = false;
     RouteSpec fake_ip_route;
 };

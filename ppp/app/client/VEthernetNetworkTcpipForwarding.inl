@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ppp/configurations/AppConfiguration.h>
+#include <ppp/app/client/ClientUnderlyingSocketProtector.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/client/VEthernetNetworkTcpipConnection.h>
 #include <ppp/app/mux/MuxCoordinator.h>
@@ -20,6 +21,7 @@ namespace ppp {
                 const std::shared_ptr<AppConfiguration>&                configuration,
                 const std::shared_ptr<boost::asio::ip::tcp::socket>&    socket,
                 const boost::asio::ip::tcp::endpoint&                   remoteEP,
+                bool                                                    force,
                 std::shared_ptr<RinetdConnection>&                      out,
                 ppp::coroutines::YieldContext&                          y) noexcept {
 
@@ -29,8 +31,7 @@ namespace ppp {
                     return -1;
                 }
 
-                bool bypass_ip_address_ok = switcher->IsBypassIpAddress(remoteEP.address());
-                if (!bypass_ip_address_ok) {
+                if (!force && !switcher->IsBypassIpAddress(remoteEP.address())) {
                     return 1;
                 }
 
@@ -78,9 +79,25 @@ namespace ppp {
                     return -1;
                 }
 
-#if defined(_LINUX)
-                connection_rinetd->ProtectorNetwork = switcher->GetProtectorNetwork();
+                std::shared_ptr<ClientNetworkInterface> underlying_network_interface;
+#if !defined(_ANDROID) && !defined(_IPHONE) && !defined(IPHONE)
+                underlying_network_interface = switcher->GetUnderlyingNetworkInterface();
 #endif
+
+                std::shared_ptr<ppp::net::ProtectorNetwork> protector_network;
+#if defined(_LINUX)
+                protector_network = switcher->GetProtectorNetwork();
+                connection_rinetd->ProtectorNetwork = protector_network;
+#endif
+
+                if (force) {
+                    connection_rinetd->RemoteSocketProtectorRequired = true;
+                    connection_rinetd->ProtectRemoteSocket =
+                        BuildClientUnderlyingSocketProtector(
+                            remoteEP.address().is_v4(),
+                            underlying_network_interface,
+                            protector_network);
+                }
 
                 bool run_ok = connection_rinetd->Open(remoteEP, y);
                 if (!run_ok) {

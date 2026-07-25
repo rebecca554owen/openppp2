@@ -131,6 +131,10 @@ namespace ppp {
             }
 
             bool VEthernetDatagramPort::SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
+                return SendTo(packet, packet_length, destinationEP, routing::RoutingAction::Auto);
+            }
+
+            bool VEthernetDatagramPort::SendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP, routing::RoutingAction action) noexcept {
                 if (NULLPTR == packet || packet_length < 1) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                 }
@@ -154,6 +158,19 @@ namespace ppp {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
                 }
 
+                routing::UdpRoutingSelectorInput routing_input;
+                routing_input.action = action;
+#if defined(_ANDROID)
+                if (address.is_v4()) {
+                    routing_input.platform = routing::UdpRoutingPlatform::Android;
+                    routing_input.legacy_bypass = ports_.is_bypass_ip(address);
+                }
+#endif
+                routing::UdpRoutingMode routing_mode = routing::UdpRoutingSelector::Select(routing_input);
+                if (routing_mode == routing::UdpRoutingMode::Reject) {
+                    return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpSendFailed);
+                }
+
                 bool ok = false;
                 bool fin = false;
 
@@ -170,7 +187,7 @@ namespace ppp {
 
 #if defined(_ANDROID)
                     // It is sent out through the local physical NIC.
-                    if (address.is_v4() && ports_.is_bypass_ip(address)) {
+                    if (routing_mode == routing::UdpRoutingMode::DirectSocket) {
                         // If the socket is currently open, send data directly.
                         SynchronizedObjectScope scope(syncobj_);
                         if (opened_ > 1) {
@@ -222,6 +239,7 @@ namespace ppp {
                             message.packet        = packet_managed;
                             message.packet_length = packet_length;
                             message.destinationEP = destinationEP;
+                            message.action        = action;
 
                             ok = true;
                             messages_.emplace_back(message);
@@ -315,12 +333,11 @@ namespace ppp {
                 }
 
                 // Protect udp sockets to prevent udp data from being sent to the VPN loop.
-                auto protector_network = ProtectorNetwork; 
-                if (NULLPTR != protector_network) {
-                    if (!protector_network->Protect(socket_.native_handle(), y)) {
-                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
-                        return false;
-                    }
+                auto protector_network = ProtectorNetwork;
+                if (NULLPTR == protector_network ||
+                    !protector_network->Protect(socket_.native_handle(), y)) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
+                    return false;
                 }
 
                 /**
@@ -330,13 +347,13 @@ namespace ppp {
                 Messages messages; {
                     SynchronizedObjectScope scope(syncobj_);
                     opened_ = 2;
-                    
+
                     messages = std::move(messages_);
                     messages_.clear();
                 }
 
                 for (Message& message : messages) {
-                    SendTo(message.packet.get(), message.packet_length, message.destinationEP);
+                    SendTo(message.packet.get(), message.packet_length, message.destinationEP, message.action);
                 }
 
                 bool ok = Loopback();

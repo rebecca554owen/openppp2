@@ -194,14 +194,16 @@ namespace ppp {
                 }
 
                 if (NULLPTR != owner_->dns_controller_) {
-                    owner_->dns_controller_->Open(
-                        owner_->configuration_,
-                        owner_->GetContext(),
-                        owner_->proxy_only_
+                    if (!owner_->dns_controller_->Open(
+                            owner_->configuration_,
+                            owner_->GetContext(),
+                            owner_->proxy_only_
 #if defined(_LINUX)
-                        , owner_->protect_network_
+                            , owner_->protect_network_
 #endif
-                    );
+                        )) {
+                        return false;
+                    }
                 }
 
                 // New the beast network bandwidth aggregator.

@@ -1,7 +1,7 @@
 # Configuration Reference
 > Status: Active
 > Type: Reference
-> Last verified: 82643dc
+> Last verified: AppConfiguration and human-readable routing rules, 2026-07-24
 > Parent index: [Reference index](README.md)
 > Peer link: [中文](CONFIGURATION_CN.md)
 
@@ -31,7 +31,7 @@ This is **not** a merge or sparse-patch operation. A subsequent `Load()` reconst
 
 ```text
 concurrent, cdn, ip, vmem, udp, tcp, mux, websocket, key, server,
-client, virr, vbgp, telemetry, p2p, dns, geo-rules
+client, virr, vbgp, telemetry, p2p, dns, geo-rules, routing
 ```
 
 Selected canonical structures:
@@ -46,6 +46,8 @@ Selected canonical structures:
 | `client.session_resume` | `enabled`; client master switch for authenticated L3 roaming. |
 | `key` | `kf`, `kh`, `kl`, `kx`, `sb`, cipher names/keys, and transform flags. |
 | `client` | mappings, routes, proxy settings, reconnect timeout, identity, server, and bandwidth. |
+| `routing.rules` | Path to a human-readable routing rules file. Empty disables only the human policy; a non-empty policy coexists with legacy inputs. An unreadable or invalid configured file fails client initialization. See [Routing and DNS](../guides/ROUTING_AND_DNS.md). |
+| `routing.tcp-domain-sniff` | Boolean, default `false`. When enabled and domain rules exist, real-IPv4 TCP flows may use a sniffed HTTP Host or TLS SNI explicit-domain match for that flow only. Fake IP remains higher priority; failures fall back to IP/default routing. UDP is unchanged. |
 
 For compatibility, `ToJson()` also emits `websocket.verify-peer` alongside the canonical nested `websocket.ssl.verify-peer`, and emits both `udp.static.servers` and the legacy `udp.static.server`. Author new configuration with `websocket.ssl.verify-peer`.
 
@@ -65,6 +67,8 @@ For compatibility, `ToJson()` also emits `websocket.verify-peer` alongside the c
 | `websocket.ssl.ciphersuites` | `GetDefaultCipherSuites()` |
 | `client.session_resume.enabled` / `server.session_resume.enabled` | `false` / `false` |
 | `server.session_resume.grace_ms` | `60000` milliseconds |
+| `routing.rules` | `""` (human policy disabled) |
+| `routing.tcp-domain-sniff` | `false` |
 | `key.kf` | `154543927` |
 | `key.kh` | `12` |
 | `key.kl` | `10` |
@@ -77,6 +81,14 @@ For compatibility, `ToJson()` also emits `websocket.verify-peer` alongside the c
 | `vbgp.update-interval` | `3600` seconds |
 
 `plaintext=true` keeps the base94 envelope active after handshake, and the startup security diagnostic explicitly reports packets transmitted without encryption. It is unsafe for untrusted networks. Set it to `false` and replace both default keys before any real deployment; both peers must also agree on the framing-related key flags.
+
+### TCP domain sniffing
+
+Enable with `"routing": { "rules": "./routing.rules", "tcp-domain-sniff": true }`. The attempt is gated to real IPv4 TCP when the switch is on and domain rules exist. Priority is fake IP > sniffed explicit domain rule > IPv4 rule > `default`; an explicit HTTP Host or TLS SNI match changes only the current flow and creates no domain-derived `/32`. ECH, missing SNI, non-HTTP/TLS, timeout, malformed, unsupported, and unmatched inputs retain the IP/default result. UDP is unaffected.
+
+A `Direct` result uses per-socket binding/protection on the underlying connection socket before connect. `ForceDirect` rejects the flow if its required protector is absent or fails; it never falls back to the tunnel. iOS rejects `Direct`, while `Auto` retains legacy-compatible behavior. With sniffing off, TCP uses destination IP/`default`; UDP and QUIC always use destination IP/`default` regardless of this switch.
+
+Human domain rules do not require `dns.fake-ip.enabled`. When fake IP is disabled, a matching A query is resolved through the domain action's configured/fallback provider and returns the real A answer without fake allocation, sticky mapping, fake cache, or fake route. When fake IP is enabled, a strict human match remains fail closed: an ineligible hostname or failed fake allocation/response build is rejected instead of falling back to a real or legacy answer. See [Routing and DNS](../guides/ROUTING_AND_DNS.md) for platform details.
 
 ## Authenticated L3 session roaming
 

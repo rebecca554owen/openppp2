@@ -87,3 +87,58 @@ BOOST_AUTO_TEST_CASE(route_snapshot_reports_configured_route) {
     BOOST_TEST(route_network == htonl(0xC6120000u));
     BOOST_TEST(route_prefix == 16);
 }
+
+BOOST_AUTO_TEST_CASE(domain_action_is_sticky_after_real_ip_resolution) {
+    using Action = ppp::app::client::routing::RoutingAction;
+    client_dns::FakeIpPool pool;
+    BOOST_REQUIRE(pool.Configure("198.18.0.1/16"));
+
+    const auto allocation = pool.Allocate("direct.example", Action::Direct, true);
+    BOOST_REQUIRE(allocation.created);
+    BOOST_REQUIRE(allocation.should_resolve);
+    BOOST_TEST(allocation.entry.is_resolving);
+    BOOST_TEST(!allocation.entry.is_resolved);
+
+    BOOST_REQUIRE(pool.SetResolved("direct.example", 0xCB007107u, Action::Proxy));
+    client_dns::FakeIpPool::EntrySnapshot entry;
+    BOOST_REQUIRE(pool.Lookup(allocation.entry.fake_ip_host, entry));
+    BOOST_TEST(entry.real_ip_host == 0xCB007107u);
+    BOOST_TEST(static_cast<int>(entry.action) == static_cast<int>(Action::Direct));
+    BOOST_TEST(entry.domain_matched);
+    BOOST_TEST(!entry.is_resolving);
+    BOOST_TEST(entry.is_resolved);
+}
+
+BOOST_AUTO_TEST_CASE(ip_action_applies_when_domain_did_not_match) {
+    using Action = ppp::app::client::routing::RoutingAction;
+    client_dns::FakeIpPool pool;
+    BOOST_REQUIRE(pool.Configure("198.18.0.1/16"));
+
+    const auto allocation = pool.Allocate("ip-policy.example", Action::Auto, false);
+    BOOST_REQUIRE(allocation.should_resolve);
+    BOOST_REQUIRE(pool.SetResolved("ip-policy.example", 0x08080808u, Action::Proxy));
+
+    client_dns::FakeIpPool::EntrySnapshot entry;
+    BOOST_REQUIRE(pool.Lookup(allocation.entry.fake_ip_host, entry));
+    BOOST_TEST(static_cast<int>(entry.action) == static_cast<int>(Action::Proxy));
+    BOOST_TEST(!entry.domain_matched);
+}
+
+BOOST_AUTO_TEST_CASE(repeated_allocation_coalesces_resolution_and_failure_allows_retry) {
+    using Action = ppp::app::client::routing::RoutingAction;
+    client_dns::FakeIpPool pool;
+    BOOST_REQUIRE(pool.Configure("198.18.0.1/16"));
+
+    const auto first = pool.Allocate("retry.example", Action::Proxy, true);
+    const auto concurrent = pool.Allocate("retry.example", Action::Direct, true);
+    BOOST_REQUIRE(first.should_resolve);
+    BOOST_TEST(!concurrent.should_resolve);
+    BOOST_TEST(first.entry.fake_ip_host == concurrent.entry.fake_ip_host);
+    BOOST_TEST(static_cast<int>(concurrent.entry.action) == static_cast<int>(Action::Proxy));
+
+    pool.SetResolveFailed("retry.example");
+    const auto retry = pool.Allocate("retry.example", Action::Direct, false);
+    BOOST_TEST(retry.should_resolve);
+    BOOST_TEST(!retry.created);
+    BOOST_TEST(static_cast<int>(retry.entry.action) == static_cast<int>(Action::Proxy));
+}

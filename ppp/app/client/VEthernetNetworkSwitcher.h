@@ -62,6 +62,11 @@ namespace ppp {
                 struct RoutePlanInput;
             }
 
+            namespace routing {
+                class HumanRoutingRules;
+                struct ResolvedDestination;
+            }
+
             namespace proxys {
                 class VEthernetHttpProxySwitcher;
                 class VEthernetSocksProxySwitcher;

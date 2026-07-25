@@ -1,15 +1,16 @@
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetNetworkTcpipConnection.h>
 #include <ppp/app/client/VEthernetNetworkTcpipForwarding.inl>
-#include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
+#include <ppp/app/client/routing/ProtocolSniffer.h>
 #include <ppp/app/protocol/VirtualEthernetLinklayer.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
 #include <ppp/app/protocol/templates/TVEthernetTcpipConnection.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
 
+#include <array>
 #include <vector>
 
 #include <ppp/net/Socket.h>
@@ -34,9 +35,18 @@ namespace ppp {
     namespace app {
         namespace client {
             /** @brief Initializes session state and marks it active. */
-            VEthernetNetworkTcpipConnection::VEthernetNetworkTcpipConnection(const std::shared_ptr<VEthernetExchanger>& exchanger, const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand) noexcept
+            VEthernetNetworkTcpipConnection::VEthernetNetworkTcpipConnection(
+                const std::shared_ptr<VEthernetExchanger>& exchanger,
+                const std::shared_ptr<boost::asio::io_context>& context,
+                const ppp::threading::Executors::StrandPtr& strand,
+                routing::TcpRoutingMode routing_mode,
+                const std::shared_ptr<const routing::HumanRoutingRules>& routing_rules,
+                bool domain_sniff_candidate) noexcept
                 : TapTcpClient(context, strand)
-                , exchanger_(exchanger) {
+                , exchanger_(exchanger)
+                , routing_mode_(routing_mode)
+                , routing_rules_(routing_rules)
+                , domain_sniff_candidate_(domain_sniff_candidate) {
                 Update();
             }
 
@@ -200,18 +210,42 @@ namespace ppp {
                     auto strand = GetStrand();
                     boost::asio::ip::tcp::endpoint remoteEP = GetRemoteEndPoint();
 
-#if defined(_IPHONE)
-                    int rinetd_status = 1;
-#else
-                    int rinetd_status = Rinetd(self, exchanger, context, strand, configuration, socket, remoteEP, connection_rinetd_, y);
-                    if (rinetd_status == 0) {
-                        break;
+#if defined(_IPHONE) || defined(IPHONE)
+                    if (routing_mode_ == routing::TcpRoutingMode::ForceDirect) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TcpConnectFailed);
+                        return false;
                     }
+#else
+                    if (routing_mode_ != routing::TcpRoutingMode::ForceProxy) {
+                        const bool force_direct =
+                            routing_mode_ == routing::TcpRoutingMode::ForceDirect;
+                        const int rinetd_status = Rinetd(
+                            self, exchanger, context, strand, configuration, socket,
+                            remoteEP, force_direct, connection_rinetd_, y);
+                        if (rinetd_status == 0) {
+                            break;
+                        }
 
-                    if (rinetd_status < 0) {
-                        ppp::telemetry::Count("tcpip.peer_connect.fail.rinetd", 1);
-                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tcpip", "peer connect failed: stage=rinetd remote=%s:%u error=%d fallback=vpn", remoteEP.address().to_string().c_str(), remoteEP.port(), (int)ppp::diagnostics::GetLastErrorCode());
-                        connection_rinetd_.reset();
+                        if (rinetd_status < 0) {
+                            ppp::telemetry::Count("tcpip.peer_connect.fail.rinetd", 1);
+                            ppp::telemetry::Log(
+                                ppp::telemetry::Level::kInfo,
+                                "tcpip",
+                                force_direct
+                                    ? "peer connect failed: stage=rinetd remote=%s:%u error=%d fallback=none"
+                                    : "peer connect failed: stage=rinetd remote=%s:%u error=%d fallback=vpn",
+                                remoteEP.address().to_string().c_str(),
+                                remoteEP.port(),
+                                (int)ppp::diagnostics::GetLastErrorCode());
+                            connection_rinetd_.reset();
+                        }
+                        if (force_direct) {
+                            if (rinetd_status > 0) {
+                                ppp::diagnostics::SetLastErrorCode(
+                                    ppp::diagnostics::ErrorCode::TcpConnectFailed);
+                            }
+                            return false;
+                        }
                     }
 #endif
 
@@ -287,6 +321,123 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Performs bounded, non-consuming initial-payload domain inspection. */
+            bool VEthernetNetworkTcpipConnection::SniffDomainRouting(
+                ppp::coroutines::YieldContext& y) noexcept {
+                constexpr uint64_t kSniffTimeoutMilliseconds = 250;
+                constexpr uint64_t kSniffPollMilliseconds = 5;
+
+                std::shared_ptr<boost::asio::ip::tcp::socket> socket = GetSocket();
+                std::shared_ptr<const routing::HumanRoutingRules> rules = routing_rules_;
+                if (NULLPTR == socket || !socket->is_open() || NULLPTR == rules) {
+                    return false;
+                }
+
+                routing::ProtocolSniffer sniffer;
+                routing::ProtocolSnifferResult result;
+                std::array<unsigned char, routing::ProtocolSniffer::MaxInputSize> peek_buffer{};
+                std::size_t fed_size = 0;
+                const uint64_t started_at = ppp::threading::Executors::GetTickCount();
+                const bool was_non_blocking = socket->non_blocking();
+                boost::system::error_code ec;
+                socket->non_blocking(true, ec);
+
+                const char* outcome = "timeout";
+                if (ec) {
+                    outcome = "io_error";
+                }
+                else {
+                    while (result.status == routing::ProtocolSnifferStatus::NeedMore) {
+                        if (IsDisposed() || !socket->is_open()) {
+                            outcome = "disposed";
+                            break;
+                        }
+                        if (ppp::threading::Executors::GetTickCount() - started_at >=
+                            kSniffTimeoutMilliseconds) {
+                            outcome = "timeout";
+                            break;
+                        }
+
+                        ec.clear();
+                        const std::size_t peeked = socket->receive(
+                            boost::asio::buffer(peek_buffer),
+                            boost::asio::socket_base::message_peek, ec);
+                        if (!ec) {
+                            if (peeked > fed_size) {
+                                result = sniffer.Feed(
+                                    peek_buffer.data() + fed_size, peeked - fed_size);
+                                fed_size = peeked;
+                            }
+                            if (peeked == peek_buffer.size() &&
+                                result.status == routing::ProtocolSnifferStatus::NeedMore) {
+                                result.status = routing::ProtocolSnifferStatus::LimitExceeded;
+                            }
+                        }
+                        else if (ec != boost::asio::error::would_block &&
+                            ec != boost::asio::error::try_again) {
+                            outcome = ec == boost::asio::error::eof ? "eof" : "io_error";
+                            break;
+                        }
+
+                        if (result.status == routing::ProtocolSnifferStatus::NeedMore) {
+                            ppp::coroutines::asio::async_sleep(y, kSniffPollMilliseconds);
+                        }
+                    }
+
+                    switch (result.status) {
+                    case routing::ProtocolSnifferStatus::Complete:
+                        outcome = "complete";
+                        break;
+                    case routing::ProtocolSnifferStatus::Unsupported:
+                        outcome = "unsupported";
+                        break;
+                    case routing::ProtocolSnifferStatus::Malformed:
+                        outcome = "malformed";
+                        break;
+                    case routing::ProtocolSnifferStatus::LimitExceeded:
+                        outcome = "limit_exceeded";
+                        break;
+                    default:
+                        break;
+                    }
+                }
+
+                boost::system::error_code restore_ec;
+                if (socket->is_open()) {
+                    socket->non_blocking(was_non_blocking, restore_ec);
+                }
+
+                const char* source = "ip_fallback";
+                const char* action = "ip_fallback";
+                if (restore_ec) {
+                    outcome = "restore_error";
+                }
+                else if (result.status == routing::ProtocolSnifferStatus::Complete) {
+                    source = result.source == routing::ProtocolSnifferSource::TlsSni
+                        ? "tls_sni" : "http_host";
+                    const routing::RoutingMatch match = rules->MatchDomainRule(result.domain);
+                    if (match.matched) {
+                        routing::TcpRoutingSelectorInput selector_input;
+                        selector_input.action = match.action;
+                        const routing::TcpRoutingMode selected_mode =
+                            routing::TcpRoutingSelector::Select(selector_input);
+                        if (selected_mode == routing::TcpRoutingMode::ForceDirect ||
+                            selected_mode == routing::TcpRoutingMode::ForceProxy) {
+                            routing_mode_ = selected_mode;
+                            action = selected_mode == routing::TcpRoutingMode::ForceDirect
+                                ? "direct" : "proxy";
+                        }
+                    }
+                    else {
+                        outcome = "no_match";
+                    }
+                }
+
+                ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "tcpip_sniff",
+                    "source=%s outcome=%s action=%s", source, outcome, action);
+                return !restore_ec && !IsDisposed();
+            }
+
 #if defined(_WIN32)
 #pragma optimize("", off)
 #pragma optimize("gsyb2", on) /* /O1 = /Og /Os /Oy /Ob2 /GF /Gy */
@@ -311,14 +462,28 @@ namespace ppp {
 #endif
             /** @brief Starts established-stage forwarding coroutine execution. */
             bool VEthernetNetworkTcpipConnection::Establish() noexcept {
+                if (!domain_sniff_candidate_) {
+                    return Spawn(
+                        [this](ppp::coroutines::YieldContext& y) noexcept {
+                            return Loopback(y);
+                        });
+                }
+
                 return Spawn(
                     [this](ppp::coroutines::YieldContext& y) noexcept {
+                        if (!SniffDomainRouting(y) || !ConnectToPeer(y)) {
+                            return false;
+                        }
                         return Loopback(y);
                     });
             }
 
             /** @brief Starts peer setup coroutine before accept acknowledgement. */
             bool VEthernetNetworkTcpipConnection::BeginAccept() noexcept {
+                if (domain_sniff_candidate_) {
+                    return AckAccept();
+                }
+
                 ppp::telemetry::Log(ppp::telemetry::Level::kDebug, "tcpip", "begin accept coroutine post remote=%s:%u", GetRemoteEndPoint().address().to_string().c_str(), GetRemoteEndPoint().port());
                 // mux=0: let ConnectTransmission queue for an iOS child slot instead of
                 // rejecting SYN here (speed tests open 16+ parallel flows to CDN edges).

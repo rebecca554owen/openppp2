@@ -1,7 +1,9 @@
 #include <ppp/stdafx.h>
 #include <ppp/app/client/route/RouteCoordinator.h>
 #include <ppp/app/client/route/MobileRoutePlatform.h>
+#include <ppp/app/client/route/RouteSpecs.h>
 #include <ppp/app/client/route/RouteState.h>
+#include <ppp/app/client/routing/HumanRoutingRouteSpecs.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/native/rib.h>
@@ -70,11 +72,22 @@ namespace ppp {
                 plan.tunnel_dns = input.tunnel_dns;
                 plan.underlying_dns = input.underlying_dns;
 
+                const routing::HumanRoutingRouteSpecPlan human_plan =
+                    routing::BuildHumanRoutingRouteSpecs(
+                        input,
+                        routing::HumanRoutingRouteEnvironment::Mobile);
+                if (human_plan.invalid_count != 0) {
+                    return false;
+                }
+                const std::vector<route::RouteSpec> specs = route::MergeRouteSpecs(
+                    route::BuildRouteSpecs(rib),
+                    human_plan.routes,
+                    route::BuildMobileRouteSpecs(plan));
                 route::MobileRoutePlatform platform(
                     [rib](const route::RouteSpec& spec) noexcept {
                         return rib->AddRoute(spec.network, spec.prefix, spec.gateway);
                     });
-                if (!platform.ApplyAll(route::BuildMobileRouteSpecs(plan))) {
+                if (!platform.ApplyAll(specs)) {
                     return false;
                 }
                 state_.ReplaceRib(std::move(rib));

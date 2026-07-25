@@ -25,4 +25,9 @@ struct DnsRouteSpecPlan final {
 
 DnsRouteSpecPlan BuildDnsRouteSpecs(const RoutePlanInput& input) noexcept;
 
+std::vector<RouteSpec> MergeRouteSpecs(
+    const std::vector<RouteSpec>& legacy,
+    const std::vector<RouteSpec>& human,
+    const std::vector<RouteSpec>& dns_and_fake) noexcept;
+
 }

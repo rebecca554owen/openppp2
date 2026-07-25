@@ -390,6 +390,9 @@
     <ClCompile Include="ppp\app\client\VEthernetNetworkTcpipConnection.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\app\client\ClientUnderlyingSocketProtector.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\app\server\VirtualEthernetNetworkTcpipConnection.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -487,6 +490,24 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\app\client\dns\FakeIpPool.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\routing\GeoDataReader.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\routing\HumanRoutingRouteSpecs.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\routing\HumanRoutingRules.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\routing\ProtocolSniffer.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\routing\TcpRoutingSelector.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\routing\UdpRoutingSelector.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\dns\DnsResolver.cpp">
@@ -1580,6 +1601,9 @@
     <ClInclude Include="ppp\app\client\ClientNetworkInterface.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ppp\app\client\ClientUnderlyingSocketProtector.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ppp\app\protocol\VirtualEthernetTcpipConnection.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -1686,6 +1710,30 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\app\client\dns\FakeIpPool.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\dns\HumanDnsQueryPolicy.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\routing\GeoDataReader.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\routing\HumanRoutingRouteSpecs.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\routing\HumanRoutingRules.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\routing\ProtocolSniffer.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\routing\ResolvedDestination.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\routing\TcpRoutingSelector.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\client\routing\UdpRoutingSelector.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\dns\DnsResolver.h">

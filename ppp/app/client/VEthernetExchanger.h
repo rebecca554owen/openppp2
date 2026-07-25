@@ -39,6 +39,7 @@
 #include <mutex>
 #include <ppp/app/protocol/VirtualEthernetLinklayer.h>
 #include <ppp/app/protocol/SessionResumeAuthenticator.h>
+#include <ppp/app/client/routing/HumanRoutingRules.h>
 #include <ppp/configurations/AppConfigurationFwd.h>
 #include <ppp/configurations/MappingConfiguration.h>
 #include <ppp/app/protocol/VirtualEthernetMappingPort.h>
@@ -381,6 +382,7 @@ namespace ppp {
                 udp::UdpRelayHostPorts                                                   BuildUdpRelayHostPorts() noexcept override;
 
                 virtual bool                                                            SendTo(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const void* packet, int packet_size) noexcept;
+                virtual bool                                                            SendTo(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const void* packet, int packet_size, routing::RoutingAction action) noexcept;
                 bool                                                                    SendDnsDatagram(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const void* packet, int packet_size) noexcept override;
 
                 /**

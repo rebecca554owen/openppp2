@@ -5,15 +5,102 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <limits>
 #include <mutex>
 #include <thread>
 
 #include <ppp/app/client/route/IRoutePlatform.h>
 #include <ppp/app/client/route/RouteCoordinator.h>
+#include <ppp/app/client/route/RouteSpecs.h>
 #include <ppp/app/client/route/WindowsRoutePlatform.h>
+#include <ppp/app/client/routing/HumanRoutingRouteSpecs.h>
+#include <ppp/net/IPEndPoint.h>
 #include <ppp/net/native/rib.h>
 
 namespace route = ppp::app::client::route;
+namespace routing = ppp::app::client::routing;
+
+namespace ppp {
+
+bool SetThreadName(const char*) noexcept {
+    return true;
+}
+
+uint64_t GetTickCount() noexcept {
+    const auto now = std::chrono::steady_clock::now();
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            now.time_since_epoch()).count());
+}
+
+void Sleep(int milliseconds) noexcept {
+    if (milliseconds > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+    }
+}
+
+} // namespace ppp
+
+namespace ppp::net::native {
+
+RouteEntriesTable& RouteInformationTable::GetAllRoutes() noexcept {
+    return routes;
+}
+
+bool RouteInformationTable::AddRoute(
+    uint32_t ip,
+    int prefix,
+    uint32_t gateway) noexcept {
+    if (prefix < MIN_PREFIX_VALUE || prefix > MAX_PREFIX_VALUE || gateway == 0) {
+        return false;
+    }
+    RouteEntries& entries = routes[ip];
+    const auto existing = std::find_if(entries.begin(), entries.end(),
+        [prefix](const RouteEntry& entry) { return entry.Prefix == prefix; });
+    if (existing != entries.end()) {
+        existing->NextHop = gateway;
+    }
+    else {
+        entries.push_back(RouteEntry{ ip, prefix, gateway });
+    }
+    return true;
+}
+
+bool RouteInformationTable::AddAllRoutes(const ppp::string&, uint32_t) noexcept {
+    return true;
+}
+
+} // namespace ppp::net::native
+
+namespace ppp::app::client::route {
+namespace {
+
+class CoordinatorStubPlatform final : public IRoutePlatform {
+public:
+    DefaultRouteCapture CaptureDefaults() noexcept override {
+        return std::vector<RouteSnapshotPtr>();
+    }
+    bool RemoveDefault(const RouteSnapshotPtr&) noexcept override { return true; }
+    RouteAddResult Add(const RouteSpec&) noexcept override {
+        return RouteAddResult::Created;
+    }
+    bool Delete(const RouteSpec&) noexcept override { return true; }
+    bool RestoreDefault(const RouteSnapshotPtr&) noexcept override { return true; }
+    bool SameDefault(
+        const RouteSnapshotPtr& left,
+        const RouteSnapshotPtr& right) noexcept override {
+        return left == right;
+    }
+};
+
+} // namespace
+
+std::unique_ptr<IRoutePlatform> RouteCoordinator::NewPlatform(
+    const RoutePlanInput&) noexcept {
+    return std::make_unique<CoordinatorStubPlatform>();
+}
+
+} // namespace ppp::app::client::route
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
 BOOST_AUTO_TEST_CASE(defer_when_route_state_not_ready) {
@@ -213,6 +300,33 @@ route::RouteSpec MakeRoute(uint32_t network) {
     spec.prefix = 32;
     spec.interface_name = "eth0";
     return spec;
+}
+
+routing::Ipv4CidrRule HumanRule(
+    routing::RoutingAction action,
+    std::uint32_t network,
+    std::uint8_t prefix,
+    routing::RuleOrigin origin = routing::RuleOrigin::Explicit,
+    std::size_t line = 1) {
+    routing::Ipv4CidrRule rule;
+    rule.action = action;
+    rule.network = network;
+    rule.prefix_length = prefix;
+    rule.line = line;
+    rule.origin = origin;
+    return rule;
+}
+
+const route::RouteSpec* FindRoute(
+    const std::vector<route::RouteSpec>& routes,
+    std::uint32_t host_network,
+    int prefix) {
+    const std::uint32_t network = htonl(host_network);
+    const auto found = std::find_if(routes.begin(), routes.end(),
+        [network, prefix](const route::RouteSpec& spec) {
+            return spec.network == network && spec.prefix == prefix;
+        });
+    return found == routes.end() ? nullptr : &*found;
 }
 
 } // namespace
@@ -874,4 +988,215 @@ BOOST_AUTO_TEST_CASE(destruction_rolls_back_an_applied_transaction) {
         "capture", "remove:1", "add:42", "delete:42", "restore:1"
     };
     BOOST_TEST(*calls == expected, boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(human_route_builder_uses_desktop_gateways_interfaces_and_network_order) {
+    route::RoutePlanInput input;
+    input.tap_gateway = htonl(0x0a000001u);
+    input.tap_interface.name = "tap0";
+    input.underlying_interface.gateway =
+        boost::asio::ip::make_address("192.0.2.1");
+    input.underlying_interface.name = "eth0";
+    input.human_ipv4_rules = {
+        HumanRule(routing::RoutingAction::Direct, 0x0a140000u, 16),
+        HumanRule(routing::RoutingAction::Proxy, 0xcb007100u, 24),
+    };
+
+    const routing::HumanRoutingRouteSpecPlan plan =
+        routing::BuildHumanRoutingRouteSpecs(input);
+    BOOST_TEST(plan.invalid_count == 0u);
+    BOOST_REQUIRE_EQUAL(plan.routes.size(), 2u);
+    const route::RouteSpec* direct = FindRoute(plan.routes, 0x0a140000u, 16);
+    const route::RouteSpec* proxy = FindRoute(plan.routes, 0xcb007100u, 24);
+    BOOST_REQUIRE(direct != nullptr);
+    BOOST_REQUIRE(proxy != nullptr);
+    BOOST_TEST(direct->network == htonl(0x0a140000u));
+    BOOST_TEST(direct->gateway == htonl(0xc0000201u));
+    BOOST_TEST(direct->interface_name == "eth0");
+    BOOST_TEST(proxy->network == htonl(0xcb007100u));
+    BOOST_TEST(proxy->gateway == input.tap_gateway);
+    BOOST_TEST(proxy->interface_name == "tap0");
+}
+
+BOOST_AUTO_TEST_CASE(human_route_builder_suppresses_geo_covered_by_explicit_rules) {
+    route::RoutePlanInput input;
+    input.tap_gateway = htonl(0x0a000001u);
+    input.tap_interface.name = "tap0";
+    input.underlying_interface.gateway =
+        boost::asio::ip::make_address("192.0.2.1");
+    input.underlying_interface.name = "eth0";
+    input.human_ipv4_rules = {
+        HumanRule(routing::RoutingAction::Proxy, 0x0a140000u, 16),
+        HumanRule(routing::RoutingAction::Direct, 0x0a141e00u, 24,
+            routing::RuleOrigin::Geo),
+        HumanRule(routing::RoutingAction::Direct, 0xc6336400u, 24,
+            routing::RuleOrigin::Geo),
+        HumanRule(routing::RoutingAction::Direct, 0xc6336400u, 24),
+    };
+
+    const routing::HumanRoutingRouteSpecPlan plan =
+        routing::BuildHumanRoutingRouteSpecs(input);
+    BOOST_REQUIRE_EQUAL(plan.routes.size(), 2u);
+    BOOST_TEST(FindRoute(plan.routes, 0x0a141e00u, 24) == nullptr);
+    const route::RouteSpec* explicit_same_key =
+        FindRoute(plan.routes, 0xc6336400u, 24);
+    BOOST_REQUIRE(explicit_same_key != nullptr);
+    BOOST_TEST(explicit_same_key->gateway == htonl(0xc0000201u));
+}
+
+BOOST_AUTO_TEST_CASE(human_route_builder_invalid_gateway_fails_closed) {
+    route::RoutePlanInput input;
+    input.underlying_interface.name = "eth0";
+    input.human_ipv4_rules = {
+        HumanRule(routing::RoutingAction::Direct, 0xc0000200u, 24),
+    };
+    const routing::HumanRoutingRouteSpecPlan plan =
+        routing::BuildHumanRoutingRouteSpecs(input);
+    BOOST_TEST(plan.routes.empty());
+    BOOST_TEST(plan.invalid_count == 1u);
+    BOOST_REQUIRE_EQUAL(plan.errors.size(), 1u);
+    BOOST_TEST(static_cast<int>(plan.errors[0].code) ==
+        static_cast<int>(routing::HumanRoutingRouteErrorCode::MissingGateway));
+
+    auto platform = std::make_unique<FakeRoutePlatform>();
+    FakeRoutePlatform* view = platform.get();
+    route::RouteCoordinator coordinator(std::move(platform));
+    BOOST_TEST(!coordinator.AddRoute(input));
+    BOOST_TEST(view->calls.empty());
+    BOOST_TEST(!coordinator.Snapshot().applied);
+}
+
+BOOST_AUTO_TEST_CASE(merge_route_specs_overlays_keys_but_conservatively_protects_legacy_hosts) {
+    const route::RouteSpec legacy_first{
+        htonl(0x0a000000u), htonl(0xc0000201u), 8, "legacy-old" };
+    const route::RouteSpec legacy_last{
+        htonl(0x0a000000u), htonl(0xc0000202u), 8, "legacy-new" };
+    const route::RouteSpec legacy_overlay{
+        htonl(0xac100000u), htonl(0xc0000203u), 12, "legacy" };
+    const route::RouteSpec human_overlay{
+        htonl(0xac100000u), htonl(0x0a000001u), 12, "tap0" };
+    const route::RouteSpec legacy_host{
+        htonl(0xc0000209u), htonl(0xc0000201u), 32, "legacy-host" };
+    const route::RouteSpec human_host{
+        htonl(0xc0000209u), htonl(0x0a000001u), 32, "tap0" };
+    const route::RouteSpec dns{
+        htonl(0x08080808u), htonl(0x0a000001u), 32, {} };
+    const route::RouteSpec fake{
+        htonl(0xc6120000u), htonl(0x0a000001u), 15, {} };
+
+    const std::vector<route::RouteSpec> merged = route::MergeRouteSpecs(
+        { legacy_first, legacy_last, legacy_overlay, legacy_host },
+        { human_overlay, human_host },
+        { dns, fake });
+    BOOST_REQUIRE_EQUAL(merged.size(), 5u);
+    const route::RouteSpec* legacy_duplicate = FindRoute(merged, 0x0a000000u, 8);
+    const route::RouteSpec* overlaid = FindRoute(merged, 0xac100000u, 12);
+    const route::RouteSpec* protected_host = FindRoute(merged, 0xc0000209u, 32);
+    BOOST_REQUIRE(legacy_duplicate != nullptr);
+    BOOST_REQUIRE(overlaid != nullptr);
+    BOOST_REQUIRE(protected_host != nullptr);
+    BOOST_TEST(legacy_duplicate->gateway == legacy_last.gateway);
+    BOOST_TEST(legacy_duplicate->interface_name == "legacy-new");
+    BOOST_TEST(overlaid->gateway == human_overlay.gateway);
+    BOOST_TEST(overlaid->interface_name == "tap0");
+    // Legacy RIB lacks provenance, so an existing /32 is conservatively retained.
+    BOOST_TEST(protected_host->gateway == legacy_host.gateway);
+    BOOST_TEST(protected_host->interface_name == "legacy-host");
+    BOOST_TEST(FindRoute(merged, 0x08080808u, 32) != nullptr);
+    BOOST_TEST(FindRoute(merged, 0xc6120000u, 15) != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(desktop_coordinator_merges_human_legacy_dns_and_fake_routes) {
+    auto platform = std::make_unique<FakeRoutePlatform>();
+    FakeRoutePlatform* view = platform.get();
+    view->defaults.reset();
+    route::RouteCoordinator coordinator(std::move(platform));
+
+    auto rib = std::make_shared<ppp::net::native::RouteInformationTable>();
+    BOOST_REQUIRE(rib->AddRoute(htonl(0xac100000u), 12, htonl(0xc0000201u)));
+    BOOST_REQUIRE(rib->AddRoute(htonl(0xc0000209u), 32, htonl(0xc0000201u)));
+    coordinator.ReplaceRib(rib);
+
+    route::RoutePlanInput input;
+    input.tap_gateway = htonl(0x0a000001u);
+    input.tap_interface.name = "tap0";
+    input.underlying_interface.gateway =
+        boost::asio::ip::make_address("192.0.2.1");
+    input.underlying_interface.name = "eth0";
+    input.tunnel_dns.insert(htonl(0x08080808u));
+    input.has_fake_ip_route = true;
+    input.fake_ip_route = route::RouteSpec{ htonl(0xc6120000u), 0, 15, {} };
+    input.human_ipv4_rules = {
+        HumanRule(routing::RoutingAction::Direct, 0x0a000000u, 8),
+        HumanRule(routing::RoutingAction::Proxy, 0xcb007100u, 24),
+        HumanRule(routing::RoutingAction::Direct, 0xac100000u, 12),
+        HumanRule(routing::RoutingAction::Proxy, 0xc0000209u, 32),
+        HumanRule(routing::RoutingAction::Direct, 0xc6330000u, 16),
+        HumanRule(routing::RoutingAction::Proxy, 0xc6336400u, 24,
+            routing::RuleOrigin::Geo),
+    };
+
+    BOOST_REQUIRE(coordinator.AddRoute(input));
+    BOOST_TEST(coordinator.Snapshot().applied);
+    BOOST_REQUIRE_EQUAL(view->added_specs.size(), 7u);
+    const route::RouteSpec* direct = FindRoute(view->added_specs, 0x0a000000u, 8);
+    const route::RouteSpec* proxy = FindRoute(view->added_specs, 0xcb007100u, 24);
+    const route::RouteSpec* overlaid = FindRoute(view->added_specs, 0xac100000u, 12);
+    const route::RouteSpec* protected_host =
+        FindRoute(view->added_specs, 0xc0000209u, 32);
+    BOOST_REQUIRE(direct != nullptr);
+    BOOST_REQUIRE(proxy != nullptr);
+    BOOST_REQUIRE(overlaid != nullptr);
+    BOOST_REQUIRE(protected_host != nullptr);
+    BOOST_TEST(direct->gateway == htonl(0xc0000201u));
+    BOOST_TEST(direct->interface_name == "eth0");
+    BOOST_TEST(proxy->gateway == input.tap_gateway);
+    BOOST_TEST(proxy->interface_name == "tap0");
+    BOOST_TEST(overlaid->gateway == htonl(0xc0000201u));
+    BOOST_TEST(overlaid->interface_name == "eth0");
+    BOOST_TEST(protected_host->gateway == htonl(0xc0000201u));
+    BOOST_TEST(FindRoute(view->added_specs, 0xc6336400u, 24) == nullptr);
+    BOOST_TEST(FindRoute(view->added_specs, 0x08080808u, 32) != nullptr);
+    BOOST_TEST(FindRoute(view->added_specs, 0xc6120000u, 15) != nullptr);
+    BOOST_TEST(coordinator.Snapshot().dns_servers[0].count(htonl(0x08080808u)) == 1u);
+    BOOST_REQUIRE(coordinator.Stop());
+}
+
+BOOST_AUTO_TEST_CASE(mobile_builder_and_coordinator_publish_direct_and_proxy_to_rib_only) {
+    route::RoutePlanInput input;
+    input.tap_ip = htonl(0x0a000002u);
+    input.tap_gateway = htonl(0x0a000001u);
+    input.tap_submask = htonl(0xffffff00u);
+    input.human_ipv4_rules = {
+        HumanRule(routing::RoutingAction::Direct, 0xc0000200u, 24),
+        HumanRule(routing::RoutingAction::Proxy, 0xcb007100u, 24),
+    };
+
+    const routing::HumanRoutingRouteSpecPlan plan =
+        routing::BuildHumanRoutingRouteSpecs(
+            input, routing::HumanRoutingRouteEnvironment::Mobile);
+    BOOST_REQUIRE_EQUAL(plan.routes.size(), 2u);
+    const route::RouteSpec* direct = FindRoute(plan.routes, 0xc0000200u, 24);
+    const route::RouteSpec* proxy = FindRoute(plan.routes, 0xcb007100u, 24);
+    BOOST_REQUIRE(direct != nullptr);
+    BOOST_REQUIRE(proxy != nullptr);
+    BOOST_TEST(direct->gateway == ppp::net::IPEndPoint::LoopbackAddress);
+    BOOST_TEST(direct->interface_name.empty());
+    BOOST_TEST(proxy->gateway == input.tap_gateway);
+    BOOST_TEST(proxy->interface_name.empty());
+
+    route::RouteCoordinator coordinator(nullptr);
+    BOOST_REQUIRE(coordinator.AddAllRoute(input));
+    const route::RouteStateSnapshot snapshot = coordinator.Snapshot();
+    BOOST_REQUIRE(snapshot.rib != nullptr);
+    BOOST_TEST(snapshot.applied);
+    const std::vector<route::RouteSpec> rib_routes = route::BuildRouteSpecs(snapshot.rib);
+    BOOST_REQUIRE_EQUAL(rib_routes.size(), 3u);
+    const route::RouteSpec* rib_direct = FindRoute(rib_routes, 0xc0000200u, 24);
+    const route::RouteSpec* rib_proxy = FindRoute(rib_routes, 0xcb007100u, 24);
+    BOOST_REQUIRE(rib_direct != nullptr);
+    BOOST_REQUIRE(rib_proxy != nullptr);
+    BOOST_TEST(rib_direct->gateway == ppp::net::IPEndPoint::LoopbackAddress);
+    BOOST_TEST(rib_proxy->gateway == input.tap_gateway);
+    BOOST_TEST(FindRoute(rib_routes, 0x0a000000u, 24) != nullptr);
 }
