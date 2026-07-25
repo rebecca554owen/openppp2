@@ -2,7 +2,12 @@
 
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/core_names.h>
+#include <openssl/params.h>
+#else
 #include <openssl/hmac.h>
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -54,23 +59,62 @@ bool Sha256(const std::uint8_t* first, std::size_t first_size,
     return ok;
 }
 
+struct HmacSegment final {
+    const std::uint8_t* data;
+    std::size_t size;
+};
+
+bool HmacSha256Segments(const std::uint8_t* key, std::size_t key_size,
+                        const HmacSegment* segments, std::size_t segment_count,
+                        Bytes32& output) noexcept {
+    bool ok = key != nullptr && segments != nullptr;
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    EVP_MAC* mac = ok ? EVP_MAC_fetch(nullptr, "HMAC", nullptr) : nullptr;
+    EVP_MAC_CTX* context = mac != nullptr ? EVP_MAC_CTX_new(mac) : nullptr;
+    char digest[] = "SHA256";
+    OSSL_PARAM parameters[] = {
+        OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, digest, 0),
+        OSSL_PARAM_construct_end(),
+    };
+    ok = context != nullptr && EVP_MAC_init(context, key, key_size, parameters) > 0;
+    for (std::size_t i = 0; ok && i < segment_count; ++i) {
+        ok = segments[i].size == 0 ||
+            (segments[i].data != nullptr &&
+             EVP_MAC_update(context, segments[i].data, segments[i].size) > 0);
+    }
+    std::size_t output_size = 0;
+    ok = ok && EVP_MAC_final(context, output.data(), &output_size, output.size()) > 0 &&
+        output_size == output.size();
+    EVP_MAC_CTX_free(context);
+    EVP_MAC_free(mac);
+#else
+    HMAC_CTX* context = ok ? HMAC_CTX_new() : nullptr;
+    unsigned int output_size = 0;
+    ok = context != nullptr &&
+        HMAC_Init_ex(context, key, static_cast<int>(key_size), EVP_sha256(), nullptr) > 0;
+    for (std::size_t i = 0; ok && i < segment_count; ++i) {
+        ok = segments[i].size == 0 ||
+            (segments[i].data != nullptr &&
+             HMAC_Update(context, segments[i].data, segments[i].size) > 0);
+    }
+    ok = ok && HMAC_Final(context, output.data(), &output_size) > 0 &&
+        output_size == output.size();
+    HMAC_CTX_free(context);
+#endif
+    if (!ok) OPENSSL_cleanse(output.data(), output.size());
+    return ok;
+}
+
 bool HmacSha256(const std::uint8_t* key, std::size_t key_size,
                 const std::uint8_t* first, std::size_t first_size,
                 const std::uint8_t* second, std::size_t second_size,
                 const std::uint8_t* third, std::size_t third_size,
                 Bytes32& output) noexcept {
-    HMAC_CTX* context = HMAC_CTX_new();
-    unsigned int output_size = 0;
-    const bool ok = context != nullptr &&
-        HMAC_Init_ex(context, key, static_cast<int>(key_size), EVP_sha256(), nullptr) > 0 &&
-        (first_size == 0 || HMAC_Update(context, first, first_size) > 0) &&
-        (second_size == 0 || HMAC_Update(context, second, second_size) > 0) &&
-        (third_size == 0 || HMAC_Update(context, third, third_size) > 0) &&
-        HMAC_Final(context, output.data(), &output_size) > 0 &&
-        output_size == output.size();
-    HMAC_CTX_free(context);
-    if (!ok) OPENSSL_cleanse(output.data(), output.size());
-    return ok;
+    const HmacSegment segments[] = {
+        {first, first_size}, {second, second_size}, {third, third_size},
+    };
+    return HmacSha256Segments(key, key_size, segments,
+        sizeof(segments) / sizeof(segments[0]), output);
 }
 
 bool NoiseHkdf(const Bytes32& chaining_key,
@@ -334,22 +378,17 @@ bool NoisePskHandshakeResult::DeriveBinding(
     }
 
     Bytes32 derived{};
-    HMAC_CTX* hmac = HMAC_CTX_new();
-    unsigned int output_size = 0;
-    const bool ok = hmac != nullptr &&
-        HMAC_Init_ex(hmac, exporter_.data(), static_cast<int>(exporter_.size()),
-            EVP_sha256(), nullptr) > 0 &&
-        HMAC_Update(hmac, BindingDomain, sizeof(BindingDomain)) > 0 &&
-        HMAC_Update(hmac, lengths, 8) > 0 &&
-        HMAC_Update(hmac, reinterpret_cast<const std::uint8_t*>(label),
-            label_length) > 0 &&
-        HMAC_Update(hmac, lengths + 8, 8) > 0 &&
-        HMAC_Update(hmac, binding_context, context_length) > 0 &&
-        HMAC_Update(hmac, lengths + 16, 8) > 0 &&
-        HMAC_Update(hmac, handshake_hash_.data(), handshake_hash_.size()) > 0 &&
-        HMAC_Final(hmac, derived.data(), &output_size) > 0 &&
-        output_size == derived.size();
-    HMAC_CTX_free(hmac);
+    const HmacSegment segments[] = {
+        {BindingDomain, sizeof(BindingDomain)},
+        {lengths, 8},
+        {reinterpret_cast<const std::uint8_t*>(label), label_length},
+        {lengths + 8, 8},
+        {binding_context, context_length},
+        {lengths + 16, 8},
+        {handshake_hash_.data(), handshake_hash_.size()},
+    };
+    const bool ok = HmacSha256Segments(exporter_.data(), exporter_.size(),
+        segments, sizeof(segments) / sizeof(segments[0]), derived);
     OPENSSL_cleanse(lengths, sizeof(lengths));
     if (ok) output.Assign(std::move(derived));
     OPENSSL_cleanse(derived.data(), derived.size());
