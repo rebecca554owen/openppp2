@@ -182,6 +182,16 @@ class ServerTransportAuthWiringTest(unittest.TestCase):
         self.assertIn("ErrorCode::ProtocolPacketActionInvalid", on_information)
         self.assertIn("return false;", on_information[transport_auth:ordinary_info])
 
+    def test_accepted_transmission_has_a_strand_before_handshake(self) -> None:
+        accept = body(
+            SWITCHER,
+            "bool VirtualEthernetSwitcher::Accept(const ContextPtr& context",
+            "bool VirtualEthernetSwitcher::FlowerArrangement(",
+        )
+        self.assertIn("auto& strand = transmission->GetStrand()", accept)
+        self.assertIn("context->get_executor()", accept)
+        self.assertIn("YieldContext::Spawn(allocator.get(), *context, strand.get()", accept)
+
     def test_authentication_failure_cannot_enter_establish(self) -> None:
         run = body(
             SWITCHER,
