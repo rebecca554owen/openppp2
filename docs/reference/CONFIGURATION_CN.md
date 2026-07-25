@@ -1,7 +1,7 @@
 # 配置参考
 > Status: Active
 > Type: Reference
-> Last verified: 82643dc
+> Last verified: AppConfiguration 与人类可读路由规则，2026-07-24
 > Parent index: [参考索引](README_CN.md)
 > Peer link: [English](CONFIGURATION.md)
 
@@ -31,7 +31,7 @@
 
 ```text
 concurrent, cdn, ip, vmem, udp, tcp, mux, websocket, key, server,
-client, virr, vbgp, telemetry, p2p, dns, geo-rules
+client, virr, vbgp, telemetry, p2p, dns, geo-rules, routing
 ```
 
 关键结构如下：
@@ -46,6 +46,8 @@ client, virr, vbgp, telemetry, p2p, dns, geo-rules
 | `client.session_resume` | `enabled`；客户端认证 L3 roaming 总开关。 |
 | `key` | `kf`、`kh`、`kl`、`kx`、`sb`、cipher 名称/密钥与变换开关。 |
 | `client` | mappings、routes、代理设置、重连超时、身份、服务端和带宽。 |
+| `routing.rules` | 人类可读路由规则文件路径。空值只关闭 human policy；非空策略仍与 legacy 输入共存。已配置文件无法读取或无效时，客户端初始化失败。详见[路由与 DNS](../guides/ROUTING_AND_DNS_CN.md)。 |
+| `routing.tcp-domain-sniff` | 布尔值，默认 `false`。开关开启且存在 domain 规则时，真实 IPv4 TCP flow 可用嗅探到的 HTTP Host 或 TLS SNI 显式 domain 命中仅覆盖当前 flow。Fake IP 优先级更高；失败时回退 IP/default 路由。UDP 不变。 |
 
 为兼容旧格式，`ToJson()` 还会输出 `websocket.verify-peer`，同时输出规范的嵌套字段 `websocket.ssl.verify-peer`；也会同时输出 `udp.static.servers` 与旧字段 `udp.static.server`。新配置应使用 `websocket.ssl.verify-peer`。
 
@@ -68,6 +70,8 @@ client, virr, vbgp, telemetry, p2p, dns, geo-rules
 | `transport-auth.handshake-timeout-ms` | `5000` 毫秒（限制到 `1000..30000`） |
 | `transport-auth.keys` | `[]` |
 | `server.session_resume.grace_ms` | `60000` 毫秒 |
+| `routing.rules` | `""`（关闭 human policy） |
+| `routing.tcp-domain-sniff` | `false` |
 | `key.kf` | `154543927` |
 | `key.kh` | `12` |
 | `key.kl` | `10` |
@@ -80,6 +84,14 @@ client, virr, vbgp, telemetry, p2p, dns, geo-rules
 | `vbgp.update-interval` | `3600` 秒 |
 
 `plaintext=true` 会使握手后的 base94 封装继续生效，启动安全诊断也明确说明数据包是在未加密状态下发送。它不适用于不可信网络。实际部署必须设为 `false`，并替换两项默认密钥；两端还必须一致使用影响分帧的 key 开关。
+
+### TCP domain 嗅探
+
+用 `"routing": { "rules": "./routing.rules", "tcp-domain-sniff": true }` 启用。只有真实 IPv4 TCP、开关开启且存在 domain 规则时才尝试嗅探。优先级为 fake IP > 嗅探命中的显式 domain 规则 > IPv4 规则 > `default`；HTTP Host 或 TLS SNI 的显式命中只改变当前 flow，不生成 domain-derived `/32`。ECH、无 SNI、非 HTTP/TLS、超时、畸形、不支持和未命中输入均保留 IP/default 结果。UDP 不受影响。
+
+`Direct` 会在 connect 前对底层连接 socket 执行 per-socket binding/protection。`ForceDirect` 所需 protector 缺失或失败时拒绝该 flow，绝不回退 tunnel。iOS 拒绝 `Direct`，`Auto` 则保持 legacy-compatible 行为。关闭嗅探时，TCP 使用目标 IP/`default`；UDP 与 QUIC 无论此开关如何都使用目标 IP/`default`。
+
+Human domain 规则不要求启用 `dns.fake-ip.enabled`。Fake IP 关闭时，命中的 A query 通过该 domain action 配置的 provider（或其 fallback provider）解析并返回真实 A，不执行 fake allocation，也不创建 sticky mapping、fake cache 或 fake route。Fake IP 开启时，strict human 命中仍然 fail closed：hostname 不适合 fake，或 fake allocation/response build 失败时都会拒绝，不回退真实或 legacy answer。平台细节见[路由与 DNS](../guides/ROUTING_AND_DNS_CN.md)。
 
 ## 认证 L3 会话漫游
 

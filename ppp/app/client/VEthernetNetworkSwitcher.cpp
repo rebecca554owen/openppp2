@@ -201,6 +201,11 @@ namespace ppp {
                 return configuration_;
             }
 
+            std::shared_ptr<const routing::HumanRoutingRules> VEthernetNetworkSwitcher::GetHumanRoutingRulesSnapshot() const noexcept {
+                std::shared_ptr<dns::DnsController> controller = dns_controller_;
+                return controller ? controller->GetHumanRoutingRules() : nullptr;
+            }
+
             std::shared_ptr<VEthernetExchanger> VEthernetNetworkSwitcher::GetExchanger() noexcept {
                 return exchanger_;
             }
@@ -385,6 +390,9 @@ namespace ppp {
                         configuration_->dns.intercept_unmatched,
                         [&input](uint32_t ip) noexcept { input.tunnel_dns.emplace(ip); },
                         [&input](uint32_t ip) noexcept { input.underlying_dns.emplace(ip); });
+                    if (const auto human_rules = dns_controller_->GetHumanRoutingRules(); human_rules) {
+                        input.human_ipv4_rules = human_rules->Ipv4Cidrs();
+                    }
                     input.has_fake_ip_route = dns_controller_->GetFakeIpRoute(
                         input.fake_ip_route.network, input.fake_ip_route.prefix);
                     input.fake_ip_route.gateway = input.tap_gateway;
@@ -628,6 +636,18 @@ namespace ppp {
                     return addr;
                 }
                 return dns_controller_->RewriteFakeIpAddress(addr);
+            }
+
+            bool VEthernetNetworkSwitcher::ResolveDestination(
+                const ppp::net::IPEndPoint& endpoint,
+                routing::ResolvedDestination& destination) const noexcept {
+                if (NULLPTR != dns_controller_) {
+                    return dns_controller_->ResolveDestination(endpoint, destination);
+                }
+                destination = routing::ResolvedDestination{};
+                destination.original_endpoint = endpoint;
+                destination.connect_endpoint = endpoint;
+                return true;
             }
 
             bool VEthernetNetworkSwitcher::DatagramOutput(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, void* packet, int packet_size, bool caching) noexcept {

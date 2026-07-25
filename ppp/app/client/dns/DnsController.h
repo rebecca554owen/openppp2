@@ -45,6 +45,10 @@ public:
         const ppp::function<void(uint32_t)>& add_nic_ip) noexcept;
     boost::asio::ip::address RewriteFakeIpAddress(
         const boost::asio::ip::address& address) const noexcept;
+    std::shared_ptr<const routing::HumanRoutingRules> GetHumanRoutingRules() const noexcept;
+    bool ResolveDestination(
+        const ppp::net::IPEndPoint& endpoint,
+        routing::ResolvedDestination& destination) const noexcept;
     bool GetFakeIpRoute(uint32_t& network, int& prefix) const noexcept;
     bool ConsumeUdpFlow(
         uint16_t local_port,

@@ -3552,6 +3552,10 @@ namespace ppp {
 
             /** @brief Sends UDP packet using source-bound datagram relay port. */
             bool VEthernetExchanger::SendTo(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const void* packet, int packet_size) noexcept {
+                return SendTo(sourceEP, destinationEP, packet, packet_size, routing::RoutingAction::Auto);
+            }
+
+            bool VEthernetExchanger::SendTo(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const void* packet, int packet_size, routing::RoutingAction action) noexcept {
                 if (NULLPTR == packet || packet_size < 1) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
                 }
@@ -3560,7 +3564,7 @@ namespace ppp {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionDisposed);
                 }
 
-                return datagram_manager_->SendTo(sourceEP, destinationEP, packet, packet_size);
+                return datagram_manager_->SendTo(sourceEP, destinationEP, packet, packet_size, action);
             }
 
             bool VEthernetExchanger::SendDnsDatagram(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const void* packet, int packet_size) noexcept {

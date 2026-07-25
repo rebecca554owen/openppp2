@@ -59,6 +59,10 @@ namespace ppp {
 
                     boost::asio::ip::address RewriteFakeIpAddress(
                         const boost::asio::ip::address& address) const noexcept override;
+                    std::shared_ptr<const routing::HumanRoutingRules> GetHumanRoutingRules() const noexcept override;
+                    bool ResolveDestination(
+                        const ppp::net::IPEndPoint& endpoint,
+                        routing::ResolvedDestination& destination) const noexcept override;
                     bool GetFakeIpRoute(uint32_t& network, int& prefix) const noexcept override;
 
                     bool HandleQuery(
@@ -79,18 +83,22 @@ namespace ppp {
 
                 private:
                     void SpawnFakeIpBackgroundResolve(
+                        const std::shared_ptr<FakeIpPool>& pool,
+                        const std::shared_ptr<ppp::dns::DnsResolver>& resolver,
+                        const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
                         const DnsRedirectPlanResult& plan,
                         const Rule::Ptr& rule,
                         const ppp::string& hostname,
-                        const std::shared_ptr<ppp::net::packet::BufferSegment>& messages) noexcept;
+                        const std::shared_ptr<ppp::net::packet::BufferSegment>& messages,
+                        const std::shared_ptr<const routing::HumanRoutingRules>& human_rules) noexcept;
 
                     std::shared_ptr<ppp::configurations::AppConfiguration> configuration_;
                     std::shared_ptr<ppp::dns::DnsResolver> dns_resolver_;
                     std::shared_ptr<ppp::dns::DnsUdpFlowRegistry> udp_flow_registry_;
                     std::shared_ptr<FakeIpPool> fake_ip_pool_ = make_shared_object<FakeIpPool>();
+                    std::shared_ptr<const routing::HumanRoutingRules> human_routing_rules_;
                     RuleMap dns_ruless_[3];
-                    /** @brief Serializes Close()/Open() against HandleQuery/OnSessionInfo/LoadRules
-                    for configuration_, dns_resolver_, and dns_ruless_ (fake_ip_pool_ stays atomic). */
+                    /** @brief Serializes runtime-generation publication and DNS rule-table access. */
                     mutable std::mutex syncobj_;
                 };
 

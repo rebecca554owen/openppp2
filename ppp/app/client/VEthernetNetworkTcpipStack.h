@@ -92,9 +92,9 @@ namespace ppp {
                 /**
                  * @brief Creates and opens a TCP client handler for an accepted lwIP flow.
                  *
-                 * @details Allocates a `VEthernetNetworkTcpipConnection`, calls `Open()` on it,
-                 *          and returns the resulting shared pointer to the base class so it can
-                 *          be tracked.  Returns null if allocation or `Open()` fails.
+                 * @details Resolves fake destinations and selects the strict routing mode before
+                 *          allocating `VEthernetNetworkTcpipConnection`. Unresolved fake addresses
+                 *          and unsupported routing modes are rejected. Returns null on any failure.
                  *
                  * @param localEP  Local (TAP-side) TCP endpoint of the accepted connection.
                  * @param remoteEP Remote (Internet-side) TCP endpoint of the accepted connection.
