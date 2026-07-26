@@ -54,7 +54,7 @@ Aliases: `--m`, `-mode`, `-m`. After trimming and lower-casing:
 
 `--mode=proxy` is distinct from the `c` prefix rule. Proxy mode, and configuration with `client.proxy-only=true`, force the local HTTP and SOCKS listener bind addresses to `127.0.0.1`. Missing/non-positive proxy ports default to `8080` (HTTP) and `1080` (SOCKS); `--proxy-http-port` and `--proxy-socks-port` are applied afterwards.
 
-Proxy-only client startup uses the proxy path instead of a real TUN and skips client route, bypass-list, DNS-rule, and geo-rule setup. It also forces the final static-transport setting off, so it does not initiate the `STATIC`/`STATICACK` exchange that static mode would trigger.
+Proxy-only client startup uses the proxy path instead of a real TUN and skips client route, bypass-list, DNS-rule, and geo-rule setup. It also forces the final static-transport setting off, so it does not initiate the `STATIC`/`STATICACK` exchange that static mode would trigger. If server-side IPv4 allocation is configured, proxy-only uses automatic allocation rather than a manual request derived from the local TUN address.
 
 ## Core launch options
 

@@ -25,6 +25,7 @@
 #include <ppp/threading/Executors.h>
 #include <ppp/threading/BufferswapAllocator.h>
 
+#include <ppp/app/ApplicationClientBootstrap.h>
 #include <ppp/app/server/VirtualEthernetSwitcher.h>
 #include <ppp/app/server/VirtualEthernetManagedServer.h>
 #include <ppp/app/client/VEthernetExchanger.h>
@@ -1588,6 +1589,7 @@ static int                                                                      
 
     bool lwip = false;
     int max_concurrent = ppp::GetProcesserCount();
+    const bool proxy_only_runtime = configuration->client.proxy_only;
 
     client = ppp::make_shared_object<VEthernetNetworkSwitcher>(context, lwip, network_interface->VNet, max_concurrent > 1, configuration);
     if (NULLPTR == client) {
@@ -1596,11 +1598,11 @@ static int                                                                      
     }
     else {
         client->Mux(&network_interface->VMux);
-        client->StaticMode(&network_interface->StaticMode);
+        bool static_mode = ppp::app::NormalizeClientStaticMode(network_interface->StaticMode, proxy_only_runtime);
+        client->StaticMode(&static_mode);
         client->BlockQUIC(network_interface->BlockQUIC);
     }
 
-    const bool proxy_only_runtime = configuration->client.proxy_only;
     if (proxy_only_runtime) {
         configuration->ApplyProxyModeDefaults();
         bool proxy_only_flag = true;
