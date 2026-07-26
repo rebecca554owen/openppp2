@@ -54,7 +54,7 @@ ppp --mode=server --config=./server.json
 
 `--mode=proxy` 与 `c` 前缀规则不同。代理模式，以及配置中 `client.proxy-only=true`，都会强制本地 HTTP/SOCKS 监听绑定到 `127.0.0.1`。缺失或非正端口默认分别为 HTTP `8080`、SOCKS `1080`；之后才应用 `--proxy-http-port` 和 `--proxy-socks-port`。
 
-仅代理客户端启动使用代理路径而非真实 TUN，并跳过客户端路由、旁路列表、DNS 规则和 geo-rules 设置。它还会强制关闭最终的 static transport 设置，因此不会发起由 static mode 触发的 `STATIC`/`STATICACK` 交互。
+仅代理客户端启动使用代理路径而非真实 TUN，并跳过客户端路由、旁路列表、DNS 规则和 geo-rules 设置。它还会强制关闭最终的 static transport 设置，因此不会发起由 static mode 触发的 `STATIC`/`STATICACK` 交互。服务端启用 IPv4 地址分配时，proxy-only 使用自动分配，而不是根据本地 TUN 地址生成手动请求。
 
 ## 核心启动选项
 

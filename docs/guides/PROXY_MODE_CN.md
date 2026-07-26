@@ -55,7 +55,7 @@ Proxy-only 在连接到已配置的 VPN 服务端后，会暴露本地 HTTP 和 
 
 ## Static transport 边界
 
-对于普通客户端，显式传入 `--tun-ip` 会隐式请求 static mode，即使同时指定 `--tun-static=no`。Proxy-only 启动会把最终设置重新规范为关闭，因为其 `TapStub` 不应使用 static transport。因此，proxy-only 启动不会发起该模式原本会触发的 `STATIC`/`STATICACK` 交互。
+对于普通客户端，显式传入 `--tun-ip` 会隐式请求 static mode，即使同时指定 `--tun-static=no`。Proxy-only 启动会把最终设置重新规范为关闭，因为它不应使用 static transport。因此，proxy-only 启动不会发起该模式原本会触发的 `STATIC`/`STATICACK` 交互。服务端启用 IPv4 地址分配时，同一规范化设置会请求自动 IPv4 分配，而不是把本地 TUN 地址作为手动请求提交。
 
 ## 本地验证
 

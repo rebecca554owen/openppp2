@@ -21,7 +21,7 @@ namespace client {
 class VEthernetNetworkSwitcher;
 }
 
-/** Proxy-only uses TapStub and must not enable the static transport. */
+/** Proxy-only startup must not enable the static transport. */
 inline bool NormalizeClientStaticMode(bool requested_static_mode, bool proxy_only_runtime) noexcept {
     return requested_static_mode && !proxy_only_runtime;
 }

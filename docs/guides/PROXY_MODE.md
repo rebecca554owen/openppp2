@@ -55,7 +55,7 @@ The JSON field can be useful for a client configuration, but it does not replace
 
 ## Static transport boundary
 
-For an ordinary client, explicitly passing `--tun-ip` implicitly requests static mode even when `--tun-static=no`. Proxy-only startup normalizes the final setting back to disabled because its `TapStub` must not use the static transport. Consequently, proxy-only startup does not initiate the `STATIC`/`STATICACK` exchange that this mode would otherwise trigger.
+For an ordinary client, explicitly passing `--tun-ip` implicitly requests static mode even when `--tun-static=no`. Proxy-only startup normalizes the final setting back to disabled because it must not use the static transport. Consequently, proxy-only startup does not initiate the `STATIC`/`STATICACK` exchange that this mode would otherwise trigger. When server-side IPv4 allocation is configured, the same normalized setting requests automatic IPv4 allocation instead of submitting the local TUN address as a manual request.
 
 ## Verify locally
 
