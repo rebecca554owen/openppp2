@@ -86,7 +86,8 @@ bool PrepareClientLoopbackEnvironment(
 #endif
         ethernet->Mux(&network_interface->Mux);
         ethernet->MuxAcceleration(&network_interface->MuxAcceleration);
-        ethernet->StaticMode(&network_interface->StaticMode);
+        bool static_mode = NormalizeClientStaticMode(network_interface->StaticMode, proxy_only_runtime);
+        ethernet->StaticMode(&static_mode);
         {
             bool proxy_only_flag = proxy_only_runtime;
             ethernet->ProxyOnly(&proxy_only_flag);

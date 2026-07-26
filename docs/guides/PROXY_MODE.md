@@ -52,6 +52,10 @@ When ports or bind addresses are omitted, defaults are applied automatically:
 
 On Android, enable **仅代理模式** in profile options (`vpnOptions.proxyOnly=true`). The app still creates a minimal TUN for `protect()`, but skips full routing, DNS hijack, and geo bypass.
 
+## Static transport boundary
+
+Proxy-only startup forces static transport off, including when `--tun-ip` would otherwise enable it. It therefore does not initiate the `STATIC`/`STATICACK` exchange. When server-side IPv4 allocation is configured, proxy-only requests automatic IPv4 allocation instead of submitting the local TUN address as a manual request.
+
 ## CLI flags
 
 | Flag | Description |

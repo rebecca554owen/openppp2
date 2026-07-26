@@ -78,6 +78,8 @@ This choice changes the entire startup branch:
 - **server mode** opens the server-side listener/switcher path
   (`VirtualEthernetSwitcher`, `VirtualEthernetExchanger`)
 
+Proxy-only startup forces static transport off and does not initiate `STATIC`/`STATICACK`. If server-side IPv4 allocation is configured, it requests automatic allocation rather than a manual request derived from the local TUN address.
+
 ```mermaid
 flowchart TD
     A["--mode=<value>"] --> B{"value == proxy?"}
