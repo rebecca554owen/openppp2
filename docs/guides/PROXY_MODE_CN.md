@@ -53,6 +53,10 @@ Proxy-only 在连接到已配置的 VPN 服务端后，会暴露本地 HTTP 和 
 
 该 JSON 字段可用于客户端配置，但不能替代推荐的桌面启动方式 `--mode=proxy`。
 
+## Static transport 边界
+
+对于普通客户端，显式传入 `--tun-ip` 会隐式请求 static mode，即使同时指定 `--tun-static=no`。Proxy-only 启动会把最终设置重新规范为关闭，因为其 `TapStub` 不应使用 static transport。因此，proxy-only 启动不会发起该模式原本会触发的 `STATIC`/`STATICACK` 交互。
+
 ## 本地验证
 
 客户端到达 connected 状态后，只测试 loopback 端点：
