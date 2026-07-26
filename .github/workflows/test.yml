@@ -1,6 +1,7 @@
 name: Test · Unit
 
 on:
+  workflow_dispatch:
   push:
     branches: [feat/unit-tests, main]
   pull_request:
@@ -16,7 +17,7 @@ permissions:
 jobs:
   lifecycle-sanitizers:
     name: Lifecycle ASan and UBSan
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
