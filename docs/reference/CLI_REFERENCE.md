@@ -54,7 +54,7 @@ Aliases: `--m`, `-mode`, `-m`. After trimming and lower-casing:
 
 `--mode=proxy` is distinct from the `c` prefix rule. Proxy mode, and configuration with `client.proxy-only=true`, force the local HTTP and SOCKS listener bind addresses to `127.0.0.1`. Missing/non-positive proxy ports default to `8080` (HTTP) and `1080` (SOCKS); `--proxy-http-port` and `--proxy-socks-port` are applied afterwards.
 
-Proxy-only client startup uses the proxy path instead of a real TUN and skips client route, bypass-list, DNS-rule, and geo-rule setup.
+Proxy-only client startup uses the proxy path instead of a real TUN and skips client route, bypass-list, DNS-rule, and geo-rule setup. It also forces the final static-transport setting off, so it does not initiate the `STATIC`/`STATICACK` exchange that static mode would trigger.
 
 ## Core launch options
 
@@ -73,7 +73,7 @@ Proxy-only client startup uses the proxy path instead of a real TUN and skips cl
 | Option | Current behavior |
 |---|---|
 | `--block-quic=[yes|no]` | Client behavior. When enabled, UDP packets to destination port 443 are rejected with ICMP Port Unreachable so clients can fall back to TCP; it is not a general QUIC protocol decoder. |
-| `--tun-ip=<IPv4>` | Defaults to `10.0.0.2`. Explicitly passing this option implicitly enables static mode, even if `--tun-static=no`. |
+| `--tun-ip=<IPv4>` | Defaults to `10.0.0.2`. For an ordinary client, explicitly passing this option implicitly enables static mode, even if `--tun-static=no`; proxy-only startup forces the final static-transport setting off. |
 | `--tun-gw=<IPv4>` | Virtual gateway; default `10.0.0.1`. |
 | `--tun-mask=<bits-or-netmask>` | Accepts a numeric prefix or an IPv4 netmask; default `255.255.255.252` (`/30`). |
 | `--tun-static=[yes|no]` | Explicit static-tunnel switch. |

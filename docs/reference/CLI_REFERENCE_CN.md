@@ -54,7 +54,7 @@ ppp --mode=server --config=./server.json
 
 `--mode=proxy` 与 `c` 前缀规则不同。代理模式，以及配置中 `client.proxy-only=true`，都会强制本地 HTTP/SOCKS 监听绑定到 `127.0.0.1`。缺失或非正端口默认分别为 HTTP `8080`、SOCKS `1080`；之后才应用 `--proxy-http-port` 和 `--proxy-socks-port`。
 
-仅代理客户端启动使用代理路径而非真实 TUN，并跳过客户端路由、旁路列表、DNS 规则和 geo-rules 设置。
+仅代理客户端启动使用代理路径而非真实 TUN，并跳过客户端路由、旁路列表、DNS 规则和 geo-rules 设置。它还会强制关闭最终的 static transport 设置，因此不会发起由 static mode 触发的 `STATIC`/`STATICACK` 交互。
 
 ## 核心启动选项
 
@@ -73,7 +73,7 @@ ppp --mode=server --config=./server.json
 | 选项 | 当前行为 |
 |---|---|
 | `--block-quic=[yes|no]` | 客户端行为。启用后会拒绝目标 UDP 端口 443 的数据包，并返回 ICMP Port Unreachable，促使客户端回退 TCP；它不是通用 QUIC 协议解析器。 |
-| `--tun-ip=<IPv4>` | 默认 `10.0.0.2`。显式传入会隐式开启 static mode，即使 `--tun-static=no`。 |
+| `--tun-ip=<IPv4>` | 默认 `10.0.0.2`。对于普通客户端，显式传入会隐式开启 static mode，即使 `--tun-static=no`；proxy-only 启动会强制关闭最终的 static transport 设置。 |
 | `--tun-gw=<IPv4>` | 虚拟网关；默认 `10.0.0.1`。 |
 | `--tun-mask=<bits-or-netmask>` | 接受数值前缀或 IPv4 子网掩码；默认 `255.255.255.252`（`/30`）。 |
 | `--tun-static=[yes|no]` | 显式 static-tunnel 开关。 |
