@@ -418,26 +418,6 @@ struct vmux_net_test_access {
         }
     }
 
-    static void CloseAndDrain(const std::shared_ptr<vmux_net>& mux) noexcept {
-        if (!mux) {
-            return;
-        }
-
-        const auto& context = mux->get_context();
-        if (!context) {
-            return;
-        }
-
-        context->restart();
-        mux->close_exec();
-        for (int i = 0; i < 64; ++i) {
-            const std::size_t n = context->poll();
-            context->restart();
-            if (n == 0) {
-                break;
-            }
-        }
-    }
 };
 
 } // namespace vmux
