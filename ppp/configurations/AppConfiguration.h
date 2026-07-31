@@ -17,6 +17,20 @@ namespace Json {
 namespace ppp {
     namespace configurations {
         /**
+         * @brief Trims canonical client routing string sources and removes empties.
+         * @param values String source list to normalize in place.
+         */
+        inline void NormalizeClientRoutingStringList(ppp::vector<ppp::string>& values) noexcept {
+            for (ppp::string& value : values) {
+                value = LTrim(RTrim(value));
+            }
+            values.erase(
+                std::remove_if(values.begin(), values.end(),
+                    [](const ppp::string& value) noexcept { return value.empty(); }),
+                values.end());
+        }
+
+        /**
          * @brief Stores runtime and networking configuration for the application.
          */
         class AppConfiguration final {
@@ -51,6 +65,26 @@ namespace ppp {
                 int                                                         prefix = 0; ///< Prefix length, e.g. 24.
                 ppp::string                                                 via;     ///< Gateway peer virtual IPv4, e.g. "10.1.0.2"; empty for announce-only.
                 ppp::string                                                 guid;    ///< Server allowlist owner client GUID; empty for client static routes.
+            };
+
+            /**
+             * @brief Canonical client routing policy model.
+             *
+             * The model is present under @c client.routing when the canonical
+             * object was supplied.  It carries only IP and DNS policy sources:
+             * each @c ip and @c dns item may identify a file or contain inline
+             * text.  The independent @c client.proxy-only flag controls runtime
+             * mode.  During the compatibility period, canonical routes are
+             * mirrored to the legacy @c client.routes and @c client.peer-routes,
+             * while legacy-only input is projected into this model for
+             * serialization.
+             */
+            struct ClientRoutingConfiguration final {
+                bool                                                        configured;  ///< True when client.routing was supplied as a JSON object.
+                ppp::vector<ppp::string>                                    bypass;      ///< IP bypass source files or inline text.
+                ppp::vector<RouteConfiguration>                             routes;      ///< Canonical IP route sources.
+                ppp::vector<PeerPrefixRouteConfiguration>                   peer_routes; ///< Canonical peer-prefix routes.
+                ppp::vector<ppp::string>                                    dns_rules;   ///< DNS rule source files or inline text.
             };
 
             /**
@@ -238,6 +272,7 @@ namespace ppp {
                 struct {
                     int                                                     timeout;        ///< Seconds to wait before attempting a reconnection after disconnect.
                 }                                                           reconnections;
+                ClientRoutingConfiguration                                   routing;        ///< Canonical routing policy; legacy route/proxy fields remain mirrored during migration.
 #if defined(_WIN32)
                 struct {
                     bool                                                    tcp;            ///< Enable Paper Airplane TCP acceleration driver on Windows when true.
@@ -258,7 +293,7 @@ namespace ppp {
                     ppp::string                                             username;       ///< SOCKS5 authentication username; empty = no authentication.
                     ppp::string                                             password;       ///< SOCKS5 authentication password; empty = no authentication.
                 }                                                           socks_proxy;
-                bool                                                        proxy_only;     ///< Local HTTP/SOCKS only; skip TUN routes (also implied by --mode=proxy).
+                bool                                                        proxy_only;     ///< Local HTTP/SOCKS runtime; suppresses host TUN routes/DNS takeover while native policy remains active (also implied by --mode=proxy).
             }                                                               client;         ///< Client-mode specific parameters.
             struct {
                 int                                                         update_interval; ///< VIRR (virtual interface routing refresh) update interval in seconds.
