@@ -62,24 +62,32 @@ CLI 大致分为：
 
 ## 角色选择
 
-### `--mode=[client|server]`
+### `--mode=[client|server|proxy]`
 
 - **默认：** `server`
 - **别名：** `--m`、`-mode`、`-m`
-- 只要值以 `c` 开头（不区分大小写），就进入客户端模式。
+- 值以 `c` 开头（不区分大小写）时进入 TUN 客户端模式；该模式的 native policy 仍会消费 bypass、普通 route、peer 前缀 route 和 DNS rules。
+- 值为 `proxy` 时进入**纯代理模式**：保留本地 HTTP/SOCKS listener 和同一套 native policy；桌面端不安装宿主 OS route，也不接管系统 DNS（使用 `TapStub`）。
 
 这个参数决定整个启动分支：
 
 - **客户端模式** 创建/使用虚拟网卡路径（`VEthernetNetworkSwitcher`、
   `VEthernetExchanger`、虚拟 TUN/TAP NIC）
+- **纯代理模式** 连接服务端并暴露本地 HTTP/SOCKS proxy，同时保留 native bypass、route、peer 前缀和 DNS policy；桌面端使用 `TapStub`，不安装桌面宿主 route 或接管系统 DNS。
 - **服务端模式** 打开监听器和 server switcher 路径（`VirtualEthernetSwitcher`、
   `VirtualEthernetExchanger`）
 
+纯代理启动会强制关闭 static transport，不发起 `STATIC`/`STATICACK`。如果服务端配置了 IPv4 分配，客户端会请求自动分配，而不是根据本地 TUN 地址发起手动请求。
+
+存在 `client.routing` 时，它是 canonical policy。没有该对象时，旧的 `--bypass` 和 `--dns-rules` 作为同一套 native policy 的兼容输入；它们不是仅供 TUN 使用的开关。
+
 ```mermaid
 flowchart TD
-    A["--mode=<value>"] --> B{"value[0] == 'c'?"}
-    B -->|"是：客户端"| C["创建虚拟 NIC\n启动 VEthernetNetworkSwitcher\n连接到服务端"]
-    B -->|"否：服务端"| D["打开监听器\n启动 VirtualEthernetSwitcher\n接受客户端连接"]
+    A["--mode=<value>"] --> B{"value == proxy?"}
+    B -->|"是：纯代理"| P["TapStub + native policy + 本地 HTTP/SOCKS\n不接管桌面宿主 route/DNS"]
+    B -->|"否"| C{"value[0] == 'c'?"}
+    C -->|"是：客户端"| D["创建虚拟 NIC\n启动 VEthernetNetworkSwitcher\n连接到服务端"]
+    C -->|"否：服务端"| E["打开监听器\n启动 VirtualEthernetSwitcher\n接受客户端连接"]
 ```
 
 **示例：**
@@ -87,6 +95,7 @@ flowchart TD
 ```bash
 ppp --mode=server --config=./server.json
 ppp --mode=client --config=./client.json
+ppp --mode=proxy --config=./client.json
 ppp -m=client -c=./client.json
 ```
 
@@ -373,8 +382,9 @@ Windows 虚拟网卡的 DHCP 租约时间，控制虚拟 NIC 在续约之前持�
 
 ### `--bypass=<file1|file2>`
 
-旁路 IP 列表文件。此文件中列出的 IP 地址和段通过物理 NIC（绕过 VPN 隧道）路由，
-而不是通过虚拟网卡。多个文件可用 `|` 分隔。默认：`./ip.txt`。
+旁路 IP 列表来源。IP 地址和网段会作为 bypass 条目加载到 native route policy/RIB/FIB。
+普通 TUN 模式下，支持的桌面平台还可能将其投影为宿主 route；纯代理模式保留 native
+分类，但不安装桌面宿主 route。多个文件可用 `|` 分隔。默认：`./ip.txt`。
 
 **示例：**
 
@@ -384,11 +394,13 @@ ppp --mode=client -c=./client.json --bypass=./cn.txt|./local.txt
 
 ### `--bypass-nic=<interface>`
 
-Linux 上用于旁路列表处理的接口，旁路路由添加时使用此接口作为出口。
+Linux 上用于旁路列表处理的接口提示。只有在 native policy 另外投影到桌面宿主
+route 时才作为出口接口；纯代理模式不会因此关闭 native policy。
 
 ### `--bypass-ngw=<ip>`
 
-旁路列表的网关提示，旁路路由将以此 IP 作为下一跳。
+旁路列表的网关提示。native policy 投影到桌面宿主 route 时使用该下一跳；纯代理模式
+仍保留 native policy。
 
 ### `--virr=[file/country]`
 
@@ -404,8 +416,9 @@ ppp --mode=client -c=./client.json --virr=CN
 
 ### `--dns-rules=<file>`
 
-DNS 规则文件，文件中指定域名模式及其目标 DNS 服务器或转发行为。
-默认：`./dns-rules.txt`。
+DNS 规则来源，文件中指定域名模式及其目标 DNS 服务器或转发行为；在 TUN 和纯代理
+模式中都会加载到 native DNS policy。普通 TUN 还可能配置 tunnel/system DNS；纯代理
+模式不接管系统 DNS。默认：`./dns-rules.txt`。
 
 **示例：**
 

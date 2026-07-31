@@ -44,7 +44,7 @@ This page is the canonical inventory for the project's callable and serialized b
 
 | Entrypoint | Contract | Lifecycle / privilege | Stability | Source truth | Known gaps |
 |---|---|---|---|---|---|
-| `ppp` executable | `--mode=server` (default), `client`, or `proxy`; loads configuration and starts `PppApplication` | Full tunnel normally needs root/Administrator; proxy mode avoids desktop TUN/routes | **Stable** | `main.cpp`, `ppp/app/ApplicationConfig.cpp`, `ppp/app/PppApplication.*` | No formal exit-code table |
+| `ppp` executable | `--mode=server` (default), `client`, or `proxy`; loads configuration and starts `PppApplication` | Full tunnel normally needs root/Administrator; proxy-only retains native client routing/DNS policy while avoiding desktop host-route installation and system-DNS takeover | **Stable** | `main.cpp`, `ppp/app/ApplicationConfig.cpp`, `ppp/app/PppApplication.*` | No formal exit-code table |
 | Go manager executable | Managed mode with MySQL/Redis, or no-argument standalone subscription manager | Long-running HTTP/WebSocket service; persists standalone state | **Stable** | `go/main.go`, `go/ppp/Configuration.go`, `go/ppp/ManagedServer.go` | Operational shutdown and data migration contracts are not centrally specified |
 | Guardian executable/service | Supervises binaries, profiles, instances, logs, and service installation | Host administration privileges may be required | **Experimental** | `go/guardian/main.go`, `go/guardian/api/router.go` | Host-path access and most handlers lack direct API coverage |
 | Android `VpnService` | Bundled Flutter UI starts/stops native tunnel in `:vpn` process | Requires user VPN approval and foreground service; service is not exported | **Internal** | `android/android/app/src/main/.../PppVpnService.kt` | Cross-process event delivery defect; see gaps |
@@ -79,12 +79,14 @@ The supported command surface is grouped below. Exact aliases, defaults, parsing
 | `tcp`, `udp`, `websocket`, `cdn` | Carrier listeners, connect policy, TLS/WS, and port modes | Transport layer | **Stable** | same |
 | `mux` | Multiplexing mode and limits | Transport/runtime | `compat`/`flow`/`balance` **Stable** de facto; `stripe` and live control **Experimental** | same |
 | `server` | Pools, mappings, backend, policies, IPv6, accounting identity | Server runtime | **Stable** | same |
-| `client` | Server URI, reconnection, bandwidth, proxy, route behavior | Client runtime | **Stable** | same |
+| `client` | Server URI, reconnection, bandwidth, proxy, and canonical `client.routing` IP/DNS policy (`ip.bypass`, `ip.routes`, `ip.peer-routes`, `dns.rules`); runtime mode is controlled by top-level `--mode` and `client.proxy-only` | Client runtime | **Stable** | same |
 | `ip`, `virr`, `vbgp` | Address, route/rule, and route propagation inputs | Network switcher | **Stable** de facto | same |
 | `dns` | Resolver, interception, fallback, cache, and policy | Client/server DNS runtime | **Stable** de facto | same |
 | `telemetry` | Exporter, signal, sampling, and resource attributes | Diagnostics/platform bridges | **Experimental** | same |
 | `p2p` | Direct-channel discovery, signaling, transport, and fallback | Client/server P2P runtime | **Experimental** | same |
 | `geo-rules` | Geographical routing/rule sources and behavior | Route/DNS policy | **Experimental** | same |
+
+`client.routing` is the canonical client IP/DNS policy. Its four sources feed native route/DNS policy in both modes, while top-level `--mode=client`/`--mode=proxy` and the independent `client.proxy-only` flag select host integration. `proxy-only` suppresses desktop host-route and system-DNS takeover; mobile bridges keep only the minimal interface/subnet route and do not publish default routes, system DNS, or the local HTTP proxy. An old nested mode key is ignored and not serialized.
 
 Complete fields and a full template are in [Configuration](CONFIGURATION.md). Platform profile stores wrap this JSON but do not replace its contract.
 
@@ -218,6 +220,8 @@ All Android entries below are **Internal** to the bundled Flutter application. C
 
 `PppVpnService` runs in `:vpn`. The EventChannel it previously published to resolved a process-local static sink and delivered nothing, so it has been removed; the service now mirrors every runtime snapshot and error to the files above and the UI process polls them once per second while visible. Native publishes reach the service through the `runtime_snapshot` JNI callback and are ordered by the snapshot's own `generation` and `monotonic_ms`.
 
+For proxy-only profiles, Android still loads the native `client.routing` policy. `VpnService.Builder` keeps only the minimal interface/subnet route; it does not publish default routes, system DNS, or the local HTTP proxy.
+
 **Gap:** debug builds strip `android:process` from the service (`app/src/debug/AndroidManifest.xml`), so instrumentation always runs single-process and cannot reproduce cross-process delivery. That override is why the defect above survived. The release layout is currently enforced by source-level checks in `tests/tooling/test_runtime_ui_wiring.py`, not by a device test.
 
 Other gaps: no centralized channel/JNI ABI version, no complete method/error schema, no service kill/recreate coverage, no full JNI signature test, and profile storage has no explicit migration version.
@@ -235,6 +239,8 @@ All iOS entries below are **Internal** to the bundled app and Packet Tunnel exte
 | Profile bundle | `type=openppp2-profile-export`, `version=1`, active ID and profiles | User-selected security-scoped file; 2 MiB limit; secrets included | `ProfileImportExport.swift` |
 
 Profile export v1 is **Stable** for the bundled iOS app. The C ABI and provider-message commands remain **Internal**.
+
+For proxy-only profiles, the Packet Tunnel keeps only the minimal interface/subnet route and does not publish default routes, system DNS, tunnel DNS, or the local HTTP proxy; native `client.routing` policy remains active.
 
 **Gaps:** provider messages use unversioned bare strings and `nil` for multiple failures; C structs have no ABI version or `struct_size`; no complete buffer truncation convention; Actions do not build the native iOS static library or execute a real Packet Tunnel integration test.
 
@@ -275,8 +281,8 @@ Creating a supported native SDK would require a deliberately small installed hea
 | Windows | Wintun/TAP, route/DNS/proxy helpers, service/process helpers | Administrator for adapter and network changes | `windows/`, `TapWindows.*` | Helper exit/error behavior lacks one contract table |
 | Linux | TUN, route/rule/DNS operations, optional io_uring/SYSNAT | root/CAP_NET_ADMIN | `linux/`, `TapLinux.*` | Distribution-specific command/rollback behavior needs integration coverage |
 | macOS | utun, route/DNS operations | root for desktop tunnel | `darwin/`, `TapDarwin.*` | macOS build is not iOS extension validation |
-| Android | `VpnService`, protected sockets, JNI callbacks | user VPN approval; service owns TUN fd | `android/` | Cross-process runtime snapshot defect and sparse device tests |
-| iOS | Packet Tunnel, C callback bridge, App Group | entitlement and provider-owned packet flow | `ios/` | Native library and provider IPC not built end-to-end in CI |
+| Android | `VpnService`, protected sockets, JNI callbacks; proxy-only keeps only the minimal interface/subnet route while native `client.routing` policy remains active | user VPN approval; service owns TUN fd | `android/` | Cross-process runtime snapshot defect and sparse device tests |
+| iOS | Packet Tunnel, C callback bridge, App Group; proxy-only keeps only the minimal interface/subnet route while native `client.routing` policy remains active | entitlement and provider-owned packet flow | `ios/` | Native library and provider IPC not built end-to-end in CI |
 
 ## 15. Errors, Diagnostics, Telemetry, And Persistence
 

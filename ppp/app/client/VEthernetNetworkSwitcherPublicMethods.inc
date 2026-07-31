@@ -56,6 +56,12 @@
 #endif
                     const boost::asio::ip::address& gw,
                     const ppp::string& url) noexcept;
+                virtual bool AddLoadIPListText(
+                    const ppp::string& text,
+#if defined(_LINUX)
+                    const ppp::string& nic,
+#endif
+                    const boost::asio::ip::address& gw) noexcept;
                 virtual ppp::string GetRemoteUri() noexcept;
 #endif
 

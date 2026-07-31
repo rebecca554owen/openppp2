@@ -6,7 +6,7 @@
 > **用途：**说明本主题的当前行为、配置或实现边界。
 > **适用对象：**OPENPPP2 用户、运维人员与开发者。
 > **当前状态：**当前有效。
-> **最后核对依据：**当前仓库结构、实现路径与文档链接，2026-07-18。
+> **最后核对依据：**当前仓库结构、实现路径与文档链接，2026-07-31。
 > **上一层索引：**[返回索引](README_CN.md) · **English：**[Peer Prefix Routing (Site-to-Site Gateway) — Design Specification](PEER_PREFIX_ROUTING.md)
 
 
@@ -91,13 +91,16 @@ Phase 0 虚拟子网 (LAN/NAT relay)
         ▼
 Peer 前缀路由 (本功能)
         │
-        ├── 静态 client.peer-routes
+        ├── 静态 client.routing.ip.peer-routes
+        │   └── 兼容 alias：client.peer-routes
         ├── 动态 server.peer-routing.distribute
         └── 网关 client.peer-route-announce
         │
         ▼ (正交，可选)
 P2P 直连优化 (仅改变传输路径，不改变路由语义)
 ```
+
+`client.peer-route-announce` 是网关控制面字段，负责向服务端宣告前缀，不负责在宣告方本机安装路由，因此当前保留在 canonical `client.routing` 对象之外。访问方静态路由使用 `client.routing.ip.peer-routes`，不要把它与普通 `routing.ip.routes` 或 bypass 列表混为一谈。
 
 ---
 
@@ -291,30 +294,37 @@ server.peer-routing.enabled  ⇒  server.subnet = true
 
 ### 5.3 客户端 — 访问方（静态路由）
 
+统一使用 `client.routing.ip.peer-routes` 配置 peer 前缀网关路由：
+
 ```json
 {
   "client": {
     "guid": "{CLIENT-B-GUID}",
     "server": "ppp://vpn.example.com:20000/",
-    "peer-routes": [
-      { "network": "10.0.0.0", "prefix": 24, "via": "10.1.0.2" }
-    ]
+    "routing": {
+      "ip": {
+        "peer-routes": [
+          { "network": "10.0.0.0", "prefix": 24, "via": "10.1.0.2" }
+        ]
+      }
+    }
   }
 }
 ```
 
 | 键 | 类型 | 默认 | 说明 |
 |----|------|------|------|
-| `client.peer-routes` | array | `[]` | 静态前缀路由；**必须包含 `via`**（网关 peer 虚拟 IP） |
+| `client.routing.ip.peer-routes` | array | `[]` | canonical 静态前缀路由；**必须包含 `via`**（网关 peer 虚拟 IP） |
+| `client.peer-routes` | array | `[]` | 兼容 alias；仅在没有 `client.routing` 时作为旧输入读取 |
 | `peer-routes[].network` | string | — | 目标前缀网络地址 |
 | `peer-routes[].prefix` | int | — | 前缀长度 1–32 |
 | `peer-routes[].via` | string | — | 下一跳：网关 peer 在 VPN 内的虚拟 IPv4 |
 
-静态路由在隧道建立后写入 RIB 与 OS 路由表，**不依赖**网关 peer 是否已在线（但流量在网关离线时会失败）。
+静态路由在隧道建立后写入 native RIB；桌面平台同时尝试写入 OS 路由表。Android/iOS 不会因为该字段自动生成任意前缀的系统 VPN 路由，因此仍需由应用宿主平台提供相应的 included route/路由能力。
 
 ### 5.4 静态 vs 动态
 
-| 对比项 | `client.peer-routes`（静态） | `peer-route-table`（动态） |
+| 对比项 | `client.routing.ip.peer-routes`（canonical 静态） | `peer-route-table`（动态） |
 |--------|------------------------------|----------------------------|
 | 配置位置 | 各访问方客户端 JSON | 服务端汇聚后下发 |
 | 生效时机 | 本机连接后即可安装 | 网关 peer 注册前缀后 |
@@ -420,9 +430,13 @@ ip route add 10.0.0.0/24 dev eth0    # 若已有直连网段可省略
   "client": {
     "guid": "{33333333-3333-3333-3333-333333333333}",
     "server": "ppp://vpn.example.com:20000/",
-    "peer-routes": [
-      { "network": "10.0.0.0", "prefix": 24, "via": "10.1.0.2" }
-    ]
+    "routing": {
+      "ip": {
+        "peer-routes": [
+          { "network": "10.0.0.0", "prefix": 24, "via": "10.1.0.2" }
+        ]
+      }
+    }
   }
 }
 ```
@@ -467,7 +481,7 @@ ip route add 10.0.0.0/24 dev eth0    # 若已有直连网段可省略
 }
 ```
 
-此时服务端仍做前缀 → 网关转发，但 **不推送** `peer-route-table`；访问方必须自行配置 `client.peer-routes`。
+此时服务端仍做前缀 → 网关转发，但 **不推送** `peer-route-table`；访问方必须自行配置 `client.routing.ip.peer-routes`（旧配置可继续使用 `client.peer-routes` alias）。
 
 ---
 
@@ -512,7 +526,7 @@ tcpdump -i tun0 host 10.0.0.5
 
 | 现象 | 可能原因 | 处理 |
 |------|----------|------|
-| 访问方无 `10.0.0.0/24` 路由 | `distribute=false` 且未配 `peer-routes` | 开启动态或补静态配置 |
+| 访问方无 `10.0.0.0/24` 路由 | `distribute=false` 且未配 `client.routing.ip.peer-routes`（或兼容 alias） | 开启动态或补 canonical 静态配置 |
 | 路由存在但 ping 不通 | 网关 peer 未上线或虚拟 IP 错误 | 确认 `via` 与网关实际 VIP 一致 |
 | 包到网关但不到 LAN | 宿主机未开 `ip_forward` | `sysctl -w net.ipv4.ip_forward=1` |
 | 回程不通 | LAN 设备无到 VPN 前缀的路由 | 在网关做 SNAT 或补静态路由 |
@@ -527,7 +541,7 @@ tcpdump -i tun0 host 10.0.0.5
 |------|------|
 | `peer-routing.enabled=false` | 与升级前行为一致 |
 | P2P | 前缀路由决定 **走哪个 peer**；P2P 仅优化到该 peer 的传输路径 |
-| `client.routes` | 分流路由（物理网卡 vs 隧道），与 `peer-routes` 不同层 |
+| `client.routing.ip.routes` | 普通分流路由（物理网卡 vs 隧道）；`client.routes` 是兼容 alias，与 `client.routing.ip.peer-routes` 不同层 |
 | 前缀冲突 | 后注册会话覆盖同前缀（会话断开时清除） |
 
 ---

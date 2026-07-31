@@ -243,6 +243,15 @@ bool VEthernetNetworkSwitcher::AddLoadIPList(
     return false;
 }
 
+bool VEthernetNetworkSwitcher::AddLoadIPListText(
+    const ppp::string&,
+#if defined(_LINUX)
+    const ppp::string&,
+#endif
+    const boost::asio::ip::address&) noexcept {
+    return false;
+}
+
 void VEthernetNetworkSwitcher::PreferredNic(const ppp::string&) noexcept {}
 
 void VEthernetNetworkSwitcher::PreferredNgw(const boost::asio::ip::address&) noexcept {}

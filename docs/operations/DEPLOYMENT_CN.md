@@ -121,8 +121,8 @@ flowchart TD
 | 4 | `client.server` 指向可访问的服务端地址 |
 | 5 | 宿主机支持虚拟网卡 |
 | 6 | 具备 DNS 和路由修改权限 |
-| 7 | 可选：`client.bypass` IP-list 文件或 URL 可访问 |
-| 8 | 可选：`client.dns-rules` 文件可访问 |
+| 7 | 可选：`client.routing.ip.bypass` IP-list 文件或 `--bypass` CLI 文件可访问 |
+| 8 | 可选：`client.routing.dns.rules` 来源或 `--dns-rules` CLI 文件可访问 |
 
 ### 客户端平台说明
 

@@ -6,7 +6,7 @@
 > **Purpose:** Describe the current behavior, configuration, or implementation boundary for this topic.
 > **Audience:** OPENPPP2 users, operators, and developers.
 > **Status:** Current.
-> **Last verified against:** Current repository structure, implementation paths, and documentation links, 2026-07-18.
+> **Last verified against:** Current repository structure, implementation paths, and documentation links, 2026-07-31.
 > **Parent index:** [Back to index](README.md) · **Chinese:** [平台集成](PLATFORMS_CN.md)
 
 
@@ -15,6 +15,20 @@
 ## Scope
 
 This document explains how OPENPPP2 binds one shared runtime core to different host networking models, with detailed API coverage for each platform backend, build-time organization, and cross-platform development guidelines.
+
+## 1. Canonical client routing policy
+
+When `client.routing` is present as an object, it is the authoritative client IP/DNS policy. The canonical object contains only `ip.bypass`, `ip.routes`, `ip.peer-routes`, and `dns.rules`. The top-level `--mode=client`/`--mode=proxy` and independent `client.proxy-only` flag select runtime behavior; `client.proxy-only` is read regardless of whether the canonical object is present. Legacy `client.routes` and `client.peer-routes` remain fallback inputs only when the canonical object is absent. An old nested mode key is ignored and is not serialized.
+
+The policy has separate native and host-integration layers. Both modes load the canonical bypass list, ordinary routes, peer-prefix routes, and DNS rules into the native route/RIB/FIB and DNS policy/rule table. The desktop bootstrap also runs `GeoRuleGenerator` when enabled and loads canonical sources in both modes. TUN host integration may additionally project that native state into system routes or host DNS settings; proxy-only does not discard the state, it only suppresses those host mutations:
+
+| Platform | `tun` | `proxy-only` |
+|---|---|---|
+| Linux / Windows / macOS | Native policy is built first; supported TUN host integration may project bypass, ordinary routes, peer-prefix routes, and DNS settings to the host. | Native policy is still built and used by the local proxies; desktop uses `TapStub` and installs no host route platform or system DNS mutation. |
+| Android | Native policy is built, while `VpnService.Builder` installs the configured route, captures IPv6 with `::/0`, and adds tunnel DNS servers. | Native policy is still built; `VpnService.Builder` installs only the VPN interface subnet route, with no IPv6 capture or tunnel DNS. |
+| iOS | Native policy is built, while `PacketTunnelProvider` sets the included route, bypass entries as excluded routes, and `NEDNSSettings` for tunnel DNS. | Native policy is still built; provider sets only the tunnel-subnet included route, without bypass exclusions or tunnel DNS, while control/telemetry host exceptions remain protected. |
+
+`routing.ip.routes` is the ordinary route-source layer and enters the native RIB/FIB in both modes. `routing.ip.peer-routes` is the separate peer-prefix gateway layer; desktop TUN may additionally install host routes, while proxy-only and Android/iOS keep the entries in native forwarding state without synthesizing arbitrary per-prefix OS routes.
 
 ---
 
@@ -29,9 +43,10 @@ The shared core lives in `ppp/`. Platform-specific implementations live in:
 | `windows/` | Windows (Vista+, primarily Win10/Win11) |
 | `linux/` | Linux (kernel 4.x+, includes Android kernel) |
 | `darwin/` | macOS (13.0+ Ventura; set via `CMAKE_OSX_DEPLOYMENT_TARGET`) |
-| `android/` | Android (API 23+, via JNI shared library) |
+| `android/` | Android (API 23+, via JNI shared library and `VpnService`) |
+| `ios/` | iOS Packet Tunnel / Network Extension, with a native bridge to the shared core |
 
-The CMake build system selects the correct platform tree at configure time based on `CMAKE_SYSTEM_NAME`.
+The CMake build system selects the desktop platform tree at configure time based on `CMAKE_SYSTEM_NAME`. Android and iOS application projects supply their own host integration and pass an already-authorized tunnel interface to the native core.
 
 ---
 
@@ -54,16 +69,21 @@ graph TD
     ITAP --> WIN["TapWindows\n(windows/ directory)"]
     ITAP --> DARWIN["TapDarwin\n(darwin/ directory)"]
     ITAP --> ANDROID["TapLinux (android variant)\nJNI fd from VpnService"]
+    ITAP --> IOS["TapIos\nNEPacketTunnelFlow callbacks"]
 
     CORE --> ROUTE["Route management"]
-    ROUTE --> LR["netlink RTM_NEWROUTE/RTM_DELROUTE\n(Linux/Android)"]
+    ROUTE --> LR["netlink RTM_NEWROUTE/RTM_DELROUTE\n(Linux)"]
     ROUTE --> WR["IP Helper API SetIpForwardEntry\n(Windows)"]
     ROUTE --> DR["PF_ROUTE RTM_ADD/RTM_DELETE\n(macOS)"]
+    ROUTE --> AR["VpnService.Builder.addRoute\n(Android host)"]
+    ROUTE --> IR["NEPacketTunnelNetworkSettings\n(iOS host)"]
 
     CORE --> DNS["DNS management"]
     DNS --> LD["resolv.conf / systemd-resolved\n(Linux)"]
     DNS --> WD["SetDnsAddresses + DnsFlushResolverCache\n(Windows)"]
     DNS --> DD["scutil --dns\n(macOS)"]
+    DNS --> AD["VpnService.Builder.addDnsServer\n(Android host)"]
+    DNS --> ID["NEDNSSettings\n(iOS host)"]
 ```
 
 ---
@@ -147,12 +167,23 @@ classDiagram
         +SetInterfaceMtu(int) bool
     }
 
+    class TapIos {
+        +Create(...)$ shared_ptr~TapIos~
+        +SetPacketOutput(callback) void
+        +Input(packet, size) bool
+        +SetP2PDatagramTransportFactory(factory) void
+        +SetInterfaceMtu(int) bool
+    }
+
     ITap <|-- TapLinux
     ITap <|-- TapWindows
     ITap <|-- TapDarwin
+    ITap <|-- TapIos
 ```
 
 > **Note on Android**: Android uses `TapLinux` directly. The `TapLinux::From()` static factory (guarded by `#if defined(_ANDROID)`) wraps an existing TUN file descriptor supplied by the Android `VpnService`, rather than opening `/dev/tun` itself.
+>
+> **Note on iOS**: iOS uses `TapIos`, which does not own a POSIX tunnel descriptor. `NEPacketTunnelFlow` supplies input packets and receives output through callbacks.
 
 ---
 
@@ -197,13 +228,24 @@ graph TD
         A1["VpnService.establish()\n(ParcelFileDescriptor)"]
         A2["TapLinux::From(fd)\n(wraps existing TUN fd)"]
         A3["JNI bridge in libopenppp2.so"]
+        A4["VpnService.Builder routes + DNS"]
         A1 --> A2 --> A3
+        A1 --> A4
+    end
+
+    subgraph iOS
+        I1["NEPacketTunnelFlow"]
+        I2["TapIos callback facade"]
+        I3["PacketTunnelProvider network settings"]
+        I1 --> I2
+        I3 --> I1
     end
 
     Linux --> ITap
     Windows --> ITap
     macOS --> ITap
     Android --> ITap
+    iOS --> ITap
 ```
 
 ---
@@ -404,7 +446,18 @@ Android does not expose raw TUN devices to unprivileged apps. Instead:
 1. The host Android application calls `VpnService.establish()` to obtain a `ParcelFileDescriptor` representing a TUN interface already configured by the OS.
 2. This file descriptor is passed over JNI to `libopenppp2.so` via `__LIBOPENPPP2__` annotated export functions (defined with `extern "C" JNIEXPORT`).
 3. Inside the library, `TapLinux::From()` wraps the raw fd in a `TapLinux` instance without re-opening `/dev/net/tun` — the kernel interface already exists.
-4. The OPENPPP2 runtime then operates identically to the Linux desktop path, using the same `TapLinux` read loop and route management.
+4. The OPENPPP2 runtime uses the same packet-processing core as desktop Linux, while the Java `VpnService` remains the owner of system routes, DNS, and the VPN fd.
+
+### Android routing modes
+
+`PppVpnService.kt` applies the top-level `--mode`/`client.proxy-only` runtime choice through `VpnService.Builder` for the host-side projection. The native client consumes the same canonical IP/DNS sources in both modes:
+
+- **Both modes**: load `routing.ip.bypass` and ordinary `routing.ip.routes` into the native RIB/FIB, keep `routing.ip.peer-routes` in the native peer RIB/FIB, and load `routing.dns.rules` into the native DNS policy/rule table.
+- **`tun`**: adds the configured route (normally `0.0.0.0/0`), adds `::/0` for IPv6 leak protection, and adds the configured tunnel DNS servers.
+- **`proxy-only`**: adds only the VPN interface subnet route; it does not capture IPv6 with `::/0` and does not add tunnel DNS servers.
+- When geo-rules are enabled, `android/libopenppp2.cpp` runs `GeoRuleGenerator` and feeds generated and canonical sources into the native client in both modes; proxy-only does not skip that policy-loading path.
+
+`routing.ip.peer-routes` is not expanded into arbitrary `Builder.addRoute()` calls. The mobile native route coordinator keeps peer-prefix entries in its internal RIB/FIB, so an Android host must provide any additional per-prefix system route policy it needs.
 
 ### JNI Macro Conventions
 
@@ -449,24 +502,49 @@ sequenceDiagram
 | NDK R20B | CI validation uses NDK R20B; do not use NDK APIs added after R20B |
 | No raw socket privilege | `VpnService.protect()` must be called on bypass sockets; raw socket creation requires `BIND_VPN_SERVICE` |
 | TUN fd from Java | Never attempt to open `/dev/tun` on Android; always use the fd from `VpnService` |
+| System route and DNS owner | Java `VpnService.Builder` owns `addRoute()` and `addDnsServer()`; the C++ bridge does not call netlink |
 
 ---
 
-## 9. Platform Responsibility Map
+## 9. iOS: Packet Tunnel / Network Extension
 
-| Responsibility | Linux | Windows | macOS | Android |
-|---|---|---|---|---|
-| TUN/TAP open | `open(/dev/net/tun)` + `ioctl(TUNSETIFF)` | Wintun API or TAP-Windows | `PF_SYSTEM utun socket` | `VpnService` fd via JNI |
-| IP address assign | `SIOCSIFADDR` ioctl | IP Helper `SetUnicastIpAddressEntry` | `SIOCAIFADDR` ioctl | Handled by Android OS |
-| Route add | netlink `RTM_NEWROUTE` | IP Helper `CreateIpForwardEntry2` | `PF_ROUTE RTM_ADD` | netlink (same as Linux) |
-| DNS configure | write `/etc/resolv.conf` | `SetDnsAddresses` | `scutil` or `configd` | Android DNS API |
-| Socket protection | Mark socket with routing policy rule | N/A | N/A | `VpnService.protect(fd)` |
-| IPv6 neighbor proxy | `/proc/sys/net/ipv6/conf/*/proxy_ndp` | N/A | SIOCAIFADDR_IN6 | Same as Linux |
-| SSMT multi-queue | `IFF_MULTI_QUEUE` | Wintun multi-session | N/A (utun is single-queue) | Same as Linux |
+iOS has no desktop-style route mutation path in this repository. The application and Packet Tunnel extension divide responsibilities:
+
+1. `ProfileStore.swift` stores profiles and builds the effective JSON, including the canonical `client.routing` object, then shares it through the App Group state.
+2. `PacketTunnelProvider.swift` reads that configuration and creates `NEPacketTunnelNetworkSettings`:
+   - `tun` uses the configured included route, converts `routing.ip.bypass` to IPv4 excluded routes, and installs `NEDNSSettings` with match-all DNS when tunnel DNS is enabled;
+   - `proxy-only` includes only the tunnel subnet route, omits host bypass exclusions and tunnel DNS, and still excludes resolved control/telemetry hosts so the provider does not recurse.
+3. `OpenPPP2PacketTunnelAdapter.swift` connects `NEPacketTunnelFlow` packet reads/writes to the native callback bridge.
+4. `OpenPPP2PacketTunnelBridge.cpp` creates `TapIos`, starts the shared client runtime, loads the canonical native routing and DNS policy in both modes, and forwards packets through the Swift callback. The iOS bridge does not invoke `GeoRuleGenerator`.
+
+`routing.ip.peer-routes` is currently kept in the mobile native RIB/FIB in both modes; the Packet Tunnel provider does not turn each entry into an arbitrary `NEIPv4Route`. Additional per-prefix OS routing therefore requires explicit host integration.
+
+### iOS Integration Boundary
+
+| Layer | Current responsibility |
+|---|---|
+| App `ProfileStore.swift` | Persist profiles and write effective configuration/options to shared tunnel state |
+| `PacketTunnelProvider.swift` | Set included/excluded IPv4 routes, tunnel DNS, and start/stop the extension |
+| `OpenPPP2PacketTunnelAdapter.swift` | Bridge `NEPacketTunnelFlow` packets and provider-owned P2P transport |
+| `OpenPPP2PacketTunnelBridge.cpp` | Create `TapIos`, run the C++ client, and expose the C callbacks |
 
 ---
 
-## 10. Cross-Platform Development Guidelines
+## 10. Platform Responsibility Map
+
+| Responsibility | Linux | Windows | macOS | Android | iOS |
+|---|---|---|---|---|---|
+| TUN/TAP open | `open(/dev/net/tun)` + `ioctl(TUNSETIFF)` | Wintun API or TAP-Windows | `PF_SYSTEM utun socket` | `VpnService` fd via JNI | `NEPacketTunnelFlow` callbacks through `TapIos` |
+| IP address assign | `SIOCSIFADDR` ioctl | IP Helper `SetUnicastIpAddressEntry` | `SIOCAIFADDR` ioctl | `VpnService.Builder.addAddress()` | `NEIPv4Settings` in `PacketTunnelProvider` |
+| Route add | netlink `RTM_NEWROUTE` | IP Helper `CreateIpForwardEntry2` | `PF_ROUTE RTM_ADD` | `VpnService.Builder.addRoute()` | `NEIPv4Settings.includedRoutes/excludedRoutes` |
+| DNS configure | write `/etc/resolv.conf` | `SetDnsAddresses` | `scutil` or `configd` | `VpnService.Builder.addDnsServer()` | `NEDNSSettings` (omitted in proxy-only) |
+| Socket protection | Mark socket with routing policy rule | N/A | N/A | `VpnService.protect(fd)` | Provider-owned Network Extension transport |
+| IPv6 neighbor proxy | `/proc/sys/net/ipv6/conf/*/proxy_ndp` | N/A | SIOCAIFADDR_IN6 | Not used by the app VPN route setup | Not used by Packet Tunnel setup |
+| SSMT multi-queue | `IFF_MULTI_QUEUE` | Wintun multi-session | N/A (utun is single-queue) | Single VpnService fd | Single `NEPacketTunnelFlow` |
+
+---
+
+## 11. Cross-Platform Development Guidelines
 
 ### Platform Guard Macros
 
@@ -481,7 +559,9 @@ Always use the repository macros, never raw compiler symbols:
 #elif defined(_ANDROID)
     // Android-only code
 #elif defined(_MACOS)
-    // macOS-only code
+    // macOS-specific code
+#elif defined(_IPHONE)
+    // iOS Packet Tunnel-specific code
 #endif
 
 // Wrong — never use these in shared ppp/ files
@@ -499,7 +579,9 @@ Always use the repository macros, never raw compiler symbols:
 | Windows implementation | `windows/ppp/tap/TapWindows.h` / `.cpp` |
 | macOS implementation | `darwin/ppp/tap/TapDarwin.h` / `.cpp` |
 | Android JNI bridge | `android/libopenppp2.cpp` |
+| iOS TAP and bridge | `ios/ppp/tap/TapIos.*` / `ios/OpenPPP2PacketTunnelBridge.cpp` |
 | Android CMake | `android/CMakeLists.txt` (not shared with desktop) |
+| iOS framework build | `ios/CMakeLists.txt` and `ios/build-xcframework.sh` |
 
 ### Compilation Verification Strategy
 
@@ -507,8 +589,28 @@ For maximum efficiency, validate one platform at a time:
 
 1. **Windows**: run `build_windows.bat Release x64` — covers MSVC and vcpkg.
 2. **Linux**: sync to `/root/dd/openppp2` via `rsync`, then `cd build && make -j32` — covers GCC 7.5 / Boost / OpenSSL.
-3. **Android**: open Android Studio project at `D:\android\openppp2` and build — covers NDK R20B / API 23.
-4. **macOS**: review for `#ifdef` correctness; no compilation environment available.
+3. **Android**: open the Android Studio project and build — covers NDK R20B / API 23.
+4. **macOS**: review for `#ifdef` correctness; no compilation environment available here.
+5. **iOS**: run `ios/build-xcframework.sh` and build the Xcode app/Packet Tunnel target on macOS.
+
+---
+
+## 12. Runtime effects
+
+Host-layer effects come from TUN/host integration, not from the existence of the native routing policy:
+
+- In TUN mode, virtual-interface setup may change the system route table so selected traffic reaches the tunnel.
+- When host DNS integration is enabled, changing host DNS settings can send application name resolution through tunnel DNS.
+- In proxy-only mode, desktop startup installs no host route platform or system DNS mutation; Android and iOS builders/providers install only the minimal interface or tunnel-subnet route and no tunnel DNS.
+- Socket protection keeps OPENPPP2 control connections outside the tunnel where the platform requires it.
+
+Both modes still use the native RIB/FIB, peer-prefix state, DNS policy/rule table, and local HTTP/SOCKS proxy path. Only host changes actually installed by TUN integration require host-layer rollback. `ITap::Dispose()` also clears native route and policy state, and for installed host changes it triggers:
+
+1. Route entry deletion (`DeleteRoute()` / `DeleteRoute6()`)
+2. DNS configuration restore (`SetDnsAddresses()` writes the original DNS)
+3. DNS cache flush (Windows: `DnsFlushResolverCache()`)
+4. Interface down (`SIOCSIFFLAGS` clears `IFF_UP`)
+5. File descriptor close (the associated `stream_descriptor` is destroyed)
 
 ---
 

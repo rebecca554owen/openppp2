@@ -6,7 +6,7 @@
 > **Purpose:** Describe the current behavior, configuration, or implementation boundary for this topic.
 > **Audience:** OPENPPP2 users, operators, and developers.
 > **Status:** Current.
-> **Last verified against:** Current repository structure, implementation paths, and documentation links, 2026-07-18.
+> **Last verified against:** Current repository structure, implementation paths, and documentation links, 2026-07-31.
 > **Parent index:** [Back to index](README.md) · **Chinese:** [Peer 前缀路由（Site-to-Site 网关）设计说明](PEER_PREFIX_ROUTING_CN.md)
 
 
@@ -91,13 +91,16 @@ Phase 0 virtual subnet (LAN/NAT relay)
         ▼
 Peer prefix routing (this feature)
         │
-        ├── static client.peer-routes
+        ├── static client.routing.ip.peer-routes
+        │   └── legacy alias: client.peer-routes
         ├── dynamic server.peer-routing.distribute
         └── gateway client.peer-route-announce
         │
         ▼ (orthogonal, optional)
 P2P direct path (transport optimization only)
 ```
+
+`client.peer-route-announce` is a gateway control-plane field. It remains outside the canonical `client.routing` object because it advertises prefixes to the server rather than installing routes on the announcing client. `client.routing.ip.peer-routes` is the access-client/static route layer and must not be confused with `routing.ip.routes` or the bypass list.
 
 ---
 
@@ -234,23 +237,30 @@ Use a **fixed virtual IP** (manual assignment recommended):
 
 ### 5.3 Access Client (Static Routes)
 
+Use the canonical peer-prefix layer under `client.routing.ip.peer-routes`:
+
 ```json
 {
   "client": {
-    "peer-routes": [
-      { "network": "10.0.0.0", "prefix": 24, "via": "10.1.0.2" }
-    ]
+    "routing": {
+      "ip": {
+        "peer-routes": [
+          { "network": "10.0.0.0", "prefix": 24, "via": "10.1.0.2" }
+        ]
+      }
+    }
   }
 }
 ```
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `client.peer-routes` | array | `[]` | Static prefix routes; **`via` required** (gateway peer virtual IP) |
+| `client.routing.ip.peer-routes` | array | `[]` | Canonical static prefix routes; **`via` required** (gateway peer virtual IP) |
+| `client.peer-routes` | array | `[]` | Compatibility alias; used only when `client.routing` is absent |
 
 ### 5.4 Static vs Dynamic
 
-| | `client.peer-routes` | `peer-route-table` |
+| | `client.routing.ip.peer-routes` (canonical static) | `peer-route-table` |
 |--|----------------------|-------------------|
 | Config location | Each access client | Server aggregate |
 | Needs known peer IP | Yes | No |
@@ -326,9 +336,13 @@ sysctl -w net.ipv4.ip_forward=1
   "client": {
     "guid": "{33333333-3333-3333-3333-333333333333}",
     "server": "ppp://vpn.example.com:20000/",
-    "peer-routes": [
-      { "network": "10.0.0.0", "prefix": 24, "via": "10.1.0.2" }
-    ]
+    "routing": {
+      "ip": {
+        "peer-routes": [
+          { "network": "10.0.0.0", "prefix": 24, "via": "10.1.0.2" }
+        ]
+      }
+    }
   }
 }
 ```
@@ -359,7 +373,7 @@ sysctl -w net.ipv4.ip_forward=1
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| No route on client | `distribute=false` and no `peer-routes` | Enable distribute or add static routes |
+| No route on client | `distribute=false` and no `client.routing.ip.peer-routes` (or legacy alias) | Enable distribute or add canonical static routes |
 | Route exists, ping fails | Gateway offline or wrong `via` | Verify gateway VIP |
 | Packet reaches gateway, not LAN | `ip_forward` off | Enable forwarding |
 | No return path | LAN has no route to VPN | SNAT or static routes on gateway |
@@ -373,7 +387,7 @@ sysctl -w net.ipv4.ip_forward=1
 |------|-------|
 | `peer-routing.enabled=false` | Identical to pre-feature behavior |
 | P2P | Prefix routing picks **which peer**; P2P optimizes **how** to reach it |
-| `client.routes` | Split-tunnel (physical NIC vs VPN); different from `peer-routes` |
+| `client.routing.ip.routes` | Ordinary split-routing (physical NIC vs VPN); `client.routes` is a compatibility alias and differs from `client.routing.ip.peer-routes` |
 
 ---
 
