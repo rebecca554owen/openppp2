@@ -364,6 +364,11 @@ namespace ppp {
             config.client.server_proxy = "";
             config.client.bandwidth = 0;
             config.client.reconnections.timeout = PPP_TCP_CONNECT_TIMEOUT;
+            config.client.routing.configured = false;
+            config.client.routing.bypass.clear();
+            config.client.routing.routes.clear();
+            config.client.routing.peer_routes.clear();
+            config.client.routing.dns_rules.clear();
             config.client.http_proxy.bind = "";
             config.client.http_proxy.port = PPP_DEFAULT_HTTP_PROXY_PORT;
             config.client.socks_proxy.bind = "";
@@ -371,6 +376,7 @@ namespace ppp {
             config.client.socks_proxy.password = "";
             config.client.socks_proxy.username = "";
             config.client.proxy_only = false;
+            config.client.routes.clear();
             config.client.peer_routes.clear();
             config.client.peer_route_announce.clear();
             config.client.peer_gateway_forward = false;
@@ -751,6 +757,22 @@ namespace ppp {
 
             LRTrim(config, 0);
             LRTrim(config, 1);
+
+            if (config.client.routing.configured) {
+                NormalizeClientRoutingStringList(config.client.routing.bypass);
+                NormalizeClientRoutingStringList(config.client.routing.dns_rules);
+                config.client.routes = config.client.routing.routes;
+                config.client.peer_routes = config.client.routing.peer_routes;
+            }
+            else {
+                // Legacy input remains supported, but is exposed through the
+                // canonical projection for callers that consume client.routing.
+                // The independent client.proxy_only flag is not projected here.
+                config.client.routing.routes = config.client.routes;
+                config.client.routing.peer_routes = config.client.peer_routes;
+                NormalizeClientRoutingStringList(config.client.routing.bypass);
+                NormalizeClientRoutingStringList(config.client.routing.dns_rules);
+            }
 
             // Trim string fields inside structured DNS server entries.
             for (auto* entries : { &config.dns.servers.domestic_entries, &config.dns.servers.foreign_entries }) {
@@ -1462,6 +1484,30 @@ namespace ppp {
         }
 
         /**
+         * @brief Loads a canonical routing string source list from JSON.
+         * @param values Output source list.
+         * @param json Source JSON string or string array.
+         *
+         * Invalid shapes and non-string array elements are ignored.  Empty
+         * entries are removed after trimming so file and inline-text sources
+         * have identical normalization semantics.
+         */
+        static void LoadClientRoutingStringList(ppp::vector<ppp::string>& values, const Json::Value& json) noexcept {
+            values.clear();
+            if (json.isString()) {
+                values.emplace_back(JsonAuxiliary::AsString(json));
+            }
+            elif(json.isArray()) {
+                for (Json::ArrayIndex i = 0; i < json.size(); i++) {
+                    if (json[i].isString()) {
+                        values.emplace_back(JsonAuxiliary::AsString(json[i]));
+                    }
+                }
+            }
+            NormalizeClientRoutingStringList(values);
+        }
+
+        /**
          * @brief Normalizes a DNS protocol string and applies DoQ→DoT fallback.
          * @param raw_protocol Raw protocol string from JSON.
          * @return Normalized lowercase protocol string.
@@ -1807,6 +1853,42 @@ namespace ppp {
             config.client.socks_proxy.username = JsonAuxiliary::AsValue<ppp::string>(json["client"]["socks-proxy"]["username"]);
             config.client.socks_proxy.password = JsonAuxiliary::AsValue<ppp::string>(json["client"]["socks-proxy"]["password"]);
             AssignBoolIfPresent(config.client.proxy_only, json["client"]["proxy-only"]);
+
+            // Canonical client.routing is authoritative when present.  The
+            // nested ip/dns locations are preferred over direct aliases so a
+            // future schema can add unrelated routing keys without ambiguity.
+            // client.proxy-only remains an independent top-level runtime flag.
+            {
+                const Json::Value& routing_json = json["client"]["routing"];
+                if (routing_json.isObject()) {
+                    config.client.routing.configured = true;
+
+                    const Json::Value& ip_json = routing_json["ip"];
+                    const Json::Value& bypass_json =
+                        ip_json.isObject() && !ip_json["bypass"].isNull()
+                            ? ip_json["bypass"] : routing_json["bypass"];
+                    const Json::Value& routes_json =
+                        ip_json.isObject() && !ip_json["routes"].isNull()
+                            ? ip_json["routes"] : routing_json["routes"];
+                    const Json::Value& peer_routes_json =
+                        ip_json.isObject() && !ip_json["peer-routes"].isNull()
+                            ? ip_json["peer-routes"] : routing_json["peer-routes"];
+                    const Json::Value& dns_json = routing_json["dns"];
+                    const Json::Value& dns_rules_json =
+                        dns_json.isObject() && !dns_json["rules"].isNull()
+                            ? dns_json["rules"] : routing_json["dns-rules"];
+
+                    LoadClientRoutingStringList(config.client.routing.bypass, bypass_json);
+                    LoadAllRoutes(config.client.routing.routes, routes_json);
+                    LoadAllPeerPrefixRoutes(config.client.routing.peer_routes, peer_routes_json);
+                    LoadClientRoutingStringList(config.client.routing.dns_rules, dns_rules_json);
+
+                    // Keep existing consumers on the same effective policy
+                    // until they migrate from the legacy fields.
+                    config.client.routes = config.client.routing.routes;
+                    config.client.peer_routes = config.client.routing.peer_routes;
+                }
+            }
 #if defined(_WIN32)
             AssignBoolIfPresent(config.client.paper_airplane.tcp, json["client"]["paper-airplane"]["tcp"]);
 #endif
@@ -2173,28 +2255,94 @@ namespace ppp {
                 mappings.append(jo);
             }
 
-            // Set routes structure
-            Json::Value& routes = client["routes"];
-            for (RouteConfiguration& route : config.client.routes) {
-                Json::Value jo;
-                jo["ngw"] = Ipep::ToAddressString<ppp::string>(Ipep::ToAddress(route.ngw));
+            const AppConfiguration::ClientRoutingConfiguration& canonical_routing = config.client.routing;
+            const bool emit_canonical_routing =
+                canonical_routing.configured ||
+                !canonical_routing.bypass.empty() ||
+                !canonical_routing.routes.empty() ||
+                !canonical_routing.peer_routes.empty() ||
+                !canonical_routing.dns_rules.empty() ||
+                !config.client.routes.empty() ||
+                !config.client.peer_routes.empty();
+            const bool use_canonical_routing = canonical_routing.configured;
+            const ppp::vector<RouteConfiguration>& effective_routes = use_canonical_routing
+                ? canonical_routing.routes : config.client.routes;
+            const ppp::vector<PeerPrefixRouteConfiguration>& effective_peer_routes = use_canonical_routing
+                ? canonical_routing.peer_routes : config.client.peer_routes;
+
+            if (emit_canonical_routing) {
+                Json::Value routing;
+
+                Json::Value bypass(Json::arrayValue);
+                for (const ppp::string& source : canonical_routing.bypass) {
+                    bypass.append(source);
+                }
+                routing["ip"]["bypass"] = bypass;
+
+                Json::Value canonical_routes(Json::arrayValue);
+                for (const RouteConfiguration& route : effective_routes) {
+                    Json::Value jo;
+                    jo["ngw"] = Ipep::ToAddressString<ppp::string>(Ipep::ToAddress(route.ngw));
 #if defined(_LINUX)
-                jo["nic"] = route.nic;
+                    jo["nic"] = route.nic;
 #endif
-                jo["path"] = route.path;
-                jo["vbgp"] = route.vbgp;
-                routes.append(jo);
+                    jo["path"] = route.path;
+                    jo["vbgp"] = route.vbgp;
+                    canonical_routes.append(jo);
+                }
+                routing["ip"]["routes"] = canonical_routes;
+
+                Json::Value canonical_peer_routes(Json::arrayValue);
+                for (const PeerPrefixRouteConfiguration& route : effective_peer_routes) {
+                    Json::Value jo;
+                    jo["network"] = route.network;
+                    jo["prefix"] = route.prefix;
+                    if (!route.via.empty()) {
+                        jo["via"] = route.via;
+                    }
+                    if (!route.guid.empty()) {
+                        jo["guid"] = route.guid;
+                    }
+                    canonical_peer_routes.append(jo);
+                }
+                routing["ip"]["peer-routes"] = canonical_peer_routes;
+
+                Json::Value dns_rules(Json::arrayValue);
+                for (const ppp::string& source : canonical_routing.dns_rules) {
+                    dns_rules.append(source);
+                }
+                routing["dns"]["rules"] = dns_rules;
+                client["routing"] = routing;
             }
 
-            Json::Value& peer_routes = client["peer-routes"];
-            for (const PeerPrefixRouteConfiguration& route : config.client.peer_routes) {
-                Json::Value jo;
-                jo["network"] = route.network;
-                jo["prefix"] = route.prefix;
-                if (!route.via.empty()) {
-                    jo["via"] = route.via;
+            // Legacy top-level client.routes and client.peer-routes are only
+            // emitted when canonical routing is absent.  When canonical routing
+            // is present the data already lives under routing.ip.routes /
+            // routing.ip.peer-routes; writing it again to the legacy keys would
+            // cause a silent canonical-override the next time the file is loaded.
+            if (!use_canonical_routing) {
+                Json::Value& routes = client["routes"];
+                for (const RouteConfiguration& route : effective_routes) {
+                    Json::Value jo;
+                    jo["ngw"] = Ipep::ToAddressString<ppp::string>(Ipep::ToAddress(route.ngw));
+#if defined(_LINUX)
+                    jo["nic"] = route.nic;
+#endif
+                    jo["path"] = route.path;
+                    jo["vbgp"] = route.vbgp;
+                    routes.append(jo);
                 }
-                peer_routes.append(jo);
+
+                Json::Value& peer_routes = client["peer-routes"];
+                for (const PeerPrefixRouteConfiguration& route : effective_peer_routes) {
+                    Json::Value jo;
+                    jo["network"] = route.network;
+                    jo["prefix"] = route.prefix;
+                    if (!route.via.empty()) {
+                        jo["via"] = route.via;
+                    }
+                    peer_routes.append(jo);
+                }
             }
 
             Json::Value& peer_route_announce = client["peer-route-announce"];
