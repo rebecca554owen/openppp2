@@ -12,6 +12,8 @@
 
 This section groups current documentation by user task and maintenance responsibility.
 
+For client traffic steering, start with [`client.routing`](ROUTING_AND_DNS.md). It is the canonical configuration entry point; the older client routing fields are compatibility aliases.
+
 - [IPv6 Client Address Assignment Lifecycle](IPV6_CLIENT_ASSIGNMENT.md)
 - [IPv6 Lease Management](IPV6_LEASE_MANAGEMENT.md)
 - [IPv6 NDP Proxy Subsystem](IPV6_NDP_PROXY.md)
@@ -19,5 +21,5 @@ This section groups current documentation by user task and maintenance responsib
 - [Management Backend](MANAGEMENT_BACKEND.md)
 - [Peer Prefix Routing (Site-to-Site Gateway) — Design Specification](PEER_PREFIX_ROUTING.md)
 - [Platform Integration](PLATFORMS.md)
-- [Proxy-only mode](PROXY_MODE.md)
+- [Proxy-only mode](PROXY_MODE.md) · [中文](PROXY_MODE_CN.md)
 - [Routing And DNS](ROUTING_AND_DNS.md)

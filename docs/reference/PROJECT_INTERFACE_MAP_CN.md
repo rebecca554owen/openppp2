@@ -44,7 +44,7 @@ C++ 类中的 `public` 只表示仓库代码可以访问，并不等于稳定的
 
 | 入口 | 契约 | 生命周期 / 权限 | 稳定性 | 源码依据 | 已知缺口 |
 |---|---|---|---|---|---|
-| `ppp` 可执行文件 | `--mode=server`（默认）、`client` 或 `proxy`；加载配置并启动 `PppApplication` | 完整隧道通常需要 root/Administrator；桌面 proxy 模式不操作 TUN/路由 | **稳定** | `main.cpp`、`ppp/app/ApplicationConfig.cpp`、`PppApplication.*` | 没有正式退出码表 |
+| `ppp` 可执行文件 | `--mode=server`（默认）、`client` 或 `proxy`；加载配置并启动 `PppApplication` | 完整隧道通常需要 root/Administrator；proxy-only 仍保留 native client route/DNS policy，桌面不安装宿主路由或接管系统 DNS | **稳定** | `main.cpp`、`ppp/app/ApplicationConfig.cpp`、`PppApplication.*` | 没有正式退出码表 |
 | Go 管理器 | MySQL/Redis 托管模式，或无参数独立订阅管理器 | 长期运行 HTTP/WebSocket 服务；独立模式持久化状态 | **稳定** | `go/main.go`、`go/ppp/Configuration.go`、`ManagedServer.go` | 停机和数据迁移契约未集中定义 |
 | Guardian | 管理二进制、配置档、实例、日志和系统服务 | 可能需要主机管理权限 | **实验** | `go/guardian/main.go`、`api/router.go` | 主机路径访问和多数 handler 缺少直接 API 测试 |
 | Android `VpnService` | 内置 Flutter UI 在 `:vpn` 进程启动/停止 native 隧道 | 需要用户批准 VPN 和前台服务；Service 不导出 | **内部** | `PppVpnService.kt` | 存在跨进程事件缺陷，见缺口 |
@@ -79,12 +79,14 @@ C++ 类中的 `public` 只表示仓库代码可以访问，并不等于稳定的
 | `tcp`、`udp`、`websocket`、`cdn` | 载体监听、连接策略、TLS/WS 和端口模式 | 传输层 | **稳定** | 同上 |
 | `mux` | 多路复用模式与限制 | 传输/运行时 | `compat`/`flow`/`balance` 事实**稳定**；`stripe` 和实时控制为**实验** |
 | `server` | 地址池、映射、后端、策略、IPv6、计费身份 | 服务端运行时 | **稳定** | 同上 |
-| `client` | 服务端 URI、重连、带宽、代理、路由行为 | 客户端运行时 | **稳定** | 同上 |
+| `client` | 服务端 URI、重连、带宽、代理和 canonical `client.routing` IP/DNS policy（`ip.bypass`、`ip.routes`、`ip.peer-routes`、`dns.rules`）；运行模式由顶层 `--mode` 和 `client.proxy-only` 决定 | 客户端运行时 | **稳定** | 同上 |
 | `ip`、`virr`、`vbgp` | 地址、路由/规则和路由传播输入 | 网络切换器 | 事实上的**稳定** | 同上 |
 | `dns` | resolver、拦截、fallback、cache 和 policy | 客户端/服务端 DNS 运行时 | 事实上的**稳定** | 同上 |
 | `telemetry` | exporter、signal、sampling 和 resource attributes | 诊断/平台桥 | **实验** | 同上 |
 | `p2p` | 直连发现、信令、传输和 fallback | 客户端/服务端 P2P 运行时 | **实验** | 同上 |
 | `geo-rules` | 地理路由/规则来源与行为 | 路由/DNS policy | **实验** | 同上 |
+
+`client.routing` 是 canonical client IP/DNS policy。四类来源在两种模式下都进入 native route/DNS policy；顶层 `--mode=client`/`--mode=proxy` 与独立的 `client.proxy-only` 标志决定宿主集成。`proxy-only` 抑制桌面宿主路由和系统 DNS 接管；移动端 bridge 只保留最小 interface/subnet 路由，不发布默认路由、系统 DNS 或本地 HTTP proxy。旧 routing 对象中的 mode 字段会被忽略且不会序列化。
 
 完整字段和模板见 [配置模型](CONFIGURATION_CN.md)。平台配置档存储会包装这份 JSON，但不会取代其契约。
 
@@ -218,6 +220,8 @@ Guardian 配置和实例状态以 `0600` 模式写入 JSON；profiles/backups �
 
 `PppVpnService` 运行在 `:vpn`。它此前发布事件的 EventChannel 解析到的是进程内 static sink，什么也送不出去，现已移除；Service 改为把每个 runtime snapshot 与错误镜像到上述文件，UI 进程在可见时每秒轮询一次。native 侧的发布经 `runtime_snapshot` JNI 回调抵达 Service，并按 snapshot 自身的 `generation` 与 `monotonic_ms` 排序。
 
+对于 proxy-only 配置，Android 仍会加载 native `client.routing` policy。`VpnService.Builder` 只保留最小 interface/subnet 路由，不发布默认路由、系统 DNS 或本地 HTTP proxy。
+
 **缺口：**debug 构建会去掉 Service 的 `android:process`（`app/src/debug/AndroidManifest.xml`），因此 instrumentation 始终单进程运行，无法复现跨进程投递。上述缺陷正是被这个覆盖掩盖的。release 布局目前由 `tests/tooling/test_runtime_ui_wiring.py` 的源码级检查保证，而非设备测试。
 
 其他缺口：没有统一的 Channel/JNI ABI 版本、完整的方法/错误 schema、Service kill/recreate 覆盖、完整 JNI 签名测试，配置档存储也没有显式迁移版本。
@@ -235,6 +239,8 @@ Guardian 配置和实例状态以 `0600` 模式写入 JSON；profiles/backups �
 | 配置档 bundle | `type=openppp2-profile-export`、`version=1`、active ID 和 profiles | 用户选择 security-scoped 文件；2 MiB 限制；包含 secret | `ProfileImportExport.swift` |
 
 配置档导出 v1 对内置 iOS App 是**稳定**契约；C ABI 和 provider-message 命令仍为**内部**。
+
+对于 proxy-only 配置，Packet Tunnel 只保留最小 interface/subnet 路由，不发布默认路由、系统 DNS、tunnel DNS 或本地 HTTP proxy；native `client.routing` policy 仍保持生效。
 
 **缺口：**provider 消息使用未版本化裸字符串，并以 `nil` 表示多种失败；C struct 没有 ABI version 或 `struct_size`；buffer 截断约定不完整；Actions 没有构建 native iOS static library，也没有真实 Packet Tunnel 集成测试。
 
@@ -275,8 +281,8 @@ TUI 依赖 TTY，并受 `PPP_NO_TUI` 控制。命令在 ConsoleUI 生命周期�
 | Windows | Wintun/TAP、路由/DNS/代理辅助、服务/进程辅助 | 网卡和网络修改需要 Administrator | `windows/`、`TapWindows.*` | 辅助命令退出/错误行为缺少统一表 |
 | Linux | TUN、route/rule/DNS、可选 io_uring/SYSNAT | root/CAP_NET_ADMIN | `linux/`、`TapLinux.*` | 发行版相关命令/回滚需要集成覆盖 |
 | macOS | utun、route/DNS | 桌面隧道需要 root | `darwin/`、`TapDarwin.*` | macOS 构建不等于 iOS 扩展验证 |
-| Android | `VpnService`、protected socket、JNI callback | 用户批准 VPN；Service 持有 TUN fd | `android/` | 跨进程 Runtime Snapshot 缺陷和设备测试不足 |
-| iOS | Packet Tunnel、C callback 桥、App Group | entitlement 和 provider 持有包流 | `ios/` | CI 未端到端构建 native library 和 provider IPC |
+| Android | `VpnService`、protected socket、JNI callback；proxy-only 只保留最小 interface/subnet 路由，同时 native `client.routing` policy 仍生效 | 用户批准 VPN；Service 持有 TUN fd | `android/` | 跨进程 Runtime Snapshot 缺陷和设备测试不足 |
+| iOS | Packet Tunnel、C callback 桥、App Group；proxy-only 只保留最小 interface/subnet 路由，同时 native `client.routing` policy 仍生效 | entitlement 和 provider 持有包流 | `ios/` | CI 未端到端构建 native library 和 provider IPC |
 
 ## 15. 错误、诊断、Telemetry 与持久化
 

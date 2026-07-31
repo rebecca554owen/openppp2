@@ -20,7 +20,7 @@
 
 ## OPENPPP2 是什么
 
-OPENPPP2 是一个单二进制、多角色、跨平台的虚拟网络运行时。它能以 client 或 server 运行，并可叠加路由、DNS steering、反向映射、静态数据路径、MUX、平台集成以及可选管理后端。
+OPENPPP2 是一个单二进制、多角色、跨平台的虚拟网络运行时。它能以 client、proxy-only 客户端或 server 运行，并可叠加路由、DNS steering、反向映射、静态数据路径、MUX、平台集成以及可选管理后端。
 
 ```mermaid
 flowchart TD
@@ -44,10 +44,10 @@ flowchart TD
 
 | 决策 | 选项 |
 |------|------|
-| 节点角色 | `client` 或 `server` |
+| 节点角色 | `client`、`proxy-only` 客户端或 `server` |
 | 部署形态 | 单节点、多服务端、managed |
-| 宿主平台 | Linux、Windows、macOS、Android |
-| 隧道模式 | 全隧道、分流、代理边缘、服务发布边缘、IPv6 服务边缘 |
+| 宿主平台 | Linux、Windows、macOS、Android、iOS |
+| 隧道模式 | `tun` 全隧道/分流、`proxy-only`、服务发布边缘、IPv6 服务边缘 |
 
 ---
 
@@ -59,27 +59,31 @@ flowchart TD
 | 以服务端启动并指定配置 | `./ppp --config=/etc/openppp2/appsettings.json` |
 | 以客户端启动 | `./ppp --mode=client` |
 | 以客户端启动并指定配置 | `./ppp --mode=client --config=./appsettings.json` |
+| 以 proxy-only 客户端启动 | `./ppp --mode=proxy --config=./appsettings.json` |
 
 要求：
-- Windows 上需要管理员权限；Linux/macOS/Android 上需要 root。
+- Windows 上的全隧道客户端/服务端宿主集成需要管理员权限；Linux/macOS 需要 root/CAP_NET_ADMIN。
+- 桌面 proxy-only 使用 `TapStub`，不安装宿主路由，通常不需要接管网络的 root 权限；Android/iOS 仍需要平台 VPN 授权/entitlement 流程。
 - 配置文件在可访问的路径上。
 
 ---
 
 ## 宿主会被改什么
 
-根据平台和角色，OPENPPP2 可能修改：
+根据平台、角色和路由模式，OPENPPP2 可能修改：
 
-| 宿主元素 | 客户端 | 服务端 |
-|---------|--------|--------|
-| 虚拟 NIC | 会创建 | 不创建 |
-| OS 路由表 | 会修改（添加/保护路由） | 不修改 |
-| DNS 配置 | 可能覆写 | 不修改 |
-| 系统 HTTP 代理 | 可能设置 | 不设置 |
-| IPv6 设置 | 如果启用 IPv6 | 如果启用 `server.ipv6` |
-| 防火墙规则 | 不修改 | 可能设置规则 |
+| 宿主元素 | 客户端（TUN） | 客户端（proxy-only） | 服务端 |
+|---------|--------------|---------------------|--------|
+| 虚拟 NIC | 会创建 | 桌面使用 `TapStub`；移动端使用系统框架接口 | 不创建 |
+| OS 路由表 | 可能添加/保护 TUN 和策略路由 | 桌面不安装宿主路由；移动端只保留最小 interface/subnet 路由 | 不修改 |
+| DNS 配置 | 可能配置隧道/系统 DNS | native DNS rules 仍生效，但不接管系统 DNS | 不修改 |
+| 系统 HTTP 代理 | 仅在平台/辅助路径明确配置时设置 | 不自动发布；需手动配置本地 HTTP/SOCKS listener | 不设置 |
+| IPv6 设置 | 如果启用 TUN IPv6 | 不接管宿主 IPv6 或系统 DNS | 如果启用 `server.ipv6` |
+| 防火墙规则 | 不修改 | 不修改 | 可能设置规则 |
 
-在 Android 上，OpenPPP2 不会将本地 HTTP 代理发布为 VPN 系统代理。原生监听器只能在 VPN 建立后保留端口，提前发布会让其他本地应用拦截代理流量。请使用全隧道模式，或将可信任应用手动配置为使用本地 HTTP/SOCKS 端点。
+路由模式改变的是宿主集成，而不是 native client policy。`client.routing` 的 bypass、普通 route、peer-prefix route 和 DNS rules 在两种模式都会消费；proxy-only 只抑制桌面宿主路由和系统 DNS 接管。
+
+在 Android 和 iOS 的 proxy-only bridge 中，VPN 框架只保留最小 interface/subnet 路由，不发布默认路由、系统 DNS 或本地 HTTP proxy；native bypass 和 DNS policy 仍会加载。Android 也不能将本地 HTTP proxy 发布为 VPN 系统代理：原生 listener 只能在 VPN 建立后保留端口，提前发布可能让其他本地应用拦截代理流量。请使用全隧道模式，或将可信任客户端手动配置为使用本地 HTTP/SOCKS endpoint。
 
 ---
 
@@ -176,21 +180,23 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[选择隧道模式] --> B{所有流量走隧道？}
-    B -->|是| C[全隧道模式]
-    B -->|否| D{基于域名的 steering？}
-    D -->|是| E[分流 + DNS 规则]
-    D -->|否| F[按 IP-list 分流]
-    C --> G[设置默认路由走隧道]
-    E --> H[配置 dns-rules 文件]
-    F --> I[配置 bypass IP 列表]
+    A[选择运行模式] --> B{--mode=proxy 或 client.proxy-only？}
+    B -->|是| C[Proxy-only 模式]
+    B -->|否| D[TUN 客户端模式]
+    C --> E[本地 HTTP/SOCKS + native policy\n不接管宿主路由/DNS]
+    D --> F{所有流量经隧道？}
+    F -->|是| G[全隧道模式]
+    F -->|否| H[分流 / DNS steering]
+    G --> I[配置 canonical IP/DNS policy]
+    H --> I
 ```
 
 | 模式 | 说明 | 关键配置 |
 |------|------|---------|
-| 全隧道 | 所有流量走隧道 | 无 bypass 列表时的默认行为 |
-| 分流 | 特定 IP 绕过隧道 | `client.bypass` IP 列表 |
-| DNS steering | 基于域名的 resolver 选择 | `client.dns-rules` |
+| 全隧道 | 所有流量经 TUN policy | `--mode=client`，且不配置 bypass 项 |
+| 分流 | 指定 IP 绕过隧道，同时 native route policy 仍生效 | `--mode=client`；`client.routing.ip.bypass`、`ip.routes` 或 `ip.peer-routes` |
+| DNS steering | 在 native DNS policy 中按域名选择 resolver | `client.routing.dns.rules` |
+| Proxy-only | 本地 HTTP/SOCKS 入口使用 native bypass/route/DNS policy；不接管宿主路由或系统 DNS | `--mode=proxy` 或 `client.proxy-only: true` |
 | 服务发布 | 服务端通过 FRP 发布本地服务 | `server.mappings` |
 | IPv6 服务 | 服务端提供 IPv6 transit | `server.ipv6` |
 
@@ -215,8 +221,12 @@ flowchart TD
 | `client.server` | string | `"ppp://192.168.0.1:20000/"` | 服务端连接地址 |
 | `client.server-proxy` | string | `"http://user:pass@proxy:8080/"` | 连接服务端的代理 |
 | `client.bandwidth` | int | `10000` | 带宽限制，Kbp/s |
-| `client.bypass` | array | `["/etc/bypass.txt"]` | IP bypass 列表来源 |
-| `client.dns-rules` | array | `["rules:///etc/dns.txt"]` | DNS 规则来源 |
+| `client.proxy-only` | bool | `false` | 独立运行标志；抑制宿主接管但不关闭 native policy；`--mode=proxy` 选择相同行为 |
+| `client.routing` | object | `{ "ip": ..., "dns": ... }` | 只承载 canonical IP/DNS policy；旧的嵌套 mode 字段会被忽略且不序列化 |
+| `client.routing.ip.bypass` | array | `["file:///etc/bypass.txt"]` | native bypass policy 来源，两种模式都生效 |
+| `client.routing.ip.routes` | array | `[]` | native 普通 route 来源；桌面宿主投影另行处理 |
+| `client.routing.ip.peer-routes` | array | `[]` | native peer-prefix route 来源 |
+| `client.routing.dns.rules` | array | `["file:///etc/dns.txt"]` | native DNS policy 来源，两种模式都生效 |
 
 ### 服务端字段
 
@@ -287,14 +297,22 @@ sudo ./ppp --mode=client
   "client": {
     "guid": "{...}",
     "server": "ppp://server-ip:20000/",
-    "bypass": [
-      "https://raw.githubusercontent.com/liulilittle/china-list/main/cidr.txt"
-    ]
+    "proxy-only": false,
+    "routing": {
+      "ip": {
+        "bypass": ["file:///opt/openppp2/rules/china-cidr.txt"],
+        "routes": [],
+        "peer-routes": []
+      },
+      "dns": { "rules": [] }
+    }
   }
 }
 ```
 
 预期效果：中国大陆 IP 直连，其余流量走隧道。
+启用 `--mode=proxy` 或 `client.proxy-only` 后，纯代理模式仍使用相同的 native bypass/route/DNS policy，
+但桌面不接管宿主路由和系统 DNS；请将可信任客户端配置为使用本地 HTTP/SOCKS listener。
 
 ### 场景 3：带管理 Backend 的服务端
 

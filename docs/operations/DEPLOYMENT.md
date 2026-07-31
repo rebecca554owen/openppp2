@@ -122,8 +122,8 @@ flowchart TD
 | 4 | `client.server` pointing to an accessible server address |
 | 5 | Virtual adapter support available on host |
 | 6 | DNS and routing change permissions available |
-| 7 | Optional: `client.bypass` IP-list files or URLs accessible |
-| 8 | Optional: `client.dns-rules` file accessible |
+| 7 | Optional: `client.routing.ip.bypass` IP-list files or `--bypass` CLI files accessible |
+| 8 | Optional: `client.routing.dns.rules` sources or `--dns-rules` CLI file accessible |
 
 ### Client Platform Notes
 

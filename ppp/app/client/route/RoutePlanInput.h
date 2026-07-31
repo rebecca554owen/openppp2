@@ -21,6 +21,11 @@ struct RouteInterfaceSnapshot final {
     std::vector<boost::asio::ip::address> dns;
 };
 
+struct RouteSource final {
+    std::string path;
+    uint32_t gateway = 0;
+};
+
 struct RoutePlanInput final {
     uint32_t tap_ip = 0;
     uint32_t tap_gateway = 0;
@@ -30,6 +35,7 @@ struct RoutePlanInput final {
     RouteInterfaceSnapshot tap_interface;
     RouteInterfaceSnapshot underlying_interface;
     std::unordered_map<uint32_t, std::string> nics;
+    std::vector<RouteSource> route_sources;
     std::string bypass_ip_list;
     std::unordered_set<uint32_t> tunnel_dns;
     std::unordered_set<uint32_t> underlying_dns;

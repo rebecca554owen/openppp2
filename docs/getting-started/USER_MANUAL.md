@@ -45,10 +45,10 @@ Before writing config or running commands, decide:
 
 | Decision | Options |
 |----------|---------|
-| Node role | `client` or `server` |
+| Node role | `client`, `proxy-only` client, or `server` |
 | Deployment shape | single node, multi-server, managed |
-| Host platform | Linux, Windows, macOS, Android |
-| Tunnel mode | full-tunnel, split-tunnel, proxy edge, service-publishing, IPv6-serving |
+| Host platform | Linux, Windows, macOS, Android, iOS |
+| Tunnel mode | `tun` full/split tunnel, `proxy-only`, service-publishing, IPv6-serving |
 
 ---
 
@@ -60,31 +60,39 @@ Before writing config or running commands, decide:
 | Start as server with explicit config | `./ppp --config=/etc/openppp2/appsettings.json` |
 | Start as client | `./ppp --mode=client` |
 | Start as client with explicit config | `./ppp --mode=client --config=./appsettings.json` |
+| Start as proxy-only client | `./ppp --mode=proxy --config=./appsettings.json` |
 
 Requirements:
-- Administrator on Windows; root on Linux/macOS/Android.
+- Full-tunnel client/server host integration needs Administrator on Windows and root/CAP_NET_ADMIN on Linux/macOS.
+- Desktop proxy-only uses `TapStub` and does not install host routes; it normally does not require root for network takeover. Android/iOS still require the platform VPN approval/entitlement flow.
 - Configuration file at an accessible path.
 
 ---
 
 ## What The Host Will Change
 
-Depending on platform and role, OPENPPP2 may change:
+Depending on platform, role, and routing mode, OPENPPP2 may change:
 
-| Host element | Client | Server |
-|-------------|--------|--------|
-| Virtual NIC | Created | Not created |
-| OS routing table | Modified (routes added/protected) | Not modified |
-| DNS configuration | May be overridden | Not modified |
-| System HTTP proxy | May be set | Not set |
-| IPv6 settings | If IPv6 enabled | If `server.ipv6` enabled |
-| Firewall rules | Not modified | May set rules |
+| Host element | Client (TUN) | Client (proxy-only) | Server |
+|-------------|--------------|---------------------|--------|
+| Virtual NIC | Created | Desktop uses `TapStub`; mobile uses the framework interface | Not created |
+| OS routing table | TUN and policy routes may be added/protected | No desktop host routes; mobile keeps only the minimal interface/subnet route | Not modified |
+| DNS configuration | Tunnel/system DNS may be configured | Native DNS rules remain active, but system DNS is not taken over | Not modified |
+| System HTTP proxy | Only if explicitly configured by the platform/helper path | Not published automatically; use local HTTP/SOCKS listeners manually | Not set |
+| IPv6 settings | If TUN IPv6 is enabled | No host IPv6 capture or system DNS takeover | If `server.ipv6` enabled |
+| Firewall rules | Not modified | Not modified | May set rules |
 
-On Android, OpenPPP2 does not publish its local HTTP proxy as the VPN system
-proxy. The native listener cannot reserve the port until after the VPN is
-established, so publishing it earlier would allow a different local app to
-intercept proxy traffic. Use full-tunnel mode or configure trusted clients to
-use the local HTTP/SOCKS endpoint manually.
+The routing mode changes host integration, not the native client policy. `client.routing`
+bypass, ordinary routes, peer-prefix routes, and DNS rules are consumed in both modes.
+Proxy-only only suppresses desktop host-route and system-DNS takeover.
+
+On Android and iOS proxy-only bridges, the VPN framework keeps only the minimal
+interface/subnet route; it does not publish default routes, system DNS, or the local
+HTTP proxy. The native bypass and DNS policy still loads. Android also cannot publish
+its local HTTP proxy as the VPN system proxy: the native listener cannot reserve the
+port until after the VPN is established, so publishing it earlier could let another
+local app intercept proxy traffic. Use full-tunnel mode or configure trusted clients
+to use the local HTTP/SOCKS endpoint manually.
 
 ---
 
@@ -181,21 +189,23 @@ Minimal client config:
 
 ```mermaid
 flowchart TD
-    A[Choose tunnel mode] --> B{All traffic via tunnel?}
-    B -->|yes| C[Full tunnel mode]
-    B -->|no| D{Domain-based steering?}
-    D -->|yes| E[Split tunnel + DNS rules]
-    D -->|no| F[Split tunnel by IP-list]
-    C --> G[Set default route via tunnel]
-    E --> H[Configure dns-rules file]
-    F --> I[Configure bypass IP list]
+    A[Choose runtime mode] --> B{--mode=proxy or client.proxy-only?}
+    B -->|yes| C[Proxy-only mode]
+    B -->|no| D[TUN client mode]
+    C --> E[Local HTTP/SOCKS + native policy\nNo host route/DNS takeover]
+    D --> F{All traffic via tunnel?}
+    F -->|yes| G[Full tunnel mode]
+    F -->|no| H[Split tunnel / DNS steering]
+    G --> I[Configure canonical IP/DNS policy]
+    H --> I
 ```
 
 | Mode | Description | Key config |
 |------|-------------|-----------|
-| Full tunnel | All traffic goes through tunnel | Default if no bypass list |
-| Split tunnel | Selected IPs bypass tunnel | `client.bypass` IP list |
-| DNS steering | Domain-based resolver selection | `client.dns-rules` |
+| Full tunnel | All traffic goes through the TUN policy | `--mode=client` with no bypass entries |
+| Split tunnel | Selected IPs bypass the tunnel while native route policy remains active | `--mode=client`; `client.routing.ip.bypass`, `ip.routes`, or `ip.peer-routes` |
+| DNS steering | Domain-based resolver selection in native DNS policy | `client.routing.dns.rules` |
+| Proxy-only | Local HTTP/SOCKS entry points use native bypass/route/DNS policy; no desktop host route or system DNS takeover | `--mode=proxy` or `client.proxy-only: true` |
 | Service publishing | Server publishes local services via FRP | `server.mappings` |
 | IPv6 serving | Server provides IPv6 transit | `server.ipv6` |
 
@@ -220,8 +230,12 @@ flowchart TD
 | `client.server` | string | `"ppp://192.168.0.1:20000/"` | Server connection address |
 | `client.server-proxy` | string | `"http://user:pass@proxy:8080/"` | Proxy to reach server |
 | `client.bandwidth` | int | `10000` | Bandwidth limit in Kbp/s |
-| `client.bypass` | array | `["/etc/bypass.txt"]` | IP bypass list sources |
-| `client.dns-rules` | array | `["rules:///etc/dns.txt"]` | DNS rules sources |
+| `client.proxy-only` | bool | `false` | Independent runtime flag; suppresses host takeover but not native policy; `--mode=proxy` selects the same behavior |
+| `client.routing` | object | `{ "ip": ..., "dns": ... }` | Canonical IP/DNS policy only; an old nested mode key is ignored and not serialized |
+| `client.routing.ip.bypass` | array | `["file:///etc/bypass.txt"]` | Native bypass policy sources, active in both modes |
+| `client.routing.ip.routes` | array | `[]` | Native ordinary route sources; desktop host projection is separate |
+| `client.routing.ip.peer-routes` | array | `[]` | Native peer-prefix route sources |
+| `client.routing.dns.rules` | array | `["file:///etc/dns.txt"]` | Native DNS policy sources, active in both modes |
 
 ### Server Fields
 
@@ -292,14 +306,23 @@ Expected result: all traffic routes through the server.
   "client": {
     "guid": "{...}",
     "server": "ppp://server-ip:20000/",
-    "bypass": [
-      "https://raw.githubusercontent.com/liulilittle/china-list/main/cidr.txt"
-    ]
+    "proxy-only": false,
+    "routing": {
+      "ip": {
+        "bypass": ["file:///opt/openppp2/rules/china-cidr.txt"],
+        "routes": [],
+        "peer-routes": []
+      },
+      "dns": { "rules": [] }
+    }
   }
 }
 ```
 
 Expected result: Mainland China IPs go direct; all other traffic through tunnel.
+The same native bypass/route/DNS policy is used in proxy-only mode when `--mode=proxy`
+or `client.proxy-only` is enabled, but desktop host routes and system DNS are not taken
+over; configure trusted clients to use the local HTTP/SOCKS listener.
 
 ### Scenario 3: Server With Management Backend
 

@@ -67,23 +67,25 @@ The CLI surface splits into:
 
 - **Default:** `server`
 - **Aliases:** `--m`, `-mode`, `-m`
-- Values `client` (or any string beginning with `c`) select full-tunnel client mode.
-- Value `proxy` selects **proxy-only** mode: local HTTP/SOCKS listeners only, no OS routes/TUN on desktop.
+- Values `client` (or any string beginning with `c`) select TUN client mode. Its native policy still consumes bypass, ordinary routes, peer-prefix routes, and DNS rules.
+- Value `proxy` selects **proxy-only** mode: local HTTP/SOCKS listeners plus the same native policy. Desktop does not install host OS routes or take over system DNS (it uses `TapStub`).
 
 This choice changes the entire startup branch:
 
 - **client mode** creates/uses the virtual adapter path (`VEthernetNetworkSwitcher`,
   `VEthernetExchanger`, virtual TUN/TAP NIC)
-- **proxy mode** connects to the server and exposes local HTTP/SOCKS proxies without changing OS routes (desktop uses `TapStub`; no root required)
+- **proxy mode** connects to the server and exposes local HTTP/SOCKS proxies while retaining native bypass, route, peer-prefix, and DNS policy. Desktop uses `TapStub` and does not install desktop host routes or take over system DNS.
 - **server mode** opens the server-side listener/switcher path
   (`VirtualEthernetSwitcher`, `VirtualEthernetExchanger`)
 
 Proxy-only startup forces static transport off and does not initiate `STATIC`/`STATICACK`. If server-side IPv4 allocation is configured, it requests automatic allocation rather than a manual request derived from the local TUN address.
 
+`client.routing` is the canonical policy when present. The legacy `--bypass` and `--dns-rules` inputs are compatibility sources for the same native policy when the canonical object is absent; they are not TUN-only switches.
+
 ```mermaid
 flowchart TD
     A["--mode=<value>"] --> B{"value == proxy?"}
-    B -->|yes| P["TapStub + local HTTP/SOCKS\nNo OS route changes"]
+    B -->|yes| P["TapStub + native policy + local HTTP/SOCKS\nNo desktop host route/DNS takeover"]
     B -->|no| C{"value[0] == 'c'?"}
     C -->|"yes: client"| D["Create virtual NIC\nStart VEthernetNetworkSwitcher\nConnect to server"]
     C -->|"no: server"| E["Open listener\nStart VirtualEthernetSwitcher\nAccept clients"]
@@ -420,9 +422,7 @@ holds its DHCP lease before renewal. Only applies on Windows.
 
 ### `--bypass=<file1|file2>`
 
-Bypass IP list file. IP addresses and ranges listed in this file are routed through the
-physical NIC (bypassing the VPN tunnel) instead of through the virtual adapter. Multiple
-files can be separated by `|`. Default: `./ip.txt`.
+Bypass IP list source. IP addresses and ranges are loaded into the native route policy/RIB/FIB as bypass entries. In normal TUN mode, supported desktop platforms may also project them to host routes; proxy-only keeps the native classification without installing desktop host routes. Multiple files can be separated by `|`. Default: `./ip.txt`.
 
 **Example:**
 
@@ -432,13 +432,14 @@ ppp --mode=client -c=./client.json --bypass=./cn.txt|./local.txt
 
 ### `--bypass-nic=<interface>`
 
-Interface used for bypass list processing on Linux. When bypass routes are added, they
-use this interface as their egress.
+Interface hint for bypass-list processing on Linux. It supplies the egress interface
+when the native policy is also projected to desktop host routes; it does not disable
+native policy in proxy-only mode.
 
 ### `--bypass-ngw=<ip>`
 
-Gateway used for bypass list processing. Bypass routes will have this IP as their
-next-hop.
+Gateway hint for bypass-list processing. It supplies the next hop when bypass policy is
+projected to desktop host routes; the native policy remains available in proxy-only mode.
 
 ### `--virr=[file/country]`
 
@@ -455,8 +456,10 @@ ppp --mode=client -c=./client.json --virr=CN
 
 ### `--dns-rules=<file>`
 
-DNS rules file. The file specifies domain patterns and their target DNS servers or
-forwarding behavior. Default: `./dns-rules.txt`.
+DNS rules source. The file specifies domain patterns and their target DNS servers or
+forwarding behavior and is loaded into native DNS policy in both TUN and proxy-only
+modes. Normal TUN mode may additionally configure tunnel/system DNS; proxy-only does
+not take over system DNS. Default: `./dns-rules.txt`.
 
 **Example:**
 

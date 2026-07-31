@@ -274,14 +274,21 @@ Defines client-side identity, target server, and traffic policy:
 - `client.bandwidth` — upload/download bandwidth cap in bytes/second (0 = unlimited).
 - `client.server` — VPN server URI (e.g. `ppp://host:port/`, `ppp://ws/host:port/`, `ppp://wss/host:port/`).
 - `client.server-proxy` — HTTP/SOCKS proxy used to reach the VPN server (empty = direct).
-- `client.proxy-only` — When `true`, skip OS routes/TUN on desktop; only local HTTP/SOCKS (also implied by `--mode=proxy`).
+- `client.proxy-only` — Independent top-level proxy-only flag. When `true`, suppress host-side route/DNS takeover (desktop installs no host routes; mobile keeps only its framework interface route); native policy remains active. `--mode=proxy` selects the same runtime behavior.
 - `client.http-proxy.*` — Local HTTP proxy listener settings (bind address and port).
 - `client.socks-proxy.*` — Local SOCKS5 proxy listener settings (bind address, port, username, password). The listener supports TCP `CONNECT` and SOCKS5 `UDP ASSOCIATE`; UDP datagrams are relayed through the client datagram tunnel path.
-- `client.routes` — static routes to inject into the OS routing table.
+- `client.routing` — Canonical client IP/DNS traffic policy. Its `ip.bypass`, `ip.routes`, `ip.peer-routes`, and `dns.rules` sources are consumed by native policy in both `tun` and `proxy-only`; runtime mode is controlled separately by `--mode` and `client.proxy-only`.
+- `client.routing.ip.bypass` — Inline bypass text or `file://` source strings; loaded into native route policy in both modes.
+- `client.routing.ip.routes` — Canonical ordinary route entries; loaded into native route policy, with desktop host-route projection handled separately by the active mode and platform.
+- `client.routing.ip.peer-routes` — Canonical peer-prefix gateway routes; loaded into the native peer-prefix RIB/FIB in both modes and optionally projected to desktop host routes outside proxy-only.
+- `client.routing.dns.rules` — Inline DNS rule text or `file://` source strings; loaded into native DNS policy in both modes. Normal TUN may additionally configure tunnel/system DNS, while proxy-only does not take over system DNS.
+- `client.routing.bypass`, `client.routing.routes`, `client.routing.peer-routes`, `client.routing.dns-rules` — Direct aliases accepted for compatibility.
+- `client.routes`, `client.peer-routes`, and legacy DNS/CLI sources — Legacy input accepted only when `client.routing` is absent; canonical route sources are mirrored back during migration. An old nested mode key is ignored and never serialized.
 - `client.mappings` — static port mapping declarations (array of `{local, remote}` endpoint pairs).
 - `client.static.port` — static tunnel port for server-side static mapping.
 - `client.tun.*` — virtual adapter configuration (IP, gateway, mask, name).
-- `client.dns-rules` — DNS split-tunneling rules file path.
+
+The canonical policy is shared by both client modes: bypass and ordinary/peer routes populate native route tables (RIB/FIB), and DNS rules populate the native DNS policy. `tun` may additionally apply supported host routes or DNS settings; `proxy-only` suppresses desktop host-route/system-DNS takeover without disabling native policy. Mobile bridges retain only their minimal framework interface/subnet route in proxy-only mode.
 
 ### `virr`
 
@@ -607,6 +614,16 @@ The configuration decides the shape of the runtime:
       "password": ""
     },
     "proxy-only": false,
+    "routing": {
+      "ip": {
+        "bypass": [],
+        "routes": [],
+        "peer-routes": []
+      },
+      "dns": {
+        "rules": []
+      }
+    },
     "routes": [],
     "mappings": [],
     "dns-rules": ""

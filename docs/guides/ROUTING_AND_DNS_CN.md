@@ -35,9 +35,9 @@
 ```mermaid
 flowchart TD
     A[客户端应用流量] --> B[VEthernetNetworkSwitcher]
-    B --> C{流量分类}
-    C -->|bypass 列表命中| D[直连路径：本地 NIC]
-    C -->|未命中 bypass| E[隧道路径：VEthernetExchanger]
+    B --> C{Native 流量分类}
+    C -->|bypass 列表命中| D[Local/native next hop]
+    C -->|未命中 bypass| E[隧道或本地代理路径]
 
     F[DNS 查询] --> G{DNS 规则匹配}
     G -->|规则：使用 resolver X| H[路由到 resolver X]
@@ -59,8 +59,68 @@ flowchart TD
 
 ## 核心思想
 
-客户端决定哪些流量留在本地、哪些流量进入隧道，以及哪些 DNS 服务器本身必须保持可达。
+客户端决定哪些流量使用 local/native path、哪些流量进入隧道或本地代理，以及哪些 DNS 服务器本身必须保持可达。
 服务端则继续 DNS 路径，可能从缓存回答、转发到指定 resolver，或者正常转发。
+
+### 归一化的客户端分流策略
+
+统一的配置入口是 `client.routing`：
+
+```json
+{
+  "client": {
+    "proxy-only": false,
+    "routing": {
+      "ip": {
+        "bypass": [
+          "10.0.0.0/8",
+          "file://./rules/custom-bypass.txt"
+        ],
+        "routes": [],
+        "peer-routes": []
+      },
+      "dns": {
+        "rules": [
+          "example.com /cloudflare/tun",
+          "file://./rules/custom-dns.txt"
+        ]
+      }
+    }
+  }
+}
+```
+
+`AppConfiguration::Loaded()` 按以下优先级处理：
+
+1. `client.routing` 是 JSON 对象时，其中的 IP/DNS policy source 为权威来源。
+2. `routing.ip.*` 与 `routing.dns.rules` 嵌套字段优先于同级短别名 `routing.bypass`、`routing.routes`、`routing.peer-routes` 和 `routing.dns-rules`。
+3. 独立顶层 `client.proxy-only` 无论是否存在 canonical 对象都会读取；`client.routes`、`client.peer-routes` 以及旧 DNS/CLI 来源仅在没有 canonical 对象时作为兼容输入。
+4. canonical 的普通路由和 peer 前缀路由会镜像回旧字段，供旧平台消费者迁移期间继续使用。旧 routing 对象中的 mode 字段会被忽略且不会由序列化输出。
+
+`client.proxy-only` 与顶层 `--mode=client`/`--mode=proxy` 决定运行模式。`client.routing` 只承载四类 native IP/DNS 输入；路由 source 字符串会 trim 并移除空项；`file://` scheme 不区分大小写；已存在的路径按文件读取，无法解析的 source 保留为 inline 文本。旧的嵌套 mode 值不会选择或覆盖运行模式。
+
+canonical 客户端策略分为 IP 和 DNS 两层：
+
+- `routing.ip.bypass` 提供应留在物理路径上、或使用已配置 local/native next hop 的目标前缀。
+- `routing.ip.routes` 提供由 native route loading 消费的普通路由文件/vBGP 来源。
+- `routing.ip.peer-routes` 提供用于 peer 前缀网关转发的 `network/prefix/via` 路由，不是另一份 bypass 列表。
+- `routing.dns.rules` 提供域名到 resolver 的规则；`tun` 与 `proxy-only` 两种模式都会将其加载到 native DNS policy，纯代理模式不会向宿主系统投影 DNS 接管或 DNS 可达性路由。
+
+### 运行时决策顺序
+
+```mermaid
+flowchart LR
+    A[JSON 与 CLI 输入] --> B[AppConfiguration::Loaded]
+    B --> C[加载 native bypass、普通/peer 路由和 DNS 规则]
+    C --> D[构建 native RIB/FIB 与 DNS policy]
+    D --> E{--mode=proxy 或 client.proxy-only？}
+    E -->|否| F[创建 TUN/TAP 运行时]
+    F --> G[投影流量接管与平台可达性路由]
+    E -->|是| H[TapStub 或最小移动端 VPN]
+    H --> I[本地 HTTP/SOCKS 代理；不接管宿主系统路由/DNS]
+```
+
+两种模式都会加载并使用 native bypass、普通路由、peer 前缀路由和 DNS 规则。这些输入进入 native 路由查找和 DNS policy；本地代理路径也使用同一套分类。TUN 模式还会把这套策略投影到宿主路由和 DNS 处理：IP 分类决定路径，路由条目保证隧道、服务端和 resolver 可达，DNS 规则决定 resolver 语义。纯代理模式则明确不接管系统路由或系统 DNS：桌面使用 `TapStub`，Android 只保留 VPN 接口子网路由，iOS 只保留 tunnel 子网路由。缺少这些平台级路由或 DNS 设置，并不表示已加载的 native policy 失效。平台边界见[平台集成](PLATFORMS_CN.md)。
 
 ---
 
@@ -87,7 +147,7 @@ flowchart TD
 |-------------|------|
 | `DnsController` | 查询上下文、session generation 与关闭顺序 |
 | `DnsInterceptor` | 由 Controller 独占的 DNS 策略、resolver、规则表和 fake-ip 池 |
-| `RouteState::dns_servers` | tunnel / NIC DNS 可达路由的值快照 |
+| `RouteState::dns_servers` | DNS 可达性的 native 快照；宿主/隧道路由投影取决于 mode 与平台 |
 
 Packet dispatch 使用不可变 session 快照调用 `DnsController::HandleQuery()`；Controller 再委托 `DnsInterceptor` 执行策略，隧道回退仅依赖 `IDnsTunnelTransport`，不依赖具体 Exchanger。详见 [DNS_MODULE_DESIGN.md](../architecture/DNS_MODULE_DESIGN.md)。
 
@@ -176,7 +236,7 @@ bool ProtectDefaultRoute() noexcept;
 
 ```mermaid
 flowchart TD
-    A[UDP:53 进入 TUN] --> B[vdns 缓存]
+    A[DNS 查询进入 native DNS policy] --> B[vdns 缓存]
     B -->|miss| C[DnsRedirectPlan::Decide]
     C --> D{规则 / 网关 / unmatched}
     D -->|provider| E[DnsResolver DoH/DoT/TCP/UDP]
@@ -184,9 +244,9 @@ flowchart TD
     D -->|unmatched + intercept| E
     D -->|fake-ip A 查询| G[FakeIpPool 立即回假 IP]
     G --> H[后台真解析]
-    E --> I[DnsResponseHandler 注入 TUN]
+    E --> I[DnsResponseHandler 返回响应]
     F --> I
-    I -->|失败| J[隧道回退 SendTo]
+    I -->|失败| J[配置的回退传输]
 ```
 
 ### DNS 规则配置格式
@@ -205,11 +265,9 @@ flowchart TD
 
 ## DNS 服务器路由分配
 
-DNS 服务器被当作可达性敏感端点处理。
+DNS 服务器是 native DNS policy 中对可达性敏感的端点。两种模式都会进行 resolver 选择；宿主平台的可达性是另一层投影。
 
-当客户端配置了某个 DNS 服务器：
-1. 通过物理 NIC（不经隧道）为该 DNS 服务器添加直连路由。
-2. 这确保对该服务器的 DNS 查询始终可达，不受默认路由变更的影响。
+TUN 模式下，平台路由协调可以为配置的 DNS 服务器经物理 NIC（而非隧道）添加直连路由，使默认路由被重定向时该 resolver 仍然可达。纯代理模式下，DNS 规则仍参与 native 处理，但运行时不会安装宿主系统 DNS 接管，也不会安装宿主/隧道 DNS 可达性路由。移动端系统 builder 可能保留最小的接口/tunnel 子网路由，只有存在相应输入时才添加 DNS 例外路由。
 
 ```cpp
 /**
@@ -224,6 +282,8 @@ bool AddRouteWithDnsServers() noexcept;
  */
 bool DeleteRouteWithDnsServers() noexcept;
 ```
+
+这些方法描述的是平台可达性投影；不能理解为纯代理模式一定会修改宿主 OS 路由。
 
 ---
 
@@ -302,19 +362,23 @@ void Insert(const ppp::string& hostname, const IPEndPoint& address, int ttl) noe
 
 ```mermaid
 flowchart TD
-    A[本地包或查询] --> B[分类]
+    A[本地包或查询] --> B[按 native policy 分类]
     B --> C{bypass？}
-    C -->|是| D[留在本地：直接走 NIC]
-    C -->|否| E[进入隧道]
-    E --> F[服务端路由 / DNS steering]
-    F --> G{DNS 重定向规则？}
-    G -->|是| H[VirtualEthernetNamespaceCache]
-    G -->|否| I[转发到真实目标]
-    H --> J[返回缓存结果或上游结果]
-    I --> K[目标响应]
-    J --> L[返回路径到客户端]
-    K --> L
+    C -->|是| D[选择 local/native next hop]
+    C -->|否| E{mode}
+    E -->|tun| F[进入隧道]
+    E -->|proxy-only| G[通过本地 HTTP/SOCKS 代理]
+    F --> H[服务端路由 / DNS steering]
+    H --> I{DNS 重定向规则？}
+    I -->|是| J[VirtualEthernetNamespaceCache]
+    I -->|否| K[转发到真实目标]
+    J --> L[返回缓存结果或上游结果]
+    K --> M[目标响应]
+    L --> N[返回路径到客户端]
+    M --> N
 ```
+
+local/native 分支是策略选择，不代表一定安装宿主 NIC 路由。TUN 模式下，平台投影可以让它经物理 NIC 发送；纯代理模式下，native 查找和本地代理路径使用同一套分类，但不接管宿主系统路由或 DNS。未命中 bypass 的流量只在 TUN 模式进入隧道，在纯代理模式进入本地代理。
 
 ---
 
@@ -338,7 +402,7 @@ OPENPPP2 支持从多种来源加载 IP bypass 列表：
 }
 ```
 
-bypass 列表刷新时，路由表随之更新。
+bypass 列表刷新时，native RIB/FIB 随之更新；宿主平台路由是否投影取决于 mode，纯代理模式不因此修改宿主系统路由。
 
 ---
 
@@ -363,9 +427,9 @@ vBGP 路由会合并到客户端 RIB 中。
 
 | 关注点 | 关联方式 |
 |--------|---------|
-| bypass 列表 | 决定哪些目标绕过隧道 |
-| DNS 规则 | 决定每个域名使用哪个 resolver |
-| Resolver 可达性 | Resolver 路由确保 resolver 在默认路由被重定向后仍然可达 |
+| bypass 列表 | 为目标选择 local/native path，而不是隧道或代理路径 |
+| DNS 规则 | 在两种模式的 native policy 中决定每个域名使用哪个 resolver |
+| Resolver 可达性 | native 可达性状态支持 resolver 选择；TUN 可投影直连路由，纯代理模式不因此安装宿主路由 |
 | 服务端 DNS 缓存 | 减少重复的上游 DNS 查询 |
 | IPv6 transit | 可能改变 IPv6 目标的"可达"含义 |
 | Static echo | 可以提供绕过 DNS 决策的独立路径 |
@@ -376,8 +440,13 @@ vBGP 路由会合并到客户端 RIB 中。
 
 | 配置键 | 默认值 | 说明 |
 |--------|--------|------|
-| `client.dns-rules` | `[]` | DNS 规则文件路径或 URL |
-| `client.bypass` | `[]` | IP bypass 列表文件路径或 URL |
+| `--mode=client` / `--mode=proxy` | `client` | 顶层运行模式；`--mode=proxy` 选择纯代理宿主集成 |
+| `client.proxy-only` | `false` | 独立顶层运行标志；抑制宿主路由/DNS 接管但不关闭 native policy |
+| `client.routing.ip.bypass` | `[]` | native bypass policy 的内联 IP 前缀或 `file://` source；TUN 可将其投影到物理路径，纯代理模式保留 native 决策 |
+| `client.routing.ip.routes` | `[]` | 加载到 native route policy 的普通路由文件或 vBGP 来源；平台投影取决于运行模式 |
+| `client.routing.ip.peer-routes` | `[]` | 包含 `network`、`prefix`、`via` 的 native peer 前缀网关路由 |
+| `client.routing.dns.rules` | `[]` | 加载到两种模式 native DNS policy 的内联规则或 `file://` source；TUN 可投影 resolver 可达性，纯代理模式不接管宿主 DNS |
+| `client.routes`、`client.peer-routes` | — | 兼容旧路由字段；仅在没有 `client.routing` 时使用；`--bypass`、`--dns-rules` 仍是启动时来源。旧嵌套 mode 字段会被忽略且不序列化 |
 | `geo-rules.enabled` | `false` | 从本地文本 GeoIP/GeoSite 输入生成额外的 bypass 和 DNS-rule 文件 |
 | `geo-rules.geoip-dat` | `GeoIP.dat` | GeoIP dat 本地缓存路径；会下载并按配置国家解析 |
 | `geo-rules.geosite-dat` | `GeoSite.dat` | GeoSite dat 本地缓存路径；会下载并按配置国家解析 |
@@ -419,30 +488,31 @@ vBGP 路由会合并到客户端 RIB 中。
 
 ## 使用示例
 
-### 配置分流 bypass 列表
+### 配置归一化的分流策略
 
 ```json
 {
   "client": {
-    "bypass": [
-      "/etc/openppp2/china-cidr.txt",
-      "https://raw.githubusercontent.com/user/repo/main/bypass.txt"
-    ]
+    "routing": {
+      "ip": {
+        "bypass": [
+          "file:///etc/openppp2/china-cidr.txt",
+          "10.0.0.0/8"
+        ],
+        "routes": [],
+        "peer-routes": []
+      },
+      "dns": {
+        "rules": [
+          "file:///etc/openppp2/dns-rules.txt"
+        ]
+      }
+    }
   }
 }
 ```
 
-### 配置基于域名的 DNS 规则
-
-```json
-{
-  "client": {
-    "dns-rules": [
-      "rules:///etc/openppp2/dns-rules.txt"
-    ]
-  }
-}
-```
+`routing.ip.bypass` 用于选择 local/native path 的前缀，`routing.ip.routes` 用于普通路由来源，`routing.ip.peer-routes` 用于 peer 前缀网关路由。这些 native 输入由 TUN 与纯代理模式共享，区别只在宿主平台投影。没有 `client.routing` 时，旧 client 字段和 CLI 来源仍作为兼容输入。
 
 DNS 规则文件格式示例：
 
@@ -456,11 +526,11 @@ legacy-cn.example /1.2.4.8/nic
 legacy-foreign.example /1.1.1.1/tun
 ```
 
-Provider 规则中，第三段选择 resolver 语义：`/nic` 表示国内并允许 ECS，`/tun`、`/vpn`、`/cf`、`/c` 表示海外且不注入 ECS。旧 IP 规则中，第三段仍保持路径语义：`/nic` 走物理网卡，`/tun` 走 VPN 隧道。
+Provider 规则中，第三段选择 resolver 语义：`/nic` 表示国内并允许 ECS，`/tun`、`/vpn`、`/cf`、`/c` 表示海外且不注入 ECS。旧 IP 规则中，第三段仍是 native path 提示：`/nic` 选择 local/native handling，`/tun` 在存在 TUN 路径时选择隧道处理。纯代理模式仍会将规则加载到 native policy，但不会安装宿主系统隧道路由。
 
 ### 生成 GeoIP / GeoSite 分流规则
 
-`geo-rules` 是可选配置，默认关闭。开启后，OPENPPP2 会按配置下载/解析 GeoIP/GeoSite dat，读取本地文本 GeoIP/GeoSite 输入，写出生成的 bypass 和 DNS-rule 文件，然后接入现有路由/DNS 加载路径。`client.dns-rules` / `--dns-rules` 仍按旧逻辑加载。对于 bypass，`client.bypass` / `--bypass` 会被读入生成器，与 GeoIP/dat/text/append-bypass 结果合并去重后写入 `output-bypass`，而不是再作为第二份独立 bypass 列表重复注册。
+`geo-rules` 是可选配置，默认关闭。开启后，OPENPPP2 会按配置下载/解析 GeoIP/GeoSite dat，读取本地文本输入，写出生成的 bypass 和 DNS-rule 文件，然后接入现有路由/DNS 加载路径。生成结果先于显式的 canonical `client.routing.ip.bypass` 与 `client.routing.dns.rules` 来源加载；`--bypass` 和 `--dns-rules` 仍作为启动时兼容来源支持。生成器会在桌面启动流程和 Android native 启动流程的 `tun` 与 `proxy-only` 两种 mode 下运行；iOS bridge 当前不会调用 `GeoRuleGenerator`，但仍加载 canonical bypass 和 DNS policy。纯代理模式不跳过桌面/Android 生成器或 native policy 加载，只跳过宿主系统路由/DNS 投影。
 
 ```json
 {
@@ -523,7 +593,7 @@ regexp:^.*\.example\.cn$
 
 - `geoip-download-url` 和 `geosite-download-url` 会在启动时把 dat 文件下载到 `geoip-dat` 和 `geosite-dat`。
 - 下载后的二进制 `geoip.dat` / `geosite.dat` 会按 `geo-rules.country` 自动解析生成规则；本地文本 `geoip` / `geosite` 输入和 append 列表会继续合并。
-- 当 `geo-rules.enabled=true` 时，命令行/配置 bypass 来源（`--bypass` / `client.bypass`）会合并进 `output-bypass`，并与 GeoIP CIDR 去重；当 `geo-rules.enabled=false` 时，旧的直接注册 bypass 行为不变。
+- 当 `geo-rules.enabled=true` 时，平台传给生成器的旧 `--bypass` 来源会并入生成结果；canonical `client.routing.ip.bypass` 来源在生成后显式应用。当 `geo-rules.enabled=false` 时，canonical bypass 仍按直接注册路径处理。
 - 解析器也兼容 snake_case 写法（`geoip_dat`、`geosite_dat`、`geoip_download_url`、`geosite_download_url`），但文档推荐 kebab-case。
 - `geoip` 和 `geosite` 当前仅支持本地文本文件；这些字段暂不支持 URL 来源。
 - 生成的 DNS 规则使用 `/<dns-provider-domestic>/nic`；未配置时依次 fallback 到 `dns.servers.domestic` 和 `doh.pub`。
@@ -531,7 +601,7 @@ regexp:^.*\.example\.cn$
 - `append-bypass` 在 GeoIP CIDR 后合并，可包含内联 CIDR 或本地 CIDR 文件。
 - `append-dns-rules` 在 GeoSite 规则后合并，可包含完整规则、用国内 provider 归一化的普通域名，或 `rules://` 本地文件。
 - 客户端 `vdns` 和服务端 namespace cache 只缓存正向的 A/AAAA/CNAME 链响应，且 TTL 必须大于 0；实际缓存 TTL 为 `min(响应 TTL, udp.dns.ttl)`，`udp.dns.cache=false` 或 `udp.dns.ttl=0` 禁止写入。
-- Android/iOS 客户端当前不运行生成器，因此不会影响已有移动端 DNS 规则注入路径。
+- 桌面端和 Android native 客户端在 `tun` 与 `proxy-only` 两种 mode 下运行生成器；iOS bridge 当前不会调用生成器，但仍加载 canonical bypass 和 DNS policy。移动端系统路由/DNS builder 仍与桌面路由加载器分开，只投影平台级状态。
 
 ### VIRR 定期刷新 bypass 列表示例
 
@@ -563,18 +633,23 @@ regexp:^.*\.example\.cn$
 sequenceDiagram
     participant App as 应用层
     participant SW as VEthernetNetworkSwitcher
-    participant FIB as 转发信息表 (FIB)
-    participant NIC as 本地 NIC
-    participant TUN as 隧道
+    participant FIB as Native RIB/FIB
+    participant LOCAL as Local/native path
+    participant TUN as TUN（tun mode）
+    participant PROXY as 本地代理（proxy-only）
 
     App->>SW: 数据包（目标 IP: X.X.X.X）
-    SW->>FIB: 查找 X.X.X.X
+    SW->>FIB: 按 native policy 查找 X.X.X.X
     alt FIB 命中（bypass 条目）
-        FIB-->>SW: 直连网关
-        SW->>NIC: 通过本地 NIC 转发
+        FIB-->>SW: 配置的 local/native next hop
+        SW->>LOCAL: 使用 local/native path
     else FIB 未命中
-        FIB-->>SW: 无匹配
-        SW->>TUN: 通过隧道转发
+        FIB-->>SW: 无 bypass 匹配
+        alt tun mode
+            SW->>TUN: 通过 TUN 路径转发
+        else proxy-only mode
+            SW->>PROXY: 通过本地 HTTP/SOCKS 代理转发
+        end
     end
 ```
 
@@ -586,8 +661,11 @@ sequenceDiagram
 stateDiagram-v2
     [*] --> 初始化
     初始化 --> 加载DNS规则 : 配置加载
-    加载DNS规则 --> 添加DNS可达性路由 : 规则解析完毕
-    添加DNS可达性路由 --> 就绪 : 路由已添加
+    加载DNS规则 --> 构建NativeDNSPolicy : 规则解析完毕
+    构建NativeDNSPolicy --> 检查平台DNS投影
+    检查平台DNS投影 --> 添加DNS可达性路由 : TUN 且存在平台输入
+    检查平台DNS投影 --> 就绪 : proxy-only 或无平台路由输入
+    添加DNS可达性路由 --> 就绪 : 投影完成
     就绪 --> DNS查询到来 : 收到查询
     DNS查询到来 --> 规则匹配 : 检查 dns_rules_
     规则匹配 --> 检查Resolver可达性 : 找到规则
@@ -596,8 +674,8 @@ stateDiagram-v2
     检查Resolver可达性 --> 使用默认Resolver : 不可达
     发送到匹配Resolver --> 就绪 : 查询完成
     使用默认Resolver --> 就绪 : 查询完成
-    就绪 --> 清理路由 : 程序退出
-    清理路由 --> [*]
+    就绪 --> 清理native policy/routes : 程序退出
+    清理native policy/routes --> [*]
 ```
 
 ---

@@ -1,4 +1,5 @@
 #include <ppp/app/client/route/RouteCoordinator.h>
+#include <ppp/io/File.h>
 #include <ppp/net/native/rib.h>
 
 namespace ppp {
@@ -22,6 +23,22 @@ void Sleep(int milliseconds) noexcept {
 
 }
 
+namespace ppp::io {
+
+ppp::string File::RewritePath(const char* path) noexcept {
+    return path == nullptr ? ppp::string() : ppp::string(path);
+}
+
+ppp::string File::GetFullPath(const char* path) noexcept {
+    return path == nullptr ? ppp::string() : ppp::string(path);
+}
+
+bool File::Exists(const char*) noexcept {
+    return false;
+}
+
+}
+
 namespace ppp::net::native {
 
 RouteEntriesTable& RouteInformationTable::GetAllRoutes() noexcept {
@@ -33,6 +50,11 @@ bool RouteInformationTable::AddRoute(uint32_t, int, uint32_t) noexcept {
 }
 
 bool RouteInformationTable::AddAllRoutes(const ppp::string&, uint32_t) noexcept {
+    return true;
+}
+
+bool RouteInformationTable::AddAllRoutesByIPList(
+    const ppp::string&, uint32_t) noexcept {
     return true;
 }
 

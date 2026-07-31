@@ -342,6 +342,53 @@ key.kf / key.kh / key.kl / key.kx / key.sb —— 非法值时重置为框架内
 | `socks-proxy.username` | string | SOCKS5 认证用户名 |
 | `socks-proxy.password` | string | SOCKS5 认证密码 |
 | `mappings` | array | FRP 端口映射规则列表 |
+| `proxy-only` | bool | 独立的顶层纯代理运行标志；关闭宿主路由/DNS 接管，但不关闭 native policy；`--mode=proxy` 选择相同行为 |
+| `routing` | object | 权威客户端 IP/DNS policy；四个部分在 `tun`/`proxy-only` 中都进入 native policy，运行模式由顶层标志决定 |
+
+#### `client.routing`：IP/DNS 分流策略
+
+推荐把客户端 IP 分流来源、普通/peer 路由和 DNS 规则放在同一个对象中；运行模式使用独立的 `client.proxy-only` 或顶层 `--mode`：
+
+```json
+{
+  "client": {
+    "proxy-only": false,
+    "routing": {
+      "ip": {
+        "bypass": [
+          "10.0.0.0/8",
+          "file://./rules/custom-bypass.txt"
+        ],
+        "routes": [],
+        "peer-routes": []
+      },
+      "dns": {
+        "rules": [
+          "example.com /cloudflare/tun",
+          "file://./rules/custom-dns.txt"
+        ]
+      }
+    }
+  }
+}
+```
+
+| 字段 | 类型 | 作用 |
+|------|------|------|
+| `routing.ip.bypass` | string[] | bypass source；每项可以是 inline 文本或 `file://` 文件；两种模式都加载到 native route policy |
+| `routing.ip.routes` | array | 普通 route source；进入 native RIB/FIB；桌面端是否另行安装宿主 route 由运行模式和平台决定 |
+| `routing.ip.peer-routes` | array | peer 前缀网关 route；进入两种模式共用的 native peer-prefix RIB/FIB，proxy-only 不安装桌面宿主 route |
+| `routing.dns.rules` | string[] | DNS rule source；进入两种模式共用的 native DNS policy；tun 可另行接管 tunnel/system DNS，proxy-only 不接管系统 DNS |
+
+优先级和兼容规则：
+
+1. `client.routing` 对象存在时，其 IP/DNS policy source 是权威来源；`routing.ip` / `routing.dns` 中的嵌套字段优先于同级短别名。
+2. `routing.bypass`、`routing.routes`、`routing.peer-routes`、`routing.dns-rules` 是兼容的直接别名。
+3. `client.proxy-only` 是独立顶层标志，无论是否存在 `client.routing` 都会读取；`client.routes`、`client.peer-routes` 和旧 DNS/CLI 来源仅在没有 `client.routing` 时使用。
+4. canonical 的普通 routes 和 peer-routes 会镜像到旧字段，方便旧平台消费者平滑迁移；旧 routing 对象中的 mode 字段会被忽略且不由 `ToJson()` 输出。
+5. source 字符串会 trim 并移除空项；`file://` scheme 大小写不敏感。缺失文件不会被当作已加载的文件源。
+
+`client.routing` 的四个部分在两种客户端模式中都有效：bypass、普通 route 和 peer route 进入 native route policy/RIB/FIB，DNS rules 进入 native DNS policy。`tun` 可在支持的平台上另外应用宿主 route 或 DNS 设置；`proxy-only` 只抑制桌面宿主 route/系统 DNS 接管，不会关闭 native policy。移动端在 proxy-only 下仅保留框架所需的最小 interface/subnet route。
 
 客户端 URI 格式：
 
