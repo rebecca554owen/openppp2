@@ -197,6 +197,11 @@ namespace ppp {
                         }
                     }
 
+                    // In proxy-only mode the DNS rule table is active for native
+                    // classification (routing.dns_rules still applies), but the
+                    // DNS resolver that performs system DNS takeover is not started.
+                    // configuration_, human_routing_rules_ and fake_ip_pool_ are
+                    // stored so LoadRules and CollectReachabilityIps work correctly.
                     if (proxy_only || NULLPTR == context || NULLPTR == configuration) {
                         std::lock_guard<std::mutex> scope(syncobj_);
                         configuration_ = configuration;

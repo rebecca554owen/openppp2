@@ -214,9 +214,10 @@ namespace ppp {
 
                     auto self = shared_from_this();
                     if (auto switcher = exchanger_->GetSwitcher(); NULLPTR != switcher) {
-                        if (auto tap = switcher->GetTap(); NULLPTR != tap && tap->IsHostedNetwork()) {
+                        if (auto tap = switcher->GetTap(); NULLPTR != tap &&
+                            (tap->IsHostedNetwork() || switcher->ProxyOnly(NULLPTR))) {
                             /**
-                             * @brief Hosted-network mode prefers direct rinetd bridge after DNS resolution.
+                             * @brief Native bypass mode prefers direct rinetd bridge after DNS resolution.
                              */
                             boost::system::error_code ec;
                             boost::asio::ip::address address = StringToAddress(destinationEP->Host.data(), ec);

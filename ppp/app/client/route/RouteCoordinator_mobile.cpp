@@ -5,6 +5,7 @@
 #include <ppp/app/client/route/RouteState.h>
 #include <ppp/app/client/routing/HumanRoutingRouteSpecs.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
+#include <ppp/io/File.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/native/rib.h>
 
@@ -62,6 +63,37 @@ namespace ppp {
                         (int)bypass_ip_list.size(), bypass_loaded ? 1 : 0);
 #endif
                     ppp::telemetry::Log(Level::kDebug, "client", "bypass list updated");
+                }
+
+                // Static client route sources are native policy routes on mobile.
+                // They are intentionally kept in the in-process RIB/FIB; this
+                // path never calls the platform route installer.
+                for (const route::RouteSource& source : input.route_sources) {
+                    ppp::string path(source.path.begin(), source.path.end());
+                    path = ppp::LTrim(ppp::RTrim(path));
+                    if (path.size() >= 7 &&
+                        ppp::ToLower<ppp::string>(path.substr(0, 7)) == "file://") {
+                        path = ppp::LTrim(ppp::RTrim(path.substr(7)));
+                    }
+                    if (path.empty()) {
+                        continue;
+                    }
+
+                    ppp::string rewritten = ppp::io::File::RewritePath(path.data());
+                    ppp::string fullpath = ppp::io::File::GetFullPath(rewritten.data());
+                    if (fullpath.empty() || !ppp::io::File::Exists(fullpath.data())) {
+                        ppp::telemetry::Log(Level::kDebug, "client",
+                            "mobile route source unavailable: %s", path.data());
+                        continue;
+                    }
+
+                    const uint32_t gateway = source.gateway != IPEndPoint::AnyAddress
+                        ? source.gateway : input.tap_gateway;
+                    if (gateway == IPEndPoint::AnyAddress ||
+                        gateway == IPEndPoint::NoneAddress) {
+                        continue;
+                    }
+                    rib->AddAllRoutesByIPList(fullpath, gateway);
                 }
 
                 route::MobileRoutePlan plan;

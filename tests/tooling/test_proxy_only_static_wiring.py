@@ -52,11 +52,12 @@ class ProxyOnlyStaticWiringTests(unittest.TestCase):
         self.assertIn('ipv4_req.mode = "manual";', request)
         self.assertGreaterEqual(request.count('ipv4_req.mode = "auto";'), 2)
 
-    def test_proxy_docs_describe_auto_ipv4_allocation(self) -> None:
-        english = self.source("docs/guides/PROXY_MODE.md")
-        chinese = self.source("docs/guides/PROXY_MODE_CN.md")
-        self.assertIn("automatic IPv4 allocation", english)
-        self.assertIn("自动 IPv4 分配", chinese)
+    def test_existing_docs_describe_the_boundary(self) -> None:
+        guide = self.source("docs/guides/PROXY_MODE.md")
+        cli = self.source("docs/reference/CLI_REFERENCE.md")
+        for document in (guide, cli):
+            self.assertIn("STATIC`/`STATICACK", document)
+            self.assertIn("automatic", document)
 
 
 if __name__ == "__main__":

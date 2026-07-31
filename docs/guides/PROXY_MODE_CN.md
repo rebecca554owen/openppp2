@@ -1,80 +1,92 @@
-# Proxy-only 模式
+# 纯代理模式
+> Status: Active
+> Type: Guide
+> Last verified: 63fc030
 
-> **状态：**当前有效；桌面行为已按源码核对，Android 行为受平台限制
-> **类型：**指南
-> **最后核对：**应用模式、客户端启动、配置与 Android VPN Service 源码，2026-07-22
-> **上一层索引：**[任务指南](README_CN.md) · **English：**[Proxy-only mode](PROXY_MODE.md)
+> **用途：**说明本主题的当前行为、配置或实现边界。
+> **适用对象：**OPENPPP2 用户、运维人员与开发者。
+> **当前状态：**当前有效。
+> **最后核对依据：**当前仓库结构、实现路径与文档链接，2026-07-31。
+> **上一层索引：**[返回索引](README_CN.md) · **English：**[Proxy-only mode](PROXY_MODE.md)
 
-## 使用正确的开关
 
-桌面端应明确选择进程模式：
+纯代理模式连接 OPENPPP2 服务端，并提供**本地 HTTP 与 SOCKS5 转发代理**，不安装宿主系统路由条目或系统 DNS 设置，但仍会把 canonical 路由策略加载到 native client。桌面端使用 `TapStub`；移动端只保留运行时所需的最小 tunnel 接口。不安装宿主规则不等于对应的 native policy 失效。
+
+## 快速开始
 
 ```bash
-./ppp --mode=proxy --config=./client.json
+./ppp --mode=proxy --config=./appsettings.json
+curl -x socks5h://127.0.0.1:1080 https://example.com
+curl -x http://127.0.0.1:8080 https://example.com
 ```
 
-`--mode=proxy` 不是 `client.proxy-only=true` 的简单别名：
+## 配置
 
-| 选择 | 应用行为 |
-|---|---|
-| `--mode=proxy` | 选择客户端代理运行时；非移动端使用 `TapStub`，跳过普通 TUN 路由/DNS 规则/bypass/geo-rule 初始化，并走 proxy 模式的权限路径。 |
-| `--mode=client` 加 `client.proxy-only: true` | 在客户端配置内启用 proxy-only 行为，但不会自行选择 client 模式，也不会设置应用级 `proxy_mode_` 标记。 |
-
-若运维意图是桌面本地代理会话，推荐使用 `--mode=proxy`。
-
-## 本地监听器
-
-Proxy-only 在连接到已配置的 VPN 服务端后，会暴露本地 HTTP 和 SOCKS5 转发监听器。
-
-| 监听器 | 配置字段 | Proxy 模式默认值 |
-|---|---|---|
-| HTTP | `client.http-proxy.bind`、`client.http-proxy.port` | `127.0.0.1:8080` |
-| SOCKS5 | `client.socks-proxy.bind`、`client.socks-proxy.port` | `127.0.0.1:1080` |
-| SOCKS5 凭据 | `client.socks-proxy.username`、`client.socks-proxy.password` | 可选配置字段 |
-
-桌面 CLI proxy 模式会强制两个监听地址为 loopback，并把缺失/非法端口规范为 `8080` 和 `1080`。不要把该模式当成局域网或公网代理服务，也不要试图通过公开绑定地址暴露它。
-
-`client.server-proxy` 是另一项配置：它用于通过上游代理连接 VPN 服务端，并不配置本地监听器。
-
-## 安全的配置形态
-
-端点和凭据不应提交到版本控制。下面仅使用文档专用端点：
+推荐使用 canonical 对象 `client.routing` 保存 IP/DNS policy。它存在时只对这些 policy source 具有权威性；运行模式保持独立：
 
 ```json
 {
   "client": {
-    "server": "ppp://vpn.example.invalid:20000/",
+    "guid": "{...}",
+    "server": "ppp://your-server:20000/",
     "proxy-only": true,
+    "routing": {
+      "ip": {
+        "bypass": [],
+        "routes": [],
+        "peer-routes": []
+      },
+      "dns": {
+        "rules": []
+      }
+    },
     "http-proxy": { "bind": "127.0.0.1", "port": 8080 },
     "socks-proxy": { "bind": "127.0.0.1", "port": 1080 }
   }
 }
 ```
 
-该 JSON 字段可用于客户端配置，但不能替代推荐的桌面启动方式 `--mode=proxy`。
+`client.proxy-only` 是独立的顶层运行标志，即使存在 `client.routing` 也会读取。旧的 `client.routes` 和 `client.peer-routes` 仅在 canonical 对象缺失时作为兼容输入；旧 routing 对象中的 mode 字段会被忽略且不会序列化。命令行使用 `--mode=client` 或 `--mode=proxy` 选择运行模式；`--mode=proxy` 等价于启用纯代理行为。
 
-## Static transport 边界
+省略监听端口或绑定地址时使用以下默认值：
 
-对于普通客户端，显式传入 `--tun-ip` 会隐式请求 static mode，即使同时指定 `--tun-static=no`。Proxy-only 启动会把最终设置重新规范为关闭，因为它不应使用 static transport。因此，proxy-only 启动不会发起该模式原本会触发的 `STATIC`/`STATICACK` 交互。服务端启用 IPv4 地址分配时，同一规范化设置会请求自动 IPv4 分配，而不是把本地 TUN 地址作为手动请求提交。
+| 监听器 | 默认绑定地址 | 默认端口 |
+|--------|--------------|----------|
+| HTTP | 127.0.0.1 | 8080 |
+| SOCKS5 | 127.0.0.1 | 1080 |
 
-## 本地验证
+## 平台行为
 
-客户端到达 connected 状态后，只测试 loopback 端点：
+| 平台 | TUN / 宿主安装 | native policy 与纯代理边界 | 权限 / 授权 |
+|------|----------------|----------------------------|------------|
+| Linux / macOS / Windows | TUN 可将 native policy 投影到宿主机；纯代理使用 `TapStub`，不安装宿主路由平台或系统 DNS | 两种模式都加载 native bypass、普通路由、peer 前缀路由和 DNS rule table；本地 HTTP/SOCKS 代理仍可用 | 纯代理模式不需要 root/admin |
+| Android | TUN 模式由 `VpnService.Builder` 安装配置路由和隧道 DNS | 两种模式都加载 native bypass、普通路由、peer 前缀路由和 DNS policy；纯代理模式的 Builder 只安装 VPN 接口子网路由 | 需要 VpnService 权限 |
+| iOS | TUN 模式由 `PacketTunnelProvider` 安装 included/excluded routes 和隧道 DNS | 两种模式都加载 native 路由和 DNS policy；纯代理 provider 只安装 tunnel 子网路由，不安装 bypass 排除路由或隧道 DNS | 需要 Network Extension 授权 |
 
-```bash
-curl -x http://127.0.0.1:8080 https://example.com
-curl -x socks5h://127.0.0.1:1080 https://example.com
-```
+纯代理模式只限制宿主/平台安装层。TUN 与纯代理都会把 `routing.ip.bypass`、`routing.ip.routes`、`routing.ip.peer-routes` 和 `routing.dns.rules` 加载并用于 native route/RIB/FIB 与 DNS policy/rule table。桌面 bootstrap 在启用时也会运行 `GeoRuleGenerator`，并在两种模式加载 canonical sources；桌面纯代理使用 native loopback gateway 构建这些状态，但不安装宿主路由。Android 和 iOS builder/provider 只安装最小接口或 tunnel 子网路由。归一化策略见[路由与 DNS](ROUTING_AND_DNS_CN.md)。
 
-监听器已打开并不证明隧道、上游服务端、凭据或远程路由均正常。请求失败时应查看运行时诊断。
+Android 端在 profile 选项中启用 **仅代理模式**（`vpnOptions.proxyOnly=true`）。应用仍会创建最小 TUN 以便调用 `protect()`；native client 在两种模式都加载 bypass、普通路由、peer 前缀路由和 DNS 规则。`android/libopenppp2.cpp` 在两种模式都会运行 `GeoRuleGenerator` 并加载生成的及 canonical sources；纯代理只关闭 Builder 侧的 IPv6 捕获、隧道 DNS 和移动端默认路由。
 
-## Android 边界
+iOS 端由 `PacketTunnelProvider` 从准备好的 JSON 读取独立顶层标志 `client.proxy-only`。纯代理模式只安装 tunnel 子网的 included route（不是默认路由），不配置宿主 bypass 排除路由或 `NEDNSSettings`。`OpenPPP2PacketTunnelBridge.cpp` 在两种模式仍加载 canonical native 路由和 DNS policy；iOS bridge 不调用 `GeoRuleGenerator`。
 
-Android 随附应用使用 `vpnOptions.proxyOnly`。它仍会建立 `VpnService` 接口，并执行平台特定的窄路由/DNS 处理。不要把桌面端“没有普通路由或 DNS 初始化”的描述套用到 Android。
+## Static 传输边界
 
-## 相关页面
+纯代理模式启动时强制关闭 static transport，即使 `--tun-ip` 原本会启用它，也不会发起 `STATIC`/`STATICACK` 交换。服务端配置 IPv4 分配时，纯代理模式请求自动分配 IPv4，而不是把本地 TUN 地址作为手动分配请求提交。
 
-- [路由与 DNS](ROUTING_AND_DNS_CN.md)
-- [配置参考](../reference/CONFIGURATION_CN.md)
-- [CLI 参考](../reference/CLI_REFERENCE_CN.md)
-- [运维与故障排查](../operations/OPERATIONS_CN.md)
+## CLI 选项
+
+| 选项 | 说明 |
+|------|------|
+| `--mode=proxy` | 选择纯代理运行时 |
+| `--proxy-http-port=N` | 覆盖 HTTP 监听端口 |
+| `--proxy-socks-port=N` | 覆盖 SOCKS 监听端口 |
+
+完整说明见 [CLI_REFERENCE_CN.md](../reference/CLI_REFERENCE_CN.md) 和 [CONFIGURATION_CN.md](../reference/CONFIGURATION_CN.md)。
+
+## 相关文档
+
+- [路由与 DNS](ROUTING_AND_DNS_CN.md) — 归一化路由策略与 DNS 行为
+- [平台集成](PLATFORMS_CN.md) — 桌面端、Android 与 iOS 边界
+- [PROXY_ONLY_MODE_PLAN.md](../archive/plans/PROXY_ONLY_MODE_PLAN.md) — 实现与测试计划
+- [PROXY_MODE_TEST_PLAN.md](../archive/plans/PROXY_MODE_TEST_PLAN.md) — 测试矩阵
+- [TESTING.md](../development/TESTING.md) — 单元测试与覆盖率

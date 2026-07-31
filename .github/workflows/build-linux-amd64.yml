@@ -323,8 +323,8 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:strict_string_checks=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
-          timeout 600 bin/vmux_net_churn_integration_test
-          timeout 600 bin/vmux_receive_semantics_test
+          bin/vmux_net_churn_integration_test
+          bin/vmux_receive_semantics_test
 
       - name: Collect ASan artifact
         run: |

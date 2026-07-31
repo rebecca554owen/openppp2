@@ -96,7 +96,6 @@ builds/cmake-check/
 AGENTS.md
 CLAUDE.md
 .claude/
-.gitnexus/
 .gitnexusignore
 dist/
 stash-backups/
@@ -147,6 +146,6 @@ docs/superpowers/
 
 # Python tooling caches
 __pycache__/
-
-# VMUX reliability verification build artifact
-ppp-vmux-ver1
+work/
+work/
+.gitnexus/

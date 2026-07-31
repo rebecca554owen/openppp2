@@ -1,201 +1,644 @@
-# Routing and DNS
+# Routing And DNS
 
-> **Status:** Current
-> **Type:** Guide
-> **Last verified:** Human-readable routing rules, DNS, and UDP routing, 2026-07-24
-> **Parent index:** [Task Guides](README.md) · **Chinese:** [路由与 DNS](ROUTING_AND_DNS_CN.md)
+> **Purpose:** Describe the current behavior, configuration, or implementation boundary for this topic.
+> **Audience:** OPENPPP2 users, operators, and developers.
+> **Status:** Current.
+> **Last verified against:** Current repository structure, implementation paths, and main verification record, 2026-07-18.
+> **Parent index:** [Back to index](README.md) · **Chinese:** [路由与 DNS](ROUTING_AND_DNS_CN.md)
+
+> Status: Active
+> Type: Reference
+> Last verified: c993753
+
+[中文版本](ROUTING_AND_DNS_CN.md)
 
 ## Scope
 
-Normal client mode builds a route/DNS plan from CLI inputs, parsed configuration, negotiated session state, and host-network facts. This is host integration, not a firewall or leak-prevention guarantee: route/DNS changes can fail or differ by platform and privilege.
+This document explains the real routing and DNS steering model used by OPENPPP2.
+In the code, these are not separate concerns. They form one traffic-classification system on the client,
+with continued DNS handling on the server.
 
-`--mode=proxy` follows a different path and skips normal TUN route, bypass-list, DNS-rule, and geo-rule setup. See [Proxy-only mode](PROXY_MODE.md).
+Main anchors:
 
-## Select an input surface
+- `ppp/app/client/VEthernetNetworkSwitcher.*`
+- `ppp/app/client/route/RouteState.*`
+- `ppp/app/client/route/RouteCoordinator.*`
+- `ppp/app/client/route/RoutePlanInput.h`
+- `ppp/app/client/dns/DnsController.*`
+- `ppp/app/client/dns/Rule.*`
+- `ppp/app/server/VirtualEthernetExchanger.*`
+- `ppp/app/server/VirtualEthernetDatagramPort.*`
+- `ppp/app/server/VirtualEthernetNamespaceCache.*`
 
-| Need | Supported surface | Notes |
-|---|---|---|
-| Load human-readable routing policy | `routing.rules` | Path to the rules file described below. |
-| Load a local bypass list | `--bypass=<path>` | The default CLI path is `./ip.txt`. |
-| Load a local DNS rule file | `--dns-rules=<path>` | The default CLI path is `./dns-rules.txt`; startup checks a local file. |
-| Set a DNS address at launch | `--dns=<address>` | Use the CLI reference for accepted forms. |
-| Define route-list inputs in configuration | `client.routes` | Each usable route source has `ngw` and `path`; Linux also accepts `nic`. |
-| Refresh a route list remotely | `client.routes[].vbgp` | `vbgp` is the per-route remote URL; it is not a top-level `vbgp.url` field. |
-| Enable the VIRR path | `--virr=...` | This is the built-in country-list workflow, not an arbitrary URL setting. |
-| Enable vBGP refresh behavior | `--vbgp=yes|no` | Refresh timing is configured through `vbgp.update-interval`. |
+---
 
-Do not use JSON keys such as `client.bypass`, `client.dns-rules`, `virr.url`, or `vbgp.url`: they are not the current parsed interface.
+## Architecture Overview
 
-## Human-readable routing rules
+```mermaid
+flowchart TD
+    A[Client application traffic] --> B[VEthernetNetworkSwitcher]
+    B --> C{Native traffic classification}
+    C -->|bypass list match| D[Local/native next hop]
+    C -->|no bypass match| E[Tunnel or local proxy path]
 
-`routing.rules` is the path to a local rules file; it is not inline rule text. An empty value (the default, after trimming) does not create a human-rule policy and preserves the legacy routing inputs. A non-empty file coexists with `--bypass`, `--dns-rules`, `client.routes`, and platform-provided legacy lists. Failure to open, parse, or compile the configured rules file fails client initialization instead of silently ignoring it.
+    F[DNS query] --> G{DNS rule match}
+    G -->|rule: use resolver X| H[Route to resolver X]
+    G -->|no rule| I[Default resolver]
+    H --> J{Resolver reachable?}
+    J -->|yes| K[Query resolver X]
+    J -->|no| L[Fallback to default]
 
-Minimal JSON configuration:
+    E --> M[Server VirtualEthernetExchanger]
+    M --> N{DNS redirect?}
+    N -->|yes| O[VirtualEthernetNamespaceCache]
+    N -->|no| P[Forward UDP to real destination]
+    O --> Q{cache hit?}
+    Q -->|yes| R[Return cached result]
+    Q -->|no| S[Forward to upstream resolver]
+```
+
+---
+
+## Core Idea
+
+The client decides what uses the local/native path, what goes to the tunnel or local proxy, and which DNS servers must remain reachable.
+
+The server continues the DNS path by:
+- answering from cache (fast path)
+- redirecting to a configured upstream resolver
+- forwarding normally when no special rule applies
+
+### Canonical client routing policy
+
+The normalized configuration surface is `client.routing`:
 
 ```json
 {
-  "routing": {
-    "rules": "./routing.rules",
-    "tcp-domain-sniff": true
-  },
-  "dns": {
-    "fake-ip": {
-      "enabled": true
+  "client": {
+    "proxy-only": false,
+    "routing": {
+      "ip": {
+        "bypass": [
+          "10.0.0.0/8",
+          "file://./rules/custom-bypass.txt"
+        ],
+        "routes": [],
+        "peer-routes": []
+      },
+      "dns": {
+        "rules": [
+          "example.com /cloudflare/tun",
+          "file://./rules/custom-dns.txt"
+        ]
+      }
     }
   }
 }
 ```
 
-Compact `routing.rules` example:
+`AppConfiguration::Loaded()` applies the following precedence:
 
-```text
-default auto
-dns direct doh.pub
-dns proxy cloudflare
+1. When `client.routing` is a JSON object, its IP/DNS policy sources are authoritative.
+2. Nested `routing.ip.*` and `routing.dns.rules` values take precedence over the direct aliases `routing.bypass`, `routing.routes`, `routing.peer-routes`, and `routing.dns-rules`.
+3. The independent top-level `client.proxy-only` flag is read regardless of whether `client.routing` is present; legacy `client.routes`, `client.peer-routes`, and legacy DNS/CLI sources are fallback inputs only when the canonical object is absent.
+4. Canonical ordinary routes and peer-prefix routes are mirrored to legacy route fields while older platform consumers migrate. An old nested mode key is ignored and is never emitted by serialization.
 
-[direct]
-lan
-192.0.2.7
-198.51.100.0/24
-example.com
-=login.example.com
-*.internal.example.com
-regexp:^api[0-9]+\.example\.com$
+`client.proxy-only` and the top-level `--mode=client`/`--mode=proxy` select runtime mode. `client.routing` carries only four native IP/DNS inputs; source strings are trimmed and empty entries are removed. `file://` is case-insensitive; an existing path is read as a file, while an unresolvable source remains inline text. An old nested mode value does not select or override runtime mode.
 
-[proxy]
-203.0.113.0/24
-example.net
+The canonical client policy has separate IP and DNS layers:
+
+- `routing.ip.bypass` supplies destination prefixes that remain on the physical path or use the configured local/native next hop.
+- `routing.ip.routes` supplies ordinary route-file/vBGP sources consumed by native route loading.
+- `routing.ip.peer-routes` supplies `network/prefix/via` routes for peer-prefix gateway forwarding; it is not another bypass list.
+- `routing.dns.rules` supplies domain-to-resolver rules. They are loaded into the native DNS policy in both `tun` and `proxy-only` modes; proxy-only does not project host-system DNS takeover or DNS reachability routes.
+
+### Runtime decision order
+
+```mermaid
+flowchart LR
+    A[JSON and CLI inputs] --> B[AppConfiguration::Loaded]
+    B --> C[Load native bypass, ordinary/peer routes, and DNS rules]
+    C --> D[Build native RIB/FIB and DNS policy]
+    D --> E{--mode=proxy or client.proxy-only?}
+    E -->|no| F[Create TUN/TAP runtime]
+    F --> G[Project capture and platform reachability routes]
+    E -->|yes| H[TapStub or minimal mobile VPN]
+    H --> I[Local HTTP/SOCKS proxy; no host-system route/DNS takeover]
 ```
 
-### Syntax
+Both modes load and use the native bypass, ordinary routes, peer-prefix routes, and DNS rules. These inputs feed native route lookup and DNS policy; the local proxy path also uses the native classification. TUN mode additionally projects the policy into host routing and DNS handling: IP classification chooses the path, route entries keep the tunnel/server/resolvers reachable, and DNS rules choose resolver semantics. In proxy-only mode, the runtime deliberately does not take over system routes or system DNS. Desktop uses `TapStub`; Android keeps only the VPN interface subnet route; iOS keeps only the tunnel subnet route. The absence of those platform-level routes or DNS settings does not disable the loaded native policy. See [Platform Integration](PLATFORMS.md) for the platform boundary.
 
-- `default auto|direct|proxy` is the fallback for a valid IPv4 destination that matches no human CIDR. `auto`, also the implicit default, hands IPv4 selection back to legacy behavior.
-- `dns direct|proxy <provider>` selects one built-in DNS provider for each of the `direct` and `proxy` domain actions. Each action may have at most one provider.
-- `[direct]` and `[proxy]` select the action for following rule lines until the next section. A rule outside a section is invalid.
-- `lan` expands to `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, and `192.168.0.0/16`.
-- `geo:cc` uses a two-letter country code and compiles both GeoIP and GeoSite sources for that code.
-- A bare IPv4 address is `/32`; IPv4 CIDR prefixes are `0..32` and are canonicalized to their network address.
-- `example.com` is a suffix rule matching the apex and subdomains. `=example.com` is exact. `*.example.com` matches subdomains but not the apex.
-- `regexp:<pattern>` is a case-insensitive ECMAScript regular expression evaluated with search semantics, not an implicit full-string match.
+---
 
-`default` and `dns` are global directives: they are accepted inside or outside a section and do not change the current section. Each section rule is one whitespace-delimited token, so a regexp cannot contain literal whitespace. Directives, sections, country codes, and non-regexp domains are case-insensitive. A normalized non-regexp domain is at most 253 characters, has labels of 1–63 characters using letters, digits, and `-` without leading/trailing `-`, may have one trailing dot, and receives no IDNA conversion. Leading/trailing whitespace is ignored. `#` starts a comment only at the start of a line or when preceded by whitespace.
+## Client-Side Ownership
 
-Duplicate equivalent rules are deduplicated. Conflicting duplicate actions/providers, malformed lines, invalid domains/CIDRs/regexps, or unknown providers reject the entire file; rules are not partially accepted.
+`VEthernetNetworkSwitcher` composes route and DNS services but does not own their domain state. `route::RouteState` owns route data, and `dns::DnsController` owns query/session lifetime.
 
-### Matching priority
+Before an operation, the Switcher copies TAP facts, interface snapshots, configuration flags, bypass entries, DNS
+reachability, and fake-IP routing into a `RoutePlanInput`. Route managers and platform adapters receive that value
+as `const` input and do not retain a Switcher pointer. The default-route protection worker captures only its plan
+and an independently owned cancellation state.
 
-Matching is not global “first line wins”:
+### Route Information Base
 
-- Domain rules prefer every explicit file rule over every GeoSite-derived rule. Within either origin, priority is exact, then regexp, then the longest matching suffix/subdomain; at equal domain length a strict subdomain rule wins over a suffix rule. Declaration order resolves only otherwise-equal matches.
-- IPv4 rules first search explicit rules, using longest-prefix match within them. GeoIP-derived rules are searched only if no explicit IPv4 rule matches, again by longest prefix. Equal-prefix ties retain the first compiled rule.
-- For a valid IPv4 destination with no CIDR match, `default` applies; `default auto` returns IPv4 TCP/UDP selection to legacy behavior. An unmatched DNS domain instead continues through the legacy/unmatched DNS path. Human domain matches take precedence over legacy DNS rules.
+| Field | Description |
+|-------|-------------|
+| `RouteState::rib` | Route information base — all known routes |
+| `RouteState::fib` | Forwarding information base — active lookup table |
+| `ribs_` | Loaded IP-list sources (files, URLs) |
+| `vbgp_` | Remote route sources (vBGP) |
 
-Human IPv4 routes are merged with legacy route inputs. A human route normally overlays the same legacy network/prefix, but an existing legacy `/32` is conservatively protected from replacement by human, DNS, or fake-IP `/32` routes.
+### DNS State
 
-### TCP domain sniffing
+| Field / object | Description |
+|----------------|-------------|
+| `DnsController` | Query context, session generation, and close ordering |
+| `DnsInterceptor` | Controller-owned DNS policy, resolver, rules, and fake-ip pool |
+| `RouteState::dns_servers` | Native snapshots for DNS reachability; host/tunnel route projection is mode- and platform-dependent |
 
-`routing.tcp-domain-sniff` defaults to `false`; set it to `true` as in the JSON example above to enable it. The effective TCP routing priority is: an existing fake-IP action, then a sniffed explicit domain rule, then the real destination's IPv4 rule, then `default`. Sniffing is attempted only for a real (non-fake) IPv4 TCP destination when the switch is enabled and the loaded human policy contains domain rules.
+Packet dispatch calls `DnsController::HandleQuery()` with an immutable session snapshot. The controller delegates policy to `DnsInterceptor`; tunnel fallback uses `IDnsTunnelTransport` rather than a concrete exchanger. See [DNS_MODULE_DESIGN.md](../architecture/DNS_MODULE_DESIGN.md).
 
-The client non-destructively inspects the beginning of the current flow for a TLS SNI or HTTP Host. An explicit domain match may replace the IP/default decision for this flow only. It does not generate or install a domain-derived `/32` route. ECH, TLS without SNI, non-HTTP/TLS traffic, timeout, malformed input, and any other unsupported or unmatched result all preserve the IP/default fallback. With sniffing off, TCP uses only fake-IP state or the destination IP/`default`. UDP and QUIC always use destination IP/`default`; they never use domain sniffing.
+`DnsController` is the only production entry point for rule loading, negotiated session information, fake-IP
+rewrite, fake-IP route projection, and resolver reachability. The Switcher no longer stores a second interceptor.
 
-For `Direct` on supported non-iOS platforms, the client applies per-socket binding/protection to the underlying connection socket before connecting. `ForceDirect` is fail closed: if the required protector is missing or binding/protection fails, the flow is rejected rather than sent through the tunnel. iOS rejects `Direct`. `Auto` keeps legacy-compatible selection and bypass behavior.
+### Transaction and teardown
 
-## DNS providers and fake IP
+`RouteCoordinator` captures platform defaults, removes conflicting defaults, applies `RouteSpec` values, and records successful operations. Partial failure deletes applied routes in reverse order and restores the platform-private snapshot. `Stop()` is idempotent.
 
-The provider in a `dns` directive must be a short name in the built-in catalog. The current names are `doh.pub`, `alidns`, `baidu`, `360`, `114`, `tuna`, `cloudflare`, `google`, `quad9`, `adguard`, `nextdns`, and `mullvad`. Unknown names fail rules-file parsing.
+Teardown closes `DnsController` first, disposes the exchanger second, and rolls back routes last. This prevents late DNS callbacks from using a dead transport while preserving DNS route snapshots until removal.
 
-For a human domain match, `direct` uses its `dns direct` provider, or falls back to `dns.servers.domestic` if the directive is absent; `proxy` similarly uses `dns proxy` or `dns.servers.foreign`. Resolution does not switch to another provider: most providers try DoH, DoT, TCP, then UDP, while `baidu` and `114` omit DoT. A fallback value that is not a catalog short name produces a provider miss rather than an automatic alternative. A `direct` lookup is marked domestic, so enabled domestic ECS processing applies; `proxy` is not marked domestic.
+---
 
-Human domain rules, including GeoSite-derived rules, are valid with `dns.fake-ip.enabled=false`; startup does not reject them. In that mode a matched A query uses the domain action's configured provider (or domestic/foreign fallback) and returns the real A answer. It does not request fake allocation or create a sticky mapping, fake cache entry, or fake-IP route. `routing.tcp-domain-sniff` does not change this DNS decision.
+## Route Construction
 
-With `dns.fake-ip.enabled=true`, human domain actions apply to A queries through a synthetic IPv4 address. Fake allocation excludes empty names, reverse-ARPA names, exact `localhost`, and names ending in `.local` or `.lan`. A strict human-matched A query is fail closed: an ineligible hostname, allocation failure, or response-build failure is rejected rather than falling back to a real or legacy DNS answer.
+The client builds routes from multiple sources:
 
-The fake-IP allocation records its initial action:
+```mermaid
+flowchart TD
+    A[Virtual adapter subnet] --> F[RIB / FIB]
+    B[Bypass IP-list files] --> F
+    C[Remote IP-list URLs] --> F
+    D[Tunnel server reachability] --> F
+    E[DNS server reachability] --> F
+    G[vBGP remote routes] --> F
+    F --> H[FIB: active forwarding decisions]
+```
 
-- if a human domain rule matched, that action is sticky and a later real-IPv4 rule does not replace it;
-- if no human domain rule matched, the resolved real IPv4 rule or `default` supplies the final action;
-- an unresolved fake IP is rejected rather than routed speculatively.
+### Key Methods
 
-Intercepted unmatched A queries may also receive fake IPs; `default` itself is not the allocation trigger. `default direct|proxy` alone is not a domain match and therefore does not create a domain-sticky action.
+```cpp
+/**
+ * @brief Add all routes from all configured sources.
+ * @param y  Yield context for async IP-list loading.
+ * @return   true if all routes were applied successfully.
+ */
+bool AddAllRoute(YieldContext& y) noexcept;
 
-## GeoIP and GeoSite data
+/**
+ * @brief Load and add routes from an IP-list source.
+ * @param path_or_url  File path or HTTP/HTTPS URL of IP-list.
+ * @return             Number of routes added.
+ */
+int AddLoadIPList(const ppp::string& path_or_url) noexcept;
 
-`geo:cc` reads GeoIP sources from `geo-rules.geoip-dat` plus optional `geo-rules.geoip` text paths, and GeoSite sources from `geo-rules.geosite-dat` plus optional `geo-rules.geosite` text paths. Each used country requires configured sources in both categories. `geo-rules.enabled` does not gate this human-rule compilation, and `geo-rules.country` is not the selector; the `cc` in each rule is.
+/**
+ * @brief Load IP-list from multiple file paths.
+ * @param paths  Vector of file paths.
+ * @return       Total routes loaded.
+ */
+int LoadAllIPListWithFilePaths(const ppp::vector<ppp::string>& paths) noexcept;
 
-The binary paths default to `GeoIP.dat` and `GeoSite.dat`; only non-empty JSON values replace those defaults. Adding text paths does not disable binary sources: every non-empty configured source is read, and a missing or unreadable source fails initialization.
+/**
+ * @brief Add a reachability route for a remote endpoint.
+ * @param endpoint  The remote endpoint (server or DNS server).
+ * @return          true if route was added.
+ */
+bool AddRemoteEndPointToIPList(const IPEndPoint& endpoint) noexcept;
 
-The binary readers accept v2ray/Xray/MetaCubeX protobuf `.dat` files and select their country/category by `cc`. GeoIP IPv4 CIDRs become routing rules; binary IPv6 CIDRs are parsed but skipped by the IPv4-only compiler. GeoSite `Domain`, `Full`, and `Regex` entries become suffix, exact, and regexp rules respectively; `Plain` entries are skipped. Malformed/truncated protobuf wire data or a missing selector is fatal. Individual unusable binary CIDRs and GeoSite entries with unknown type or empty value are skipped; a selected binary Domain/Full that violates the human-domain grammar or an unbuildable Regex is fatal.
+/**
+ * @brief Add a route entry to the OS routing table.
+ * @param network    Network address.
+ * @param mask       Subnet mask.
+ * @param gateway    Gateway address.
+ * @return           true on success.
+ */
+bool AddRoute(UInt32 network, UInt32 mask, UInt32 gateway) noexcept;
 
-Text GeoIP files accept IPv4/IPv6 addresses or CIDRs, optionally prefixed with `geoip:`; IPv6 entries are skipped. Text GeoSite files accept `domain:`/`suffix:`, `full:`, `regexp:`/`regex:`, and `plain:` (plain entries are skipped); an unprefixed entry is a suffix. Text sources have no country categories, so their entries are applied for every `geo:cc` declaration. Malformed text entries and text domain/regexp compile failures are skipped and counted, but file access or stream failures are fatal.
+/**
+ * @brief Protect the default route from being overwritten by the tunnel.
+ * @return true if default route was successfully protected.
+ */
+bool ProtectDefaultRoute() noexcept;
+```
 
-## IPv4, IPv6, and AAAA limits
+Source: `ppp/app/client/VEthernetNetworkSwitcher.h`
 
-Human routing currently supports IPv4 rules only. IPv6 literals/CIDRs are invalid in the human rules file, GeoIP IPv6 entries are skipped, and human IPv4 rules plus `default` are not applied to an IPv6 destination.
+---
 
-Fake IP is A-only. When a human domain `direct` or `proxy` rule matches an AAAA query, the client synthesizes a NOERROR response with no AAAA answers; unmatched domains continue to follow the resolver's existing IPv6-response policy. A human `default` alone does not count as a domain match and does not trigger this AAAA behavior.
+## DNS Rules
 
-## UDP action matrix
+Client DNS rules decide which resolver to use for a domain or domain pattern. The full intercepted pipeline is documented in [DNS_MODULE_DESIGN.md](../architecture/DNS_MODULE_DESIGN.md).
 
-| Human action | Android IPv4 | Non-Android or IPv6 |
-|---|---|---|
-| `Direct` | Protected physical UDP socket | Reject (fail closed) |
-| `Proxy` | Tunnel | Tunnel |
-| `Auto` | Physical socket only when legacy bypass matches; otherwise tunnel | Tunnel |
+### Rule Matching
 
-Android client initialization fails if the required protector cannot be created. For a direct data-UDP port, a missing protector at open time or a failed `Protect()` call disposes the port before queued-message flush or receive-loop startup; it never falls back to the tunnel. Android IPv6 does not use the physical direct path.
+```mermaid
+flowchart TD
+    A[DNS query enters native DNS policy] --> B[vdns cache]
+    B -->|miss| C[DnsRedirectPlan::Decide]
+    C --> D{rule / gateway / unmatched}
+    D -->|provider| E[DnsResolver DoH/DoT/TCP/UDP]
+    D -->|legacy IP| F[DnsUdpRelay]
+    D -->|unmatched + intercept| E
+    D -->|fake-ip A query| G[FakeIpPool instant fake A]
+    G --> H[background real resolve]
+    E --> I[DnsResponseHandler returns response]
+    F --> I
+    I -->|fail| J[Configured fallback transport]
+```
 
-This matrix is specific to client data UDP. Android `DnsUdpRelay` instead warns and continues when its protector pointer is absent; an explicit `Protect()` failure enters that relay's fallback/error path.
+### DNS Rule Format
 
-## Minimal route-source example
+```json
+"dns-rules": [
+  "rules://path/to/dns-rules.txt"
+]
+```
 
-The configuration form names a gateway (`ngw`) and a local route-list path. Use documentation-only addresses and paths until you have validated the host topology.
+The rules file format uses domain suffix / wildcard entries, each mapped to a resolver address.
+
+Source: `ppp/app/client/dns/Rule.h`
+
+---
+
+## DNS Server Route Assignment
+
+DNS servers are reachability-sensitive endpoints in the native DNS policy. Resolver selection remains active in both modes; host-platform reachability is a separate projection.
+
+In TUN mode, platform route coordination may add a direct route to a configured DNS server via the physical NIC rather than through the tunnel. This keeps that resolver reachable when the default route is redirected. In proxy-only mode, DNS rules remain active for native handling, but the runtime does not install host-system DNS takeover or host/tunnel DNS reachability routes. Mobile system builders may retain only their minimum interface/tunnel subnet route, and add DNS exception routes only when such inputs are present.
+
+```cpp
+/**
+ * @brief Add routes to make DNS servers reachable directly.
+ * @return true if all DNS server routes were added.
+ */
+bool AddRouteWithDnsServers() noexcept;
+
+/**
+ * @brief Remove DNS server reachability routes.
+ * @return true if routes were removed.
+ */
+bool DeleteRouteWithDnsServers() noexcept;
+```
+
+These methods describe the platform reachability projection; they do not imply an unconditional host-OS route operation in proxy-only mode.
+
+---
+
+## Server-Side DNS Path
+
+On the server side, DNS handling flows through:
+
+```mermaid
+sequenceDiagram
+    participant Client as Client
+    participant Exchanger as VirtualEthernetExchanger
+    participant Cache as VirtualEthernetNamespaceCache
+    participant Upstream as Upstream DNS
+
+    Client->>Exchanger: UDP packet to port 53
+    Exchanger->>Exchanger: RedirectDnsQuery()
+    Exchanger->>Cache: NamespaceQuery(hostname)
+    alt cache hit
+        Cache-->>Exchanger: cached IP address
+        Exchanger-->>Client: DNS response (synthesized)
+    else cache miss
+        Cache->>Upstream: Forward DNS query
+        Upstream-->>Cache: DNS response
+        Cache->>Cache: Store result with TTL
+        Cache-->>Exchanger: IP address
+        Exchanger-->>Client: DNS response
+    end
+```
+
+### Server DNS API
+
+```cpp
+/**
+ * @brief Redirect a DNS query through the namespace cache.
+ * @param y          Yield context.
+ * @param src        Source endpoint (client).
+ * @param dns_data   Raw DNS query packet.
+ * @param length     Length of DNS packet.
+ * @return           true if query was handled.
+ */
+bool RedirectDnsQuery(YieldContext& y,
+                      const IPEndPoint& src,
+                      const Byte* dns_data,
+                      int length) noexcept;
+```
+
+Source: `ppp/app/server/VirtualEthernetExchanger.h`
+
+### Namespace Cache
+
+`VirtualEthernetNamespaceCache` maintains a TTL-based DNS cache:
+
+```cpp
+/**
+ * @brief Query the namespace cache for a hostname.
+ * @param y         Yield context.
+ * @param hostname  The hostname to resolve.
+ * @return          Resolved IP address, or IPEndPoint::None on failure.
+ */
+IPEndPoint Query(YieldContext& y, const ppp::string& hostname) noexcept;
+
+/**
+ * @brief Insert a resolved entry into the cache.
+ * @param hostname  The resolved hostname.
+ * @param address   The IP address result.
+ * @param ttl       Time-to-live in seconds.
+ */
+void Insert(const ppp::string& hostname, const IPEndPoint& address, int ttl) noexcept;
+```
+
+Source: `ppp/app/server/VirtualEthernetNamespaceCache.h`
+
+---
+
+## Path Model
+
+```mermaid
+flowchart TD
+    A[Local packet or query] --> B[Classify with native policy]
+    B --> C{bypass?}
+    C -->|yes| D[Select local/native next hop]
+    C -->|no| E{mode}
+    E -->|tun| F[Send into tunnel]
+    E -->|proxy-only| G[Send through local HTTP/SOCKS proxy]
+    F --> H[Route / DNS steering at server]
+    H --> I{DNS redirect rule?}
+    I -->|yes| J[VirtualEthernetNamespaceCache]
+    I -->|no| K[Forward to real destination]
+    J --> L[Return cached or upstream result]
+    K --> M[Destination responds]
+    L --> N[Return path to client]
+    M --> N
+```
+
+The local/native branch is a policy decision, not a promise that host-NIC routes are installed. In TUN mode, platform projection can send it through the physical NIC; in proxy-only mode, native lookup and the local proxy path consume the same classification without host-system route or DNS takeover. Non-bypass traffic uses the tunnel only in TUN mode and the local proxy in proxy-only mode.
+
+---
+
+## IP-List Sources
+
+OPENPPP2 supports loading IP bypass lists from multiple sources:
+
+| Source type | Example | Description |
+|-------------|---------|-------------|
+| Local file | `/etc/openppp2/bypass.txt` | Plain text file, one CIDR per line |
+| HTTP URL | `http://example.com/bypass.txt` | Fetched on startup |
+| HTTPS URL | `https://cdn.example.com/bypass.txt` | TLS-fetched on startup |
+| VIRR refresh | Configured `virr.update-interval` | Periodic automatic refresh |
+
+### VIRR Configuration
+
+```json
+"virr": {
+    "update-interval": 86400,
+    "url": "https://example.com/bypass-list.txt"
+}
+```
+
+When the bypass list is refreshed, the native RIB/FIB is updated accordingly; any host-platform route projection is mode-dependent and is not implied in proxy-only mode.
+
+---
+
+## vBGP Remote Routes
+
+The vBGP subsystem allows loading route information from a remote BGP-style source:
+
+```json
+"vbgp": {
+    "update-interval": 3600,
+    "url": "https://example.com/bgp-routes.txt"
+}
+```
+
+Routes from vBGP are merged into the client RIB.
+
+---
+
+## Operational Meaning
+
+Routing and DNS are not separate knobs. They form a unified traffic classification policy:
+
+| Concern | How it connects |
+|---------|----------------|
+| Bypass list | Selects destinations for the local/native path instead of the tunnel or proxy path |
+| DNS rules | Determines which resolver is used per domain in the native policy in both modes |
+| Resolver reachability | Native reachability state supports resolver selection; TUN may project direct routes, while proxy-only does not imply host routes |
+| Server DNS cache | Reduces repeated upstream DNS lookups |
+| IPv6 transit | Can alter what "reachable" means for IPv6 destinations |
+| Static echo | Can provide a separate path that bypasses DNS decisions |
+
+---
+
+## Configuration Reference
+
+| Config key | Default | Description |
+|------------|---------|-------------|
+| `--mode=client` / `--mode=proxy` | `client` | Top-level runtime mode; `--mode=proxy` selects proxy-only host integration |
+| `client.proxy-only` | `false` | Independent top-level runtime flag; suppresses host route/DNS takeover without disabling native policy |
+| `client.routing.ip.bypass` | `[]` | Inline IP prefixes or `file://` sources for the native bypass policy; TUN may project them to the physical path, while proxy-only keeps the decision native |
+| `client.routing.ip.routes` | `[]` | Ordinary route-file or vBGP sources loaded into native route policy; platform projection depends on runtime mode |
+| `client.routing.ip.peer-routes` | `[]` | Native peer-prefix gateway routes with `network`, `prefix`, and `via` |
+| `client.routing.dns.rules` | `[]` | Inline DNS rules or `file://` sources loaded into native DNS policy in both modes; TUN may project resolver reachability, while proxy-only does not take over host DNS |
+| `client.routes`, `client.peer-routes` | — | Legacy route compatibility fields used only when `client.routing` is absent; `--bypass` and `--dns-rules` remain launch-local sources. An old nested mode key is ignored and not serialized |
+| `geo-rules.enabled` | `false` | Generate extra bypass and DNS-rule files from local text GeoIP/GeoSite inputs |
+| `geo-rules.geoip-dat` | `GeoIP.dat` | Local cache path for GeoIP dat; downloaded and parsed for the configured country |
+| `geo-rules.geosite-dat` | `GeoSite.dat` | Local cache path for GeoSite dat; downloaded and parsed for the configured country |
+| `geo-rules.geoip-download-url` | `""` | Optional HTTP/HTTPS URL used to download/update `geoip-dat` |
+| `geo-rules.geosite-download-url` | `""` | Optional HTTP/HTTPS URL used to download/update `geosite-dat` |
+| `geo-rules.geoip` | `[]` | Local text CIDR source file path or array of paths |
+| `geo-rules.geosite` | `[]` | Local text domain source file path or array of paths |
+| `geo-rules.append-bypass` | `[]` | Extra inline CIDRs or local CIDR files appended after generated GeoIP CIDRs |
+| `geo-rules.append-dns-rules` | `[]` | Extra inline DNS rules/domains or `rules://` local files appended after generated GeoSite rules |
+| `virr.update-interval` | `86400` | Bypass list refresh interval (seconds) |
+| `virr.url` | `""` | Bypass list URL for periodic refresh |
+| `vbgp.update-interval` | `3600` | vBGP route refresh interval (seconds) |
+| `vbgp.url` | `""` | vBGP route source URL |
+| `udp.dns.cache` | `true` | Enables DNS cache writes; `false` or `udp.dns.ttl=0` disables writes and server namespace cache creation |
+| `udp.dns.ttl` | `60` | Maximum DNS cache TTL in seconds; positive response TTLs are honored and capped by this value |
+| `dns.servers.domestic` | `doh.pub` | Default domestic provider or structured DNS server spec |
+| `dns.servers.foreign` | `cloudflare` | Default foreign provider or structured DNS server spec |
+| `dns.intercept-unmatched` | `true` | Intercept unmatched DNS queries and resolve through `foreign -> domestic -> cloudflare` |
+| `dns.fake-ip.enabled` | `false` | Clash-style fake-ip (instant fake A, background real resolve) |
+| `dns.fake-ip.range` | `198.18.0.1/16` | Fake-ip pool CIDR |
+
+---
+
+## Error Code Reference
+
+Routing and DNS `ppp::diagnostics::ErrorCode` values (from `ppp/diagnostics/ErrorCodes.def`):
+
+| ErrorCode | Description |
+|-----------|-------------|
+| `RouteAddFailed` | Failed to add a route to the OS routing table |
+| `RouteDeleteFailed` | Failed to remove a route |
+| `RouteReplaceFailed` | Failed to replace an existing route |
+| `ConfigDnsRuleLoadFailed` | Failed to load DNS rules from configured source |
+| `ConfigRouteLoadFailed` | Failed to load route list from configured source |
+| `DnsResolveFailed` | DNS resolution failed |
+| `DnsAddressInvalid` | DNS address is invalid |
+
+---
+
+## Usage Examples
+
+### Configuring the canonical split-tunnel policy
 
 ```json
 {
   "client": {
-    "routes": [
-      {
-        "ngw": "192.0.2.1",
-        "path": "./routes.txt"
+    "routing": {
+      "ip": {
+        "bypass": [
+          "file:///etc/openppp2/china-cidr.txt",
+          "10.0.0.0/8"
+        ],
+        "routes": [],
+        "peer-routes": []
+      },
+      "dns": {
+        "rules": [
+          "file:///etc/openppp2/dns-rules.txt"
+        ]
       }
-    ]
+    }
   }
 }
 ```
 
-For a regular client launch that supplies local list files explicitly:
+Use `routing.ip.bypass` for prefixes that select the local/native path, `routing.ip.routes` for ordinary route sources, and `routing.ip.peer-routes` for peer-prefix gateway routes. These native inputs are shared by TUN and proxy-only modes; only their host-platform projection differs. The old client fields and CLI sources remain compatibility inputs when `client.routing` is absent.
 
-```bash
-./ppp --mode=client --config=./client.json \
-  --bypass=./bypass.txt \
-  --dns-rules=./dns-rules.txt
+DNS rules file format example:
+
+```
+# Provider rules (preferred)
+example.cn /doh.pub/nic
+google.com /cloudflare/tun
+
+# Legacy IP rules remain supported
+legacy-cn.example /1.2.4.8/nic
+legacy-foreign.example /1.1.1.1/tun
 ```
 
-The command selects sources; it does not prove that every route or resolver change succeeded. Inspect the host routing/DNS state and runtime diagnostics after startup.
+For provider rules, the third segment selects resolver semantics: `/nic` means domestic and ECS-eligible; `/tun`, `/vpn`, `/cf`, and `/c` mean foreign and no ECS. For legacy IP rules, the same segment remains a native path hint: `/nic` selects local/native handling, while `/tun` selects tunnel handling when a TUN path exists. Proxy-only still loads the rule into native policy but does not install host-system tunnel routes.
 
-## DNS settings that are parsed
+### Generating GeoIP / GeoSite split rules
 
-The current parser includes these groups:
+`geo-rules` is optional and disabled by default. When enabled, OPENPPP2 downloads/parses configured GeoIP/GeoSite dat files, reads local text inputs, writes generated bypass and DNS-rule files, and connects them to the existing route/DNS loading paths. Generated output is loaded before explicit canonical `client.routing.ip.bypass` and `client.routing.dns.rules` sources; `--bypass` and `--dns-rules` remain supported launch-local inputs. The generator runs in desktop startup and in the Android native startup path in both `tun` and `proxy-only` modes. The iOS bridge currently does not invoke `GeoRuleGenerator`, but it still loads canonical bypass and DNS policy. Proxy-only does not skip generator execution on desktop/Android or native policy loading; it skips only host-system route/DNS projection.
 
-- `udp.dns.timeout`, `udp.dns.ttl`, `udp.dns.turbo`, `udp.dns.cache`, and `udp.dns.redirect`;
-- `dns.servers.domestic` and `dns.servers.foreign` (provider/server entries);
-- `dns.intercept-unmatched`;
-- `dns.ecs.enabled` and `dns.ecs.override-ip`;
-- `dns.tls.verify-peer`, `dns.stun.candidates`, and `dns.fake-ip.{enabled,range}`.
+```json
+{
+  "geo-rules": {
+    "enabled": true,
+    "country": "cn",
+    "geoip-dat": "/var/lib/openppp2/GeoIP.dat",
+    "geosite-dat": "/var/lib/openppp2/GeoSite.dat",
+    "geoip-download-url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
+    "geosite-download-url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
+    "geoip": [
+      "/etc/openppp2/geoip-cn.txt"
+    ],
+    "geosite": [
+      "/etc/openppp2/geosite-cn.txt"
+    ],
+    "dns-provider-domestic": "doh.pub",
+    "dns-provider-foreign": "cloudflare",
+    "output-bypass": "/var/lib/openppp2/generated/bypass-cn.txt",
+    "output-dns-rules": "/var/lib/openppp2/generated/dns-rules-cn.txt",
+    "append-bypass": [
+      "10.0.0.0/8",
+      "/etc/openppp2/custom-bypass.txt"
+    ],
+    "append-dns-rules": [
+      "example.cn /doh.pub/nic",
+      "internal.example.cn",
+      "rules:///etc/openppp2/custom-dns-rules.txt"
+    ]
+  },
+  "dns": {
+    "servers": {
+      "domestic": "doh.pub",
+      "foreign": "cloudflare"
+    }
+  }
+}
+```
 
-These settings feed DNS policy and reachability planning. They do not mean every resolver is always reachable over one fixed physical interface, nor do they replace a host firewall policy.
+Supported input formats are intentionally simple:
 
-## Operational sequence
+```text
+# geoip-cn.txt: one CIDR per line
+1.0.1.0/24
+1.0.2.0/23
+2408:8000::/20
+```
 
-1. Start a normal client, not proxy mode, with an explicit configuration path.
-2. Keep bypass/DNS-rule files local and review their ownership and contents before startup.
-3. Ensure the VPN server/control endpoint remains reachable outside the routes being changed.
-4. Check the resulting host routes, resolver behavior, and `ppp` diagnostics after connection.
-5. Treat a failed route/DNS operation as a connectivity issue to resolve, not as proof of fail-closed behavior.
+```text
+# geosite-cn.txt: one domain or matcher per line
+baidu.com
+.qq.com
+domain:taobao.com
+suffix:jd.com
+full:example.cn
+regexp:^.*\.example\.cn$
+```
 
-## Related pages
+Important details:
 
-- [Configuration reference](../reference/CONFIGURATION.md)
-- [CLI reference](../reference/CLI_REFERENCE.md)
-- [Proxy-only mode](PROXY_MODE.md)
-- [Operations and troubleshooting](../operations/OPERATIONS.md)
+- `geoip-download-url` and `geosite-download-url` download dat files into `geoip-dat` and `geosite-dat` at startup.
+- Downloaded binary `geoip.dat` / `geosite.dat` files are parsed automatically for `geo-rules.country`; local text `geoip` / `geosite` inputs and append lists are merged afterwards.
+- When `geo-rules.enabled=true`, legacy `--bypass` sources are folded into generated output where the platform passes them to the generator; canonical `client.routing.ip.bypass` sources are applied explicitly after generation. When `geo-rules.enabled=false`, direct canonical bypass registration remains unchanged.
+- The parser also accepts snake_case compatibility keys (`geoip_dat`, `geosite_dat`, `geoip_download_url`, `geosite_download_url`), but kebab-case is the documented form.
+- `geoip` and `geosite` still support local text files only; use `geoip-download-url` / `geosite-download-url` for dat downloads.
+- Generated DNS rules use `/<dns-provider-domestic>/nic`; if unset, the provider falls back to `dns.servers.domestic`, then `doh.pub`.
+- `dns-provider-foreign` is parsed and reserved for future non-CN or `geolocation-!cn` generation, but is not consumed by the current generator.
+- `append-bypass` is merged after GeoIP CIDRs and can contain inline CIDRs or local CIDR files.
+- `append-dns-rules` is merged after GeoSite rules and can contain full rules, plain domains normalized with the domestic provider, or `rules://` local files.
+- Client `vdns` and server namespace cache store only positive A/AAAA/CNAME-chain responses with positive TTL; cached TTL is `min(response TTL, udp.dns.ttl)`, and `udp.dns.cache=false` or `udp.dns.ttl=0` disables writes.
+- Desktop and Android native clients run the generator in both `tun` and `proxy-only` modes; the iOS bridge currently does not invoke it but still loads canonical bypass and DNS policy. Mobile system route/DNS builders remain separate from the desktop route loader and project only platform-level state.
+
+### Checking if a bypass route is active (code)
+
+```cpp
+// ppp/app/client/VEthernetNetworkSwitcher.cpp
+bool VEthernetNetworkSwitcher::IsRoutedThroughTunnel(UInt32 dest_ip) noexcept {
+    auto it = fib_.find(dest_ip & mask_);
+    if (it != fib_.end()) {
+        return false;  // bypass hit: use configured local/native next hop
+    }
+    return true;  // no bypass: use the configured tunnel/proxy path
+}
+```
+
+---
+
+## What To Watch For In Code
+
+- Route entries are not just static tables; they are built from host, tunnel, and bypass inputs.
+- DNS servers are treated like reachability-sensitive endpoints — they get their own route entries.
+- Server-side DNS behavior depends on namespace cache and datagram port state.
+- IPv6 transit and static echo can alter what "reachable" means for specific destinations.
+- The bypass list and DNS rules are refreshed independently; both should be consistent.
+
+---
+
+## Related Documents
+
+- [`CONFIGURATION.md`](../reference/CONFIGURATION.md)
+- [`CLIENT_ARCHITECTURE.md`](../architecture/CLIENT_ARCHITECTURE.md)
+- [`SERVER_ARCHITECTURE.md`](../architecture/SERVER_ARCHITECTURE.md)
+- [`LINKLAYER_PROTOCOL.md`](../reference/LINKLAYER_PROTOCOL.md)
+- [`DEPLOYMENT.md`](../operations/DEPLOYMENT.md)
