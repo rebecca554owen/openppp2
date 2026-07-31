@@ -1,6 +1,7 @@
 #include <ios/OpenPPP2PacketTunnelBridge.h>
 #include <ios/IosP2PDatagramTransport.h>
 #include <ios/ppp/tap/TapIos.h>
+#include <ppp/app/ApplicationClientBootstrap.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/app/runtime/RuntimeLifecycle.h>
@@ -10,6 +11,7 @@
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
 #include <ppp/IDisposable.h>
+#include <ppp/io/File.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/asio/vdns.h>
@@ -325,6 +327,50 @@ namespace
         return value == nullptr ? ppp::string() : ppp::string(value);
     }
 
+    ppp::string resolve_routing_source(ppp::string source) noexcept
+    {
+        source = ppp::LTrim(ppp::RTrim(source));
+        const bool has_file_uri_prefix = source.size() >= 7 &&
+            (source[0] == 'f' || source[0] == 'F') &&
+            (source[1] == 'i' || source[1] == 'I') &&
+            (source[2] == 'l' || source[2] == 'L') &&
+            (source[3] == 'e' || source[3] == 'E') &&
+            source[4] == ':' && source[5] == '/' && source[6] == '/';
+        if (has_file_uri_prefix)
+        {
+            source = ppp::LTrim(ppp::RTrim(source.substr(7)));
+        }
+
+        if (!source.empty())
+        {
+            ppp::string path = ppp::io::File::RewritePath(source.data());
+            if (!path.empty() && ppp::io::File::Exists(path.data()))
+            {
+                return ppp::LTrim(ppp::RTrim(ppp::io::File::ReadAllText(path.data())));
+            }
+        }
+        return source;
+    }
+
+    ppp::string resolve_routing_sources(const ppp::vector<ppp::string>& sources) noexcept
+    {
+        ppp::string resolved;
+        for (const ppp::string& source : sources)
+        {
+            ppp::string item = resolve_routing_source(source);
+            if (item.empty())
+            {
+                continue;
+            }
+            if (!resolved.empty())
+            {
+                resolved += "\n";
+            }
+            resolved += item;
+        }
+        return resolved;
+    }
+
     struct tunnel_options_snapshot
     {
         int         mux = 0;
@@ -628,7 +674,27 @@ namespace
             return false;
         }
 
-        if (!configure_vdns_servers(configuration, options_copy.dns1, options_copy.dns2))
+        const bool proxy_only_runtime = configuration->client.proxy_only;
+        if (proxy_only_runtime) {
+            // Mirror the desktop/Android behaviour: force loopback listener
+            // defaults so the HTTP/SOCKS proxy is never bound to a non-loopback
+            // address inside the iOS app sandbox.
+            configuration->ApplyProxyModeDefaults();
+        }
+        ppp::string resolved_bypass_ip_list;
+        ppp::string resolved_dns_rules;
+        if (configuration->client.routing.configured)
+        {
+            resolved_bypass_ip_list = resolve_routing_sources(configuration->client.routing.bypass);
+            resolved_dns_rules = resolve_routing_sources(configuration->client.routing.dns_rules);
+        }
+        else
+        {
+            resolved_bypass_ip_list = resolve_routing_source(options_copy.bypass_ip_list);
+            resolved_dns_rules = resolve_routing_source(options_copy.dns_rules_list);
+        }
+
+        if (!proxy_only_runtime && !configure_vdns_servers(configuration, options_copy.dns1, options_copy.dns2))
         {
             native_logf("OpenPPP2 native: vdns servers not configured; gateway DNS may fail");
         }
@@ -662,9 +728,9 @@ namespace
         {
             native_logf("OpenPPP2 native start: creating runtime thread");
             tap->runtime_thread = start_thread_with_stack_size(
-                [tap, configuration, options_copy, ip, gateway, mask]() mutable noexcept
+                [tap, configuration, options_copy, proxy_only_runtime, resolved_bypass_ip_list, resolved_dns_rules, ip, gateway, mask]() mutable noexcept
             {
-                auto start = [tap, configuration, &options_copy, ip, gateway, mask](int, const char**) noexcept -> int
+                auto start = [tap, configuration, &options_copy, proxy_only_runtime, resolved_bypass_ip_list, resolved_dns_rules, ip, gateway, mask](int, const char**) noexcept -> int
                 {
                     set_start_stage(tap, "executor callback entered");
                     std::shared_ptr<boost::asio::io_context> context = Executors::GetDefault();
@@ -745,6 +811,9 @@ namespace
                         return complete_start(tap, 1);
                     }
 
+                    bool proxy_only_flag = proxy_only_runtime;
+                    client->ProxyOnly(&proxy_only_flag);
+
                     set_start_stage(tap, "configuring network switcher");
                     int requested_mux = options_copy.mux;
                     int effective_mux = requested_mux > 0 ? std::min<int>(requested_mux, UINT16_MAX) : 0;
@@ -755,22 +824,30 @@ namespace
                     ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "ios_tunnel",
                         "dataplane start lwip=%d mux=%d requested_mux=%d effective_mux=%d vmux_active=%d max_concurrent=%d stack_mb=5",
                         lwip ? 1 : 0, static_cast<int>(mux), requested_mux, effective_mux, vmux_active ? 1 : 0, max_concurrent);
-                    bool static_mode = options_copy.static_mode != 0;
+                    bool static_mode = ppp::app::NormalizeClientStaticMode(options_copy.static_mode != 0, proxy_only_runtime);
                     client->Mux(&mux);
                     client->StaticMode(&static_mode);
                     client->BlockQUIC(options_copy.block_quic != 0);
 
-                    ppp::string dns_rules = options_copy.dns_rules_list;
+                    // Native bypass and DNS policy is shared by TUN and
+                    // proxy-only modes; only host DNS/route takeover remains
+                    // TUN-only in the platform bridge.
+                    ppp::string dns_rules = resolved_dns_rules;
                     if (!dns_rules.empty())
                     {
                         client->LoadAllDnsRules(dns_rules, false);
                     }
 
-                    ppp::string bypass_ip_list = options_copy.bypass_ip_list;
+                    ppp::string bypass_ip_list = resolved_bypass_ip_list;
                     if (!bypass_ip_list.empty())
                     {
                         client->SetBypassIpList(std::move(bypass_ip_list));
                     }
+
+                    // Mobile route sources are loaded into the native RIB/FIB
+                    // by RouteCoordinator_mobile during ClientConnectionOpener::AddAllRoute.
+                    // The mobile switcher intentionally has no desktop
+                    // AddLoadIPList API, so do not duplicate that load here.
 
                     set_start_stage(tap, "opening OpenPPP2 client");
                     if (!client->Open(ios_tap))
