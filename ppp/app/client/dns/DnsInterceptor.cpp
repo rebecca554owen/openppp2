@@ -128,8 +128,18 @@ namespace ppp {
                     , const std::shared_ptr<ppp::net::ProtectorNetwork>& protect_network
 #endif
                 ) noexcept {
+                    // configuration_ must be stored in both modes so that LoadRules,
+                    // CollectReachabilityIps, and FakeIp logic can access it.
                     configuration_ = configuration;
-                    if (proxy_only || NULLPTR == context || NULLPTR == configuration) {
+                    if (NULLPTR == configuration) {
+                        return true;
+                    }
+
+                    // In proxy-only mode the DNS rule table is active for native
+                    // classification (routing.dns_rules still applies), but the
+                    // DNS resolver that performs system DNS takeover is not started.
+                    // FakeIp pool is also skipped since it requires an active resolver.
+                    if (proxy_only || NULLPTR == context) {
                         return true;
                     }
 
