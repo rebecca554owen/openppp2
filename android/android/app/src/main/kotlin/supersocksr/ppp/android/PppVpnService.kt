@@ -449,12 +449,12 @@ class PppVpnService : VpnService() {
                 }
             }
 
-            // Set bypass IP list and DNS rules if provided
-            if (!proxyOnly && bypassIpList.isNotBlank()) {
+            // Native bypass and DNS policy applies in both TUN and proxy-only modes.
+            if (bypassIpList.isNotBlank()) {
                 val bypassResult = libopenppp2.set_bypass_ip_list(bypassIpList)
                 PppLog.write(this, "set_bypass_ip_list result=$bypassResult")
             }
-            if (!proxyOnly && dnsRulesList.isNotBlank()) {
+            if (dnsRulesList.isNotBlank()) {
                 val dnsResult = libopenppp2.set_dns_rules_list(dnsRulesList)
                 PppLog.write(this, "set_dns_rules_list result=$dnsResult")
             }
@@ -472,26 +472,32 @@ class PppVpnService : VpnService() {
                 builder.addRoute(route, routePrefix)
             }
 
-            try {
-                builder.addAddress(IPV6_BLOCK_ADDRESS, 128)
-                builder.addRoute("::", 0)
-                builder.allowFamily(OsConstants.AF_INET6)
-                PppLog.write(this, "IPv6 leak protection active (capturing ::/0)")
-            } catch (e: Throwable) {
-                val reason = "IPv6 leak protection setup failed: ${e.message ?: e.javaClass.name}"
-                PppLog.write(this, reason, e)
-                notifyError(reason)
-                notifyStateChanged(0)
-                stopForeground(true)
-                stopSelf()
-                return
+            if (!proxyOnly) {
+                try {
+                    builder.addAddress(IPV6_BLOCK_ADDRESS, 128)
+                    builder.addRoute("::", 0)
+                    builder.allowFamily(OsConstants.AF_INET6)
+                    PppLog.write(this, "IPv6 leak protection active (capturing ::/0)")
+                } catch (e: Throwable) {
+                    val reason = "IPv6 leak protection setup failed: ${e.message ?: e.javaClass.name}"
+                    PppLog.write(this, reason, e)
+                    notifyError(reason)
+                    notifyStateChanged(0)
+                    stopForeground(true)
+                    stopSelf()
+                    return
+                }
+            } else {
+                PppLog.write(this, "IPv6 capture and leak protection disabled in proxy-only mode")
             }
 
-            if (dns1.isNotBlank()) {
-                builder.addDnsServer(dns1)
-            }
-            if (dns2.isNotBlank()) {
-                builder.addDnsServer(dns2)
+            if (!proxyOnly) {
+                if (dns1.isNotBlank()) {
+                    builder.addDnsServer(dns1)
+                }
+                if (dns2.isNotBlank()) {
+                    builder.addDnsServer(dns2)
+                }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && mark != 0) {
                 builder.setConfigureIntent(buildConfigureIntent())

@@ -21,13 +21,13 @@ namespace ppp {
 
             void PeerPrefixRouteManager::Clear() noexcept {
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                const route::RoutePlanInput input = owner_->BuildRoutePlanInput();
-#endif
-                for (const auto& route : owner_->applied_peer_prefix_routes_) {
-#if !defined(_ANDROID) && !defined(_IPHONE)
-                    owner_->route_coordinator_->DeleteRoute(input, route.Destination, route.NextHop, route.Prefix);
-#endif
+                if (!owner_->proxy_only_) {
+                    const route::RoutePlanInput input = owner_->BuildRoutePlanInput();
+                    for (const auto& route : owner_->applied_peer_prefix_routes_) {
+                        owner_->route_coordinator_->DeleteRoute(input, route.Destination, route.NextHop, route.Prefix);
+                    }
                 }
+#endif
                 owner_->applied_peer_prefix_routes_.clear();
                 const route::RouteStateSnapshot snapshot = owner_->route_coordinator_->Snapshot();
                 if (NULLPTR != snapshot.peer_prefix_rib) {
@@ -36,14 +36,10 @@ namespace ppp {
                 if (NULLPTR != snapshot.peer_prefix_fib) {
                     snapshot.peer_prefix_fib->Clear();
                 }
-                    owner_->route_coordinator_->ReplacePeerPrefix(NULLPTR, NULLPTR);
+                owner_->route_coordinator_->ReplacePeerPrefix(NULLPTR, NULLPTR);
             }
 
             bool PeerPrefixRouteManager::Apply(const ppp::app::protocol::VirtualEthernetInformationExtensions& extensions) noexcept {
-                if (owner_->proxy_only_) {
-                    return false;
-                }
-
                 std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap();
                 if (NULLPTR == tap) {
                     return false;
@@ -61,7 +57,11 @@ namespace ppp {
                     ? extensions.PeerRouteTable.routes
                     : owner_->dynamic_peer_routes_;
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                const route::RoutePlanInput route_input = owner_->BuildRoutePlanInput();
+                const bool apply_host_routes = !owner_->proxy_only_;
+                route::RoutePlanInput route_input;
+                if (apply_host_routes) {
+                    route_input = owner_->BuildRoutePlanInput();
+                }
 #endif
 
                 auto install_route = [&](const ppp::app::protocol::PeerPrefixRouteEntry& route) -> bool {
@@ -84,14 +84,16 @@ namespace ppp {
                     }
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                    if (!owner_->route_coordinator_->AddRoute(route_input, network, via, route.prefix)) {
+                    if (apply_host_routes && !owner_->route_coordinator_->AddRoute(route_input, network, via, route.prefix)) {
                         return false;
                     }
 #endif
 
                     if (!rib->AddRoute(network, route.prefix, via)) {
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                        owner_->route_coordinator_->DeleteRoute(route_input, network, via, route.prefix);
+                        if (apply_host_routes) {
+                            owner_->route_coordinator_->DeleteRoute(route_input, network, via, route.prefix);
+                        }
 #endif
                         return false;
                     }
@@ -106,7 +108,14 @@ namespace ppp {
 
                 bool any = false;
                 if (NULLPTR != owner_->configuration_) {
-                    for (const auto& route : owner_->configuration_->client.peer_routes) {
+                    // Use canonical peer_routes when client.routing was supplied;
+                    // fall back to the legacy field only when the canonical object
+                    // is absent (mirrors the precedence in ApplicationClientBootstrap).
+                    const auto& static_peer_routes =
+                        owner_->configuration_->client.routing.configured
+                            ? owner_->configuration_->client.routing.peer_routes
+                            : owner_->configuration_->client.peer_routes;
+                    for (const auto& route : static_peer_routes) {
                         ppp::app::protocol::PeerPrefixRouteEntry entry;
                         entry.network = route.network;
                         entry.prefix = route.prefix;

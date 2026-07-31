@@ -14,6 +14,7 @@
 #include <ppp/app/client/route/RouteSpecs.h>
 #include <ppp/app/client/route/WindowsRoutePlatform.h>
 #include <ppp/app/client/routing/HumanRoutingRouteSpecs.h>
+#include <ppp/io/File.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/native/rib.h>
 
@@ -1199,4 +1200,23 @@ BOOST_AUTO_TEST_CASE(mobile_builder_and_coordinator_publish_direct_and_proxy_to_
     BOOST_TEST(rib_direct->gateway == ppp::net::IPEndPoint::LoopbackAddress);
     BOOST_TEST(rib_proxy->gateway == input.tap_gateway);
     BOOST_TEST(FindRoute(rib_routes, 0x0a000000u, 24) != nullptr);
+}
+
+namespace ppp::net::native {
+bool RouteInformationTable::AddAllRoutesByIPList(
+    const ppp::string&, uint32_t) noexcept {
+    return true;
+}
+}
+
+namespace ppp::io {
+ppp::string File::RewritePath(const char* path) noexcept {
+    return path == nullptr ? ppp::string() : ppp::string(path);
+}
+ppp::string File::GetFullPath(const char* path) noexcept {
+    return path == nullptr ? ppp::string() : ppp::string(path);
+}
+bool File::Exists(const char*) noexcept {
+    return false;
+}
 }

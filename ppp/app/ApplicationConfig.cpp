@@ -4,6 +4,7 @@
  */
 
 #include <ppp/configurations/AppConfiguration.h>
+#include <ppp/app/ApplicationClientBootstrap.h>
 #include <ppp/app/PppApplicationInternal.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
@@ -95,7 +96,7 @@ int PppApplication::PreparedArgumentEnvironment(int argc, const char* argv[]) no
     client_mode_ = IsClientRuntimeMode(application_mode_);
     proxy_mode_ = ApplicationMode::Proxy == application_mode_;
 
-    if (proxy_mode_ || configuration->client.proxy_only) {
+    if (NormalizeClientProxyOnlyRuntime(proxy_mode_, configuration->client.proxy_only)) {
         configuration->ApplyProxyModeDefaults();
     }
 

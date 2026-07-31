@@ -1,0 +1,57 @@
+name: Test · Linux coverage
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: test-linux-coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proxy-unit-coverage:
+    name: Unit tests + LLVM cov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm cmake ninja-build
+
+      - name: Configure (tests + coverage)
+        env:
+          THIRD_PARTY_LIBRARY_DIR: /root/dev
+        run: |
+          if [ ! -d /root/dev/boost/stage/lib ]; then
+            echo "Skipping: third-party deps not available on runner (/root/dev)."
+            echo "Run locally with ./scripts/coverage.sh"
+            exit 0
+          fi
+          cmake -B build-cov -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER=clang \
+            -DENABLE_TESTS=ON \
+            -DENABLE_COVERAGE=ON \
+            -DTHIRD_PARTY_LIBRARY_DIR=/root/dev
+
+      - name: Build and test
+        run: |
+          if [ ! -d build-cov ]; then exit 0; fi
+          cmake --build build-cov
+          cd build-cov
+          export LLVM_PROFILE_FILE=default.profraw
+          ctest --output-on-failure
+
+      - name: Report coverage
+        run: |
+          if [ ! -f build-cov/default.profraw ]; then exit 0; fi
+          cd build-cov
+          llvm-profdata merge -sparse default.profraw -o default.profdata
+          llvm-cov report ./tests/openppp2_tests -instr-profile=default.profdata \
+            ../ppp/app/ApplicationMode.cpp \
+            ../ppp/tap/TapStub.cpp \
+            ../ppp/configurations/AppConfiguration.cpp

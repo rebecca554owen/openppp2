@@ -384,7 +384,28 @@ namespace ppp {
                 for (const auto& pair : route_coordinator_->Snapshot().nics) {
                     input.nics.emplace(pair.first, std::string(pair.second.begin(), pair.second.end()));
                 }
-                if (dns_controller_ && configuration_) {
+#if defined(_ANDROID) || defined(_IPHONE)
+                if (configuration_) {
+                    // Mobile RouteCoordinator loads these files into the native
+                    // RIB/FIB; it does not use the desktop AddLoadIPList API.
+                    const auto& routes = configuration_->client.routing.configured
+                        ? configuration_->client.routing.routes
+                        : configuration_->client.routes;
+                    input.route_sources.reserve(routes.size());
+                    for (const auto& route : routes) {
+                        route::RouteSource source;
+                        source.path.assign(route.path.begin(), route.path.end());
+                        source.gateway = route.ngw;
+                        if (!source.path.empty()) {
+                            input.route_sources.emplace_back(std::move(source));
+                        }
+                    }
+                }
+#endif
+                // DNS reachability routes belong to the TUN/native interception
+                // path. Proxy-only keeps the rule table available to the client
+                // policy, but must not turn those rules into tunnel DNS routes.
+                if (!proxy_only_ && dns_controller_ && configuration_) {
                     dns_controller_->CollectReachabilityIps(
                         configuration_,
                         configuration_->dns.intercept_unmatched,
@@ -842,7 +863,9 @@ namespace ppp {
                     dynamic_peer_routes_ = extensions.PeerRouteTable.routes;
                     ApplyPeerPrefixRoutes(extensions);
                 }
-                elif (!configuration_->client.peer_routes.empty()) {
+                elif (configuration_ && !(configuration_->client.routing.configured
+                        ? configuration_->client.routing.peer_routes
+                        : configuration_->client.peer_routes).empty()) {
                     ApplyPeerPrefixRoutes(extensions);
                 }
 
@@ -1064,6 +1087,19 @@ namespace ppp {
                     nic,
 #endif
                     gw, url);
+            }
+
+            bool VEthernetNetworkSwitcher::AddLoadIPListText(
+                const ppp::string& text,
+#if defined(_LINUX)
+                const ppp::string& nic,
+#endif
+                const boost::asio::ip::address& gw) noexcept {
+                return bypass_loader_->AddLoadIPListText(text,
+#if defined(_LINUX)
+                    nic,
+#endif
+                    gw);
             }
 
             bool VEthernetNetworkSwitcher::LoadAllIPListWithFilePaths(const boost::asio::ip::address& gw) noexcept {

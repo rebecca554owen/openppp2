@@ -200,16 +200,6 @@ namespace ppp {
                 owner_->protect_network_ = std::move(protector_network);
 #endif
 
-                if (owner_->proxy_only_) {
-                    if (NULLPTR == owner_->http_proxy_ && NULLPTR == owner_->socks_proxy_) {
-                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketBindFailed);
-                    }
-
-                    ppp::telemetry::Log(Level::kInfo, "client", "proxy-only connected");
-                    ppp::telemetry::Count("client.proxy.connect", 1);
-                    return true;
-                }
-
                 if (NULLPTR != owner_->dns_controller_) {
                     if (!owner_->dns_controller_->Open(
                             owner_->configuration_,
@@ -223,25 +213,30 @@ namespace ppp {
                     }
                 }
 
-                // New the beast network bandwidth aggregator.
-                if (owner_->static_mode_ && owner_->configuration_->udp.static_.aggligator > 0) {
+                // New the beast network bandwidth aggregator only for full TUN mode.
+                if (!owner_->proxy_only_ && owner_->static_mode_ && owner_->configuration_->udp.static_.aggligator > 0) {
                     if (!owner_->PreparedAggregator()) {
                         return false;
                     }
                 }
 
 #if defined(_ANDROID) || defined(_IPHONE)
-                if (!owner_->proxy_only_ && !owner_->AddAllRoute(tap)) {
+                if (!owner_->AddAllRoute(tap)) {
                     IDisposable::DisposeReferences(qos, exchanger, http_proxy);
                     return false;
                 }
 #else
-                // Load all IPList route table configuration files that need to be loaded.
-                if (auto underlying_ni = owner_->underlying_ni_; NULLPTR != underlying_ni) {
-                    owner_->LoadAllIPListWithFilePaths(underlying_ni->GatewayServer);
+                // Proxy-only has no underlying NIC. Use loopback as the native-only
+                // next hop so route sources populate the in-process RIB/FIB without
+                // installing any host route.
+                if (auto underlying_ni = owner_->underlying_ni_; NULLPTR != underlying_ni || owner_->proxy_only_) {
+                    const boost::asio::ip::address native_gateway = owner_->proxy_only_
+                        ? boost::asio::ip::address(boost::asio::ip::address_v4::loopback())
+                        : underlying_ni->GatewayServer;
+                    owner_->LoadAllIPListWithFilePaths(native_gateway);
 
-                    // Add VPN remote server to IPList bypass route table iplist.
-                    if (!owner_->AddRemoteEndPointToIPList(underlying_ni->GatewayServer)) {
+                    // Add VPN remote server to the native route table.
+                    if (!owner_->AddRemoteEndPointToIPList(native_gateway)) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RouteAddFailed);
                     }
                 }
@@ -254,9 +249,19 @@ namespace ppp {
                         fib->Fill(*rib);
 
                         if (fib->IsAvailable()) {
-                owner_->route_coordinator_->ReplaceFib(fib);
+                            owner_->route_coordinator_->ReplaceFib(fib);
                         }
                     }
+                }
+
+                if (owner_->proxy_only_) {
+                    if (NULLPTR == owner_->http_proxy_ && NULLPTR == owner_->socks_proxy_) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SocketBindFailed);
+                    }
+
+                    ppp::telemetry::Log(Level::kInfo, "client", "proxy-only connected");
+                    ppp::telemetry::Count("client.proxy.connect", 1);
+                    return true;
                 }
 
 #if !defined(_ANDROID) && !defined(_IPHONE)
