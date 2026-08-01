@@ -133,7 +133,7 @@ Important defaults from `Clear()` include:
 | `dns.fake-ip.range` | `198.18.0.1/16` | Fake-ip pool CIDR |
 | `udp.inactive.timeout` | 72 s | UDP relay idle timeout |
 | `tcp.inactive.timeout` | 300 s | TCP relay idle timeout |
-| `tcp.connect.timeout` | 15 s | TCP connect attempt timeout |
+| `tcp.connect.timeout` | 5 s | TCP connect attempt timeout |
 | `tcp.listen.backlog` | 511 | Standard listen backlog |
 | `websocket.listen.ws.port` | 0 | WS disabled |
 | `websocket.listen.wss.port` | 0 | WSS disabled |

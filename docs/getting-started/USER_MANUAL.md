@@ -257,17 +257,24 @@ flowchart TD
 |------|-------------|------|
 | Main DNS rules list | Regularly updated Mainland China domain direct-connect rules | [github.com/liulilittle/dns-rules.txt](https://github.com/liulilittle/dns-rules.txt) |
 
-DNS rules file format:
+DNS rules file format — two styles are supported:
 
+**Legacy IP-target format** (routes a domain directly to a DNS server IP):
 ```
-# Route these domains to local DNS
+# Route these domains to a specific DNS IP
 .example.com 192.168.1.1
-.localnet.com 192.168.1.1
-
-# Route these to specific upstream
 .google.com 8.8.8.8
-.cloudflare.com 1.1.1.1
 ```
+
+**Recommended provider format** (routes a domain to a named provider; supports DoH/DoT):
+```
+# Domain routed through the built-in cloudflare provider
+.google.com /cloudflare/tun
+# Domain routed through doh.pub
+.cn /doh.pub/tun
+```
+
+The provider format is preferred. Provider names are configured in the `dns` block. See [Routing and DNS](../guides/ROUTING_AND_DNS.md) for details.
 
 ---
 

@@ -132,6 +132,7 @@ flowchart TD
 | Linux | TUN/TAP | `ip route` / `rtnetlink` | `/etc/resolv.conf` |
 | macOS | utun | `route` 命令 | `scutil` |
 | Android | VPNService | VPNService 路由 | VPNService DNS |
+| iOS | Packet Tunnel（Network Extension） | `NEIPv4Settings` included routes | `NEDNSSettings`（proxy-only 时不配置） |
 
 ---
 
