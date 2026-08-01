@@ -43,12 +43,11 @@ flowchart TD
 
 Before writing config or running commands, decide:
 
-| Decision | Options |
-|----------|---------|
-| Node role | `client`, `proxy-only` client, or `server` |
-| Deployment shape | single node, multi-server, managed |
-| Host platform | Linux, Windows, macOS, Android, iOS |
-| Tunnel mode | `tun` full/split tunnel, `proxy-only`, service-publishing, IPv6-serving |
+| Decision | Options | Guidance |
+|----------|---------|---------|
+| Node role | `client`, `proxy-only` client, or `server` | Run a **server** on a machine with a public IP. Run a **client** on machines that should route traffic through that server. Use **proxy-only** if you want local HTTP/SOCKS proxies without changing system routes. |
+| Host platform | Linux, Windows, macOS, Android, iOS | Affects which binary to download and what permissions you need |
+| Tunnel mode | full tunnel or split tunnel | **Full tunnel**: all traffic goes through the server. **Split tunnel**: only selected IPs (e.g. non-China) go through; the rest go direct. |
 
 ---
 
@@ -86,13 +85,12 @@ The routing mode changes host integration, not the native client policy. `client
 bypass, ordinary routes, peer-prefix routes, and DNS rules are consumed in both modes.
 Proxy-only only suppresses desktop host-route and system-DNS takeover.
 
-On Android and iOS proxy-only bridges, the VPN framework keeps only the minimal
-interface/subnet route; it does not publish default routes, system DNS, or the local
-HTTP proxy. The native bypass and DNS policy still loads. Android also cannot publish
-its local HTTP proxy as the VPN system proxy: the native listener cannot reserve the
-port until after the VPN is established, so publishing it earlier could let another
-local app intercept proxy traffic. Use full-tunnel mode or configure trusted clients
-to use the local HTTP/SOCKS endpoint manually.
+**On Android and iOS (proxy-only):**
+
+- The VPN framework keeps only the minimal interface/subnet route.
+- Default routes, system DNS, and the local HTTP proxy are not published automatically.
+- Native bypass and DNS policy still loads.
+- Android cannot publish its local HTTP proxy as the VPN system proxy — the native listener cannot reserve the port until after the VPN is established, so earlier publishing risks another local app intercepting proxy traffic. Use full-tunnel mode, or configure trusted clients to connect to the local HTTP/SOCKS endpoint directly.
 
 ---
 
@@ -120,6 +118,8 @@ to use the local HTTP/SOCKS endpoint manually.
 | 4 | Start the runtime | `sudo ./ppp` |
 
 Minimal server config:
+
+> **⚠ Security:** Replace the example `protocol-key` and `transport-key` values before deploying. The values below are placeholders and must not be used in production.
 
 ```json
 {
@@ -158,6 +158,8 @@ Minimal server config:
 | 4 | Start as root | `sudo ./ppp --mode=client` |
 
 Minimal client config:
+
+> **⚠ Security:** Use the same `protocol-key` and `transport-key` as your server, and generate your own unique values.
 
 ```json
 {
@@ -251,7 +253,7 @@ flowchart TD
 
 ---
 
-## DNS Rules List
+## DNS Rules
 
 | Item | Description | Link |
 |------|-------------|------|
@@ -278,7 +280,7 @@ The provider format is preferred. Provider names are configured in the `dns` blo
 
 ---
 
-## HTTPS Certificate Configuration
+## HTTPS Certificates
 
 | Item | Description | Location |
 |------|-------------|----------|
@@ -383,6 +385,8 @@ ppp://ws/192.168.0.1:443/
 ---
 
 ## Appendix 1: UDP Static Aggregator
+
+UDP static aggregator bonds multiple UDP paths to a single tunnel for higher throughput and redundancy.
 
 | Parameter | Type | Example | Description | Applies to |
 |-----------|------|---------|-------------|-----------|

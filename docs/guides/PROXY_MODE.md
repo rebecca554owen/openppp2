@@ -57,21 +57,25 @@ When ports or bind addresses are omitted, defaults are applied automatically:
 
 ## Platform behavior
 
-| Platform | TUN / host installation | Native policy and proxy-only boundary | Privilege / permission |
-|----------|-------------------------|----------------------------------------|------------------------|
-| Linux / macOS / Windows | TUN may project native policy to the host; proxy-only uses `TapStub` and installs no host route platform or system DNS | Both modes load native bypass, ordinary routes, peer-prefix routes, and DNS rule table; local HTTP/SOCKS proxies remain available | No root/admin for proxy-only |
-| Android | `VpnService.Builder` installs the configured TUN routes and tunnel DNS in TUN mode | Both modes load native bypass, ordinary routes, peer-prefix routes, and DNS policy; proxy-only Builder installs only the VPN interface subnet route | VpnService permission |
-| iOS | `PacketTunnelProvider` installs included/excluded routes and tunnel DNS in TUN mode | Both modes load native routing and DNS policy; proxy-only provider installs only the tunnel subnet route, without bypass exclusions or tunnel DNS | Network Extension permission |
+| Platform | What changes in proxy-only | What stays active |
+|----------|---------------------------|-------------------|
+| Linux / macOS / Windows | No OS routes installed; no system DNS override; `TapStub` used instead of a real TUN | Native bypass, routes, peer-routes, and DNS rules still load. Local HTTP/SOCKS proxies are available. No root required. |
+| Android | `VpnService.Builder` installs only the VPN interface subnet route; no IPv6 capture; no tunnel DNS | Native bypass, routes, peer-routes, and DNS rules still load. Requires VpnService permission. |
+| iOS | `PacketTunnelProvider` installs only the tunnel-subnet included route; no bypass exclusions; no `NEDNSSettings` | Native routing and DNS policy still loads. Requires Network Extension entitlement. |
 
-Proxy-only limits only host/platform installation. TUN and proxy-only both load and use `routing.ip.bypass`, `routing.ip.routes`, `routing.ip.peer-routes`, and `routing.dns.rules` in the native route/RIB/FIB and DNS policy/rule table. Desktop bootstrap also runs `GeoRuleGenerator` when enabled and loads canonical sources in both modes; proxy-only uses a native loopback gateway to build that state but does not install host routes. Android and iOS builders/providers install only their minimal interface or tunnel-subnet route. See [Routing And DNS](ROUTING_AND_DNS.md) for the normalized policy model.
+Both TUN and proxy-only load `routing.ip.bypass`, `routing.ip.routes`, `routing.ip.peer-routes`, and `routing.dns.rules` into the native policy. The difference is only in what gets projected to the host OS.
 
-On Android, enable **仅代理模式** in profile options (`vpnOptions.proxyOnly=true`). The app still creates a minimal TUN for `protect()`, while the native client loads bypass, ordinary routes, peer-prefix routes, and DNS rules in both modes. `android/libopenppp2.cpp` also runs `GeoRuleGenerator` and loads generated and canonical sources in both modes; proxy-only only disables the Builder-side IPv6 capture, tunnel DNS, and mobile default route.
+**Android:** Enable proxy-only in the app under **仅代理模式** (`vpnOptions.proxyOnly=true`). A minimal TUN is still created for `protect()` calls.
 
-On iOS, `PacketTunnelProvider` reads the independent top-level `client.proxy-only` flag from the prepared JSON. The extension installs only the tunnel-subnet included route, not a default route, and does not configure host bypass exclusions or `NEDNSSettings` in proxy-only mode. `OpenPPP2PacketTunnelBridge.cpp` still loads the canonical native routing and DNS policy in both modes; the iOS bridge does not invoke `GeoRuleGenerator`.
+**iOS:** The extension reads `client.proxy-only` from the prepared config JSON and adjusts the `NEPacketTunnelNetworkSettings` accordingly.
 
-## Static transport boundary
+## Static transport
 
-Proxy-only startup forces static transport off, including when `--tun-ip` would otherwise enable it. It therefore does not initiate the `STATIC`/`STATICACK` exchange. When server-side IPv4 allocation is configured, proxy-only requests automatic IPv4 allocation instead of submitting the local TUN address as a manual request.
+Proxy-only mode forces static transport off. This means:
+
+- The `STATIC`/`STATICACK` exchange does not happen.
+- If `--tun-ip` would normally enable static transport, it is overridden.
+- IPv4 address allocation uses automatic mode instead of submitting the local TUN address.
 
 ## CLI flags
 
@@ -87,6 +91,5 @@ See [CLI_REFERENCE.md](../reference/CLI_REFERENCE.md) and [CONFIGURATION.md](../
 
 - [Routing And DNS](ROUTING_AND_DNS.md) — normalized routing policy and DNS behavior
 - [Platform Integration](PLATFORMS.md) — desktop, Android, and iOS boundaries
-- [PROXY_ONLY_MODE_PLAN.md](../archive/plans/PROXY_ONLY_MODE_PLAN.md) — implementation and test plan
-- [PROXY_MODE_TEST_PLAN.md](../archive/plans/PROXY_MODE_TEST_PLAN.md) — test matrix
-- [TESTING.md](../development/TESTING.md) — unit tests and coverage
+- [CLI Reference](../reference/CLI_REFERENCE.md) — all command-line flags
+- [Configuration Reference](../reference/CONFIGURATION.md) — all config fields

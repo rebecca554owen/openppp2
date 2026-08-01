@@ -57,21 +57,25 @@ curl -x http://127.0.0.1:8080 https://example.com
 
 ## 平台行为
 
-| 平台 | TUN / 宿主安装 | native policy 与纯代理边界 | 权限 / 授权 |
-|------|----------------|----------------------------|------------|
-| Linux / macOS / Windows | TUN 可将 native policy 投影到宿主机；纯代理使用 `TapStub`，不安装宿主路由平台或系统 DNS | 两种模式都加载 native bypass、普通路由、peer 前缀路由和 DNS rule table；本地 HTTP/SOCKS 代理仍可用 | 纯代理模式不需要 root/admin |
-| Android | TUN 模式由 `VpnService.Builder` 安装配置路由和隧道 DNS | 两种模式都加载 native bypass、普通路由、peer 前缀路由和 DNS policy；纯代理模式的 Builder 只安装 VPN 接口子网路由 | 需要 VpnService 权限 |
-| iOS | TUN 模式由 `PacketTunnelProvider` 安装 included/excluded routes 和隧道 DNS | 两种模式都加载 native 路由和 DNS policy；纯代理 provider 只安装 tunnel 子网路由，不安装 bypass 排除路由或隧道 DNS | 需要 Network Extension 授权 |
+| 平台 | proxy-only 下的变化 | 仍然生效的内容 |
+|------|---------------------|----------------|
+| Linux / macOS / Windows | 不安装 OS 路由；不覆写系统 DNS；使用 `TapStub` 代替真实 TUN | native bypass、路由、peer 路由和 DNS rules 仍加载。本地 HTTP/SOCKS 代理可用。无需 root。 |
+| Android | `VpnService.Builder` 只安装 VPN 接口子网路由；不捕获 IPv6；不设置隧道 DNS | native bypass、路由、peer 路由和 DNS policy 仍加载。需要 VpnService 权限。 |
+| iOS | `PacketTunnelProvider` 只安装 tunnel 子网 included route；不设置 bypass 排除路由；不配置 `NEDNSSettings` | native 路由和 DNS policy 仍加载。需要 Network Extension 授权。 |
 
-纯代理模式只限制宿主/平台安装层。TUN 与纯代理都会把 `routing.ip.bypass`、`routing.ip.routes`、`routing.ip.peer-routes` 和 `routing.dns.rules` 加载并用于 native route/RIB/FIB 与 DNS policy/rule table。桌面 bootstrap 在启用时也会运行 `GeoRuleGenerator`，并在两种模式加载 canonical sources；桌面纯代理使用 native loopback gateway 构建这些状态，但不安装宿主路由。Android 和 iOS builder/provider 只安装最小接口或 tunnel 子网路由。归一化策略见[路由与 DNS](ROUTING_AND_DNS_CN.md)。
+TUN 和 proxy-only 都会把 `routing.ip.bypass`、`routing.ip.routes`、`routing.ip.peer-routes` 和 `routing.dns.rules` 加载到 native policy，区别仅在于是否将状态投影到宿主 OS。
 
-Android 端在 profile 选项中启用 **仅代理模式**（`vpnOptions.proxyOnly=true`）。应用仍会创建最小 TUN 以便调用 `protect()`；native client 在两种模式都加载 bypass、普通路由、peer 前缀路由和 DNS 规则。`android/libopenppp2.cpp` 在两种模式都会运行 `GeoRuleGenerator` 并加载生成的及 canonical sources；纯代理只关闭 Builder 侧的 IPv6 捕获、隧道 DNS 和移动端默认路由。
+**Android：** 在应用的 **仅代理模式** 选项中启用（`vpnOptions.proxyOnly=true`）。仍会创建最小 TUN 以支持 `protect()` 调用。
 
-iOS 端由 `PacketTunnelProvider` 从准备好的 JSON 读取独立顶层标志 `client.proxy-only`。纯代理模式只安装 tunnel 子网的 included route（不是默认路由），不配置宿主 bypass 排除路由或 `NEDNSSettings`。`OpenPPP2PacketTunnelBridge.cpp` 在两种模式仍加载 canonical native 路由和 DNS policy；iOS bridge 不调用 `GeoRuleGenerator`。
+**iOS：** extension 从准备好的 JSON 读取 `client.proxy-only`，并据此调整 `NEPacketTunnelNetworkSettings`。
 
-## Static 传输边界
+## 静态传输边界
 
-纯代理模式启动时强制关闭 static transport，即使 `--tun-ip` 原本会启用它，也不会发起 `STATIC`/`STATICACK` 交换。服务端配置 IPv4 分配时，纯代理模式请求自动分配 IPv4，而不是把本地 TUN 地址作为手动分配请求提交。
+纯代理模式启动时强制关闭静态传输（static transport）。这意味着：
+
+- 不会发起 `STATIC`/`STATICACK` 交换。
+- 即使 `--tun-ip` 通常会启用静态传输，在此模式下也会被覆盖。
+- IPv4 地址分配使用自动模式，而不是提交本地 TUN 地址。
 
 ## CLI 选项
 
@@ -87,6 +91,5 @@ iOS 端由 `PacketTunnelProvider` 从准备好的 JSON 读取独立顶层标志 
 
 - [路由与 DNS](ROUTING_AND_DNS_CN.md) — 归一化路由策略与 DNS 行为
 - [平台集成](PLATFORMS_CN.md) — 桌面端、Android 与 iOS 边界
-- [PROXY_ONLY_MODE_PLAN.md](../archive/plans/PROXY_ONLY_MODE_PLAN.md) — 实现与测试计划
-- [PROXY_MODE_TEST_PLAN.md](../archive/plans/PROXY_MODE_TEST_PLAN.md) — 测试矩阵
-- [TESTING.md](../development/TESTING.md) — 单元测试与覆盖率
+- [CLI 参考](../reference/CLI_REFERENCE_CN.md) — 所有命令行选项
+- [配置参考](../reference/CONFIGURATION_CN.md) — 所有配置字段
