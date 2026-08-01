@@ -710,13 +710,13 @@ stateDiagram-v2
 
 ---
 
-## What To Watch For In Code
+## Operational Notes
 
-- Route entries are not just static tables; they are built from host, tunnel, and bypass inputs.
-- DNS servers are treated like reachability-sensitive endpoints — they get their own route entries.
-- Server-side DNS behavior depends on namespace cache and datagram port state.
-- IPv6 transit and static echo can alter what "reachable" means for specific destinations.
-- The bypass list and DNS rules are refreshed independently; both should be consistent.
+- Route entries are built dynamically from bypass list, route sources, and peer-route inputs — changes to these sources take effect on refresh, not just at startup.
+- DNS servers in `routing.dns.rules` are treated as reachability-sensitive endpoints; the runtime adds direct routes for them to keep resolvers reachable.
+- The bypass list and DNS rules refresh independently. If you change one, verify the other is still consistent.
+- In proxy-only mode, DNS rules still classify traffic for the local proxy path even though system DNS is not taken over.
+- IPv6 transit (`server.ipv6`) changes what "reachable" means for IPv6 destinations — ensure bypass lists account for IPv6 prefixes when using split-tunnel mode.
 
 ---
 

@@ -631,20 +631,17 @@ graph TD
 
 ## 12. 平台错误码参考
 
-| ErrorCode | 描述 |
-|-----------|------|
-| `TapDeviceOpenFailed` | 无法打开 TAP/TUN 设备（驱动未安装或权限不足） |
-| `TapDeviceConfigFailed` | 虚拟接口 IP/掩码/MTU 配置失败 |
-| `RouteAddFailed` | 系统路由添加失败 |
-| `RouteDeleteFailed` | 系统路由删除失败 |
-| `DnsResolveFailed` | DNS 服务器配置失败 |
-| `WintunLoadFailed` | Windows：Wintun DLL 加载失败（回退到 TAP-Windows） |
-| `DriverInstallFailed` | Windows：TAP 驱动安装失败（需要管理员权限） |
-| `UtunOpenFailed` | macOS：utun 设备创建失败 |
-| `JniBridgeInitFailed` | Android：JNI 桥接初始化失败 |
-| `SocketProtectFailed` | Android：`VpnService.protect()` 失败 |
+以下错误码是 `ppp::diagnostics::ErrorCode` 中与平台集成相关的近似映射，用于排查启动失败问题：
 
-> **注**：以下错误码为拟新增/设计项，不在当前 `ErrorCodes.def`：`TapDeviceOpenFailed`（近似现有码 `NetworkInterfaceOpenFailed` 或 `TunnelOpenFailed`）、`TapDeviceConfigFailed`（近似 `NetworkInterfaceConfigureFailed` 或 `TunnelDeviceConfigureFailed`）、`WintunLoadFailed`（近似 `WindowsWintunCreateFailed`）、`DriverInstallFailed`（近似 `TapWindowsInstallDriverInvalidArguments`）、`UtunOpenFailed`（近似 `DarwinUtunOpenInvalidUnitNumber`）、`JniBridgeInitFailed`（无近似现有码，需新增）、`SocketProtectFailed`（近似 `ProtectorNetworkProtectInvalidSocket`）。
+| 症状 | 对应错误码（近似） |
+|------|-------------------|
+| TAP/TUN 设备无法打开 | `TunnelOpenFailed`、`NetworkInterfaceOpenFailed` |
+| 虚拟接口 IP/掩码配置失败 | `NetworkInterfaceConfigureFailed`、`TunnelDeviceConfigureFailed` |
+| Windows Wintun DLL 加载失败 | `WindowsWintunCreateFailed` |
+| Windows TAP 驱动安装失败 | `TapWindowsInstallDriverInvalidArguments` |
+| macOS utun 设备创建失败 | `DarwinUtunOpenInvalidUnitNumber` |
+| Android VpnService.protect() 失败 | `ProtectorNetworkProtectInvalidSocket` |
+| 系统路由添加/删除失败 | `RouteAddFailed`、`RouteDeleteFailed` |
 
 ---
 

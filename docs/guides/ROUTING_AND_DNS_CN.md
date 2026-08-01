@@ -694,13 +694,13 @@ stateDiagram-v2
 
 ---
 
-## 读源码时要看什么
+## 运维注意事项
 
-- 路由项不是静态表，它来自宿主、隧道和 bypass 的组合输入
-- DNS 服务器被当成可达性敏感端点——它们有自己专属的路由条目
-- 服务端 DNS 行为取决于 namespace cache 和 datagram port 状态
-- IPv6 transit 和 static echo 会改变"可达"的含义
-- bypass 列表和 DNS 规则是独立刷新的，两者应该保持一致
+- 路由条目是动态构建的，来自 bypass 列表、route 来源和 peer-route 输入——修改这些来源后，效果在刷新时生效，不只是在启动时。
+- `routing.dns.rules` 中的 DNS 服务器被当作可达性敏感端点，运行时会为其添加直连路由以保持 resolver 可达。
+- bypass 列表和 DNS 规则是独立刷新的，修改其中一个后要验证另一个是否仍然一致。
+- proxy-only 模式下，DNS 规则仍会对本地代理路径的流量进行分类，即使没有接管系统 DNS。
+- IPv6 transit（`server.ipv6`）会改变 IPv6 目标的"可达"定义——使用分流模式时，确认 bypass 列表已覆盖相关 IPv6 前缀。
 
 ---
 

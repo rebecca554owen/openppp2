@@ -42,12 +42,11 @@ flowchart TD
 
 在写配置和运行命令之前，先决定：
 
-| 决策 | 选项 |
-|------|------|
-| 节点角色 | `client`、`proxy-only` 客户端或 `server` |
-| 部署形态 | 单节点、多服务端、managed |
-| 宿主平台 | Linux、Windows、macOS、Android、iOS |
-| 隧道模式 | `tun` 全隧道/分流、`proxy-only`、服务发布边缘、IPv6 服务边缘 |
+| 决策 | 选项 | 说明 |
+|------|------|------|
+| 节点角色 | `client`、`proxy-only` 客户端或 `server` | 在有公网 IP 的机器上运行**服务端**；在需要经服务端转发流量的机器上运行**客户端**；只想要本地 HTTP/SOCKS 代理而不修改系统路由时，选 **proxy-only**。 |
+| 宿主平台 | Linux、Windows、macOS、Android、iOS | 决定下载哪个二进制及所需权限 |
+| 隧道模式 | 全隧道或分流 | **全隧道**：所有流量走服务端。**分流**：只有指定 IP（如境外 IP）走隧道，其余直连。 |
 
 ---
 
@@ -81,9 +80,14 @@ flowchart TD
 | IPv6 设置 | 如果启用 TUN IPv6 | 不接管宿主 IPv6 或系统 DNS | 如果启用 `server.ipv6` |
 | 防火墙规则 | 不修改 | 不修改 | 可能设置规则 |
 
-路由模式改变的是宿主集成，而不是 native client policy。`client.routing` 的 bypass、普通 route、peer-prefix route 和 DNS rules 在两种模式都会消费；proxy-only 只抑制桌面宿主路由和系统 DNS 接管。
+路由模式改变的是宿主集成，而不是 native client policy。两种模式下都会加载 `client.routing` 的 bypass、普通路由、peer-prefix 路由和 DNS 规则；proxy-only 只是不接管桌面宿主路由和系统 DNS。
 
-在 Android 和 iOS 的 proxy-only bridge 中，VPN 框架只保留最小 interface/subnet 路由，不发布默认路由、系统 DNS 或本地 HTTP proxy；native bypass 和 DNS policy 仍会加载。Android 也不能将本地 HTTP proxy 发布为 VPN 系统代理：原生 listener 只能在 VPN 建立后保留端口，提前发布可能让其他本地应用拦截代理流量。请使用全隧道模式，或将可信任客户端手动配置为使用本地 HTTP/SOCKS endpoint。
+**Android 和 iOS（proxy-only 模式）的特殊说明：**
+
+- VPN 框架只保留最小 interface/subnet 路由。
+- 不自动发布默认路由、系统 DNS 或本地 HTTP 代理。
+- native bypass 和 DNS policy 仍会加载。
+- Android 不能将本地 HTTP 代理发布为 VPN 系统代理——原生 listener 只能在 VPN 建立后才能保留端口，提前发布可能被其他本地应用截获代理流量。请使用全隧道模式，或将可信客户端手动指向本地 HTTP/SOCKS 地址。
 
 ---
 
@@ -111,6 +115,8 @@ flowchart TD
 | 4 | 启动运行时 | `sudo ./ppp` |
 
 最简服务端配置：
+
+> **⚠ 安全提示：** 部署前必须替换示例中的 `protocol-key` 和 `transport-key`，下方的值仅为占位符，不得用于生产环境。
 
 ```json
 {
@@ -149,6 +155,8 @@ flowchart TD
 | 4 | 以 root 启动 | `sudo ./ppp --mode=client` |
 
 最简客户端配置：
+
+> **⚠ 安全提示：** 使用与服务端相同的 `protocol-key` 和 `transport-key`，并自行生成唯一密钥。
 
 ```json
 {
@@ -242,7 +250,7 @@ flowchart TD
 
 ---
 
-## DNS Rules List
+## DNS 规则
 
 | 项目 | 说明 | 链接 |
 |------|------|------|
@@ -269,7 +277,7 @@ DNS 规则文件格式——支持两种写法：
 
 ---
 
-## HTTPS Certificate Configuration
+## HTTPS 证书配置
 
 | 项目 | 说明 | 位置 |
 |------|------|------|
@@ -372,7 +380,9 @@ ppp://ws/192.168.0.1:443/
 
 ---
 
-## 附录 1：UDP Static Aggligator
+## 附录 1：UDP 静态聚合器
+
+UDP 静态聚合器将多条 UDP 链路绑定为单条隧道，提升吞吐量和冗余度。
 
 | 参数 | 类型 | 示例值 | 说明 | 适用范围 |
 |------|------|--------|------|---------|
@@ -423,7 +433,7 @@ iptables -t nat -A POSTROUTING -s 192.168.1.0/24 -j MASQUERADE
 iptables -t nat -A POSTROUTING -s 192.168.0.0/24 -j MASQUERADE
 ```
 
-### Bypass SNAT 示例
+### 分流绕过示例（SNAT）
 
 ```bash
 iptables -A FORWARD -s 192.168.0.0/24 -d 0.0.0.0/0 -j ACCEPT
@@ -471,7 +481,7 @@ flowchart TD
 
 ---
 
-## 附录 5：IPv6 Transit（服务端）
+## 附录 5：IPv6 Transit（服务端 IPv6 中转）
 
 在服务端启用 IPv6 transit：
 
