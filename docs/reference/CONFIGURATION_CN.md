@@ -172,7 +172,7 @@ vbgp.update_interval = 3600;  ///< 1 小时
 |------|------|
 | `concurrent` | 小于 1 时回退为 CPU 核数 |
 | `server.node` | 不能小于 0；小于 0 时重置为 0 |
-| `server.ipv6.prefix_length` | 限制在 `[1, 127]` 范围内 |
+| `server.ipv6.prefix_length` | 限制在 `[1, 128]` 范围内 |
 | TCP/UDP/MUX timeout | 非正值回退到对应默认值 |
 | 端口字段 | 非法端口变成 `IPEndPoint::MinPort`（0） |
 | keepalive 间隔 | 负数变成 0 |
@@ -253,7 +253,7 @@ key.kf / key.kh / key.kl / key.kx / key.sb —— 非法值时重置为框架内
 | `protocol-key` | string | protocol cipher 的基础密钥；握手后派生 `protocol_` cipher |
 | `transport` | string | transport cipher 算法名 |
 | `transport-key` | string | transport cipher 的基础密钥；握手后派生 `transport_` cipher |
-| `masked` | bool | 在密文上额外添加掩码层（默认 false） |
+| `masked` | bool | 在密文上额外添加掩码层（默认 true） |
 | `plaintext` | bool | 完全禁用加密（仅开发/测试，生产必须 false） |
 | `delta-encode` | bool | 对密文字节启用差分编码 |
 | `shuffle-data` | bool | 对 payload 字节做置换混洗 |
@@ -296,7 +296,7 @@ key.kf / key.kh / key.kl / key.kx / key.sb —— 非法值时重置为框架内
 | `backend-connect-timeout` | int | 后端连接超时（秒） |
 | `ipv6.address` | string | 服务端 IPv6 CIDR 地址池（如 `fdff::/120`） |
 | `ipv6.gateway` | string | IPv6 网关地址 |
-| `ipv6.prefix` | int | IPv6 前缀长度，限制在 `[1, 127]` |
+| `ipv6.prefix` | int | IPv6 前缀长度，限制在 `[1, 128]` |
 | `ipv6.mode` | string | `static`（静态分配）或 `dynamic`（动态分配） |
 
 ### 7.3 `client` 块
@@ -522,7 +522,7 @@ stateDiagram-v2
     CheckCIDR --> CheckPrefix : CIDR 格式合法
     CheckCIDR --> Disabled : CIDR 格式无效
 
-    CheckPrefix --> CheckGateway : prefix 在 [1, 127]
+    CheckPrefix --> CheckGateway : prefix 在 [1, 128]
     CheckPrefix --> Disabled : prefix 越界
 
     CheckGateway --> CheckPlatform : gateway IP 合法
@@ -584,7 +584,7 @@ flowchart LR
     A[appsettings.json\n持久意图] --> E[AppConfiguration]
     B["--mode=client|server"] --> E
     C["--dns=8.8.8.8"] --> E
-    D["--nic=eth0\n--ngw=192.168.1.1\n--tun-ip=10.0.0.2\n--bypass-iplist=..."] --> E
+    D["--nic=eth0\n--ngw=192.168.1.1\n--tun-ip=10.0.0.2\n--bypass=..."] --> E
     E --> F[运行时对象]
 ```
 
@@ -599,7 +599,7 @@ flowchart LR
 | `--tun-ip` | 虚拟接口 IP | TAP/TUN 接口地址 |
 | `--tun-gw` | 虚拟接口网关 | TAP/TUN 接口网关 |
 | `--tun-mask` | 虚拟接口子网掩码 | TAP/TUN 接口掩码 |
-| `--bypass-iplist` | Bypass IP 列表路径 | 绕过隧道的 IP 段文件 |
+| `--bypass` | Bypass IP 列表路径 | 绕过隧道的 IP 段文件 |
 | `--dns-rules` | DNS 路由规则 | 特定域名走指定 DNS |
 
 ---

@@ -248,17 +248,24 @@ flowchart TD
 |------|------|------|
 | 主 DNS rules list | 定期更新的中国大陆域名直连规则 | [github.com/liulilittle/dns-rules.txt](https://github.com/liulilittle/dns-rules.txt) |
 
-DNS 规则文件格式：
+DNS 规则文件格式——支持两种写法：
 
+**传统 IP 目标格式**（将域名直接路由到指定 DNS 服务器 IP）：
 ```
-# 将这些域名路由到本地 DNS
+# 将指定域名路由到某个 DNS IP
 .example.com 192.168.1.1
-.localnet.com 192.168.1.1
-
-# 将这些路由到特定上游
 .google.com 8.8.8.8
-.cloudflare.com 1.1.1.1
 ```
+
+**推荐 Provider 格式**（将域名路由到命名 provider，支持 DoH/DoT）：
+```
+# 通过内置 cloudflare provider 解析
+.google.com /cloudflare/tun
+# 通过 doh.pub 解析
+.cn /doh.pub/tun
+```
+
+推荐使用 provider 格式。Provider 名称在 `dns` 块中配置。详见 [路由与 DNS](../guides/ROUTING_AND_DNS_CN.md)。
 
 ---
 

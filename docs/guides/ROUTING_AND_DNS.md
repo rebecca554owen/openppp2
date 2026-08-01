@@ -258,10 +258,24 @@ flowchart TD
 
 ### DNS Rule Format
 
+The canonical way to specify DNS rule sources is via `client.routing.dns.rules`:
+
 ```json
-"dns-rules": [
-  "rules://path/to/dns-rules.txt"
-]
+"client": {
+  "routing": {
+    "dns": {
+      "rules": ["rules://path/to/dns-rules.txt"]
+    }
+  }
+}
+```
+
+The legacy direct alias `dns-rules` under `client.routing` is also accepted for compatibility when the canonical `ip`/`dns` sub-objects are absent:
+
+```json
+"routing": {
+  "dns-rules": ["rules://path/to/dns-rules.txt"]
+}
 ```
 
 The rules file format uses domain suffix / wildcard entries, each mapped to a resolver address.
@@ -621,6 +635,77 @@ bool VEthernetNetworkSwitcher::IsRoutedThroughTunnel(UInt32 dest_ip) noexcept {
     }
     return true;  // no bypass: use the configured tunnel/proxy path
 }
+```
+
+### VIRR: Periodic Bypass List Refresh
+
+VIRR fetches and replaces the bypass IP list on a configurable interval:
+
+```json
+{
+  "virr": {
+    "update-interval": 3600,
+    "url": "https://cdn.example.com/bypass-latest.txt"
+  }
+}
+```
+
+### vBGP: Remote Route Sources
+
+vBGP pulls remote route prefixes and merges them into the native RIB/FIB:
+
+```json
+{
+  "vbgp": {
+    "update-interval": 7200,
+    "url": "https://cdn.example.com/bgp-routes.txt"
+  }
+}
+```
+
+---
+
+## Routing Decision Flow
+
+```mermaid
+sequenceDiagram
+    participant APP as Application
+    participant DNS as DNS Interceptor
+    participant RIB as Native RIB/FIB
+    participant TUN as Tunnel
+    participant PRX as Local Proxy
+
+    APP->>DNS: DNS query (hostname)
+    DNS->>RIB: Rule lookup
+    RIB-->>DNS: kUdpRelay / kResolveProvider / kDeferToTunnel
+    DNS-->>APP: Resolved IP
+
+    APP->>RIB: Route lookup (IP)
+    alt bypass hit
+        RIB-->>APP: native/local path
+        APP->>PRX: Send via local proxy (proxy-only)<br/>or native NIC (TUN)
+    else no bypass
+        RIB-->>APP: tunnel path
+        APP->>TUN: Send via tunnel
+    end
+```
+
+---
+
+## DNS Route Assignment State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> RuleMatch: incoming DNS query
+    RuleMatch --> kUdpRelay: rule has Server IP
+    RuleMatch --> kResolveProvider: rule has ProviderName (resolver available)
+    RuleMatch --> kDrop: rule has ProviderName (no resolver)
+    RuleMatch --> kResolveUnmatched: no rule + intercept_unmatched + resolver
+    RuleMatch --> kUdpRelay: no rule + no intercept (passthrough)
+    kUdpRelay --> [*]: relay to target
+    kResolveProvider --> [*]: resolve via provider
+    kResolveUnmatched --> [*]: resolve via default resolver
+    kDrop --> [*]: drop query
 ```
 
 ---

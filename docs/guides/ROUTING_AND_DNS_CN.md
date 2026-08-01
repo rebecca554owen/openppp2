@@ -251,10 +251,24 @@ flowchart TD
 
 ### DNS 规则配置格式
 
+推荐通过 `client.routing.dns.rules` 指定 DNS 规则来源：
+
 ```json
-"dns-rules": [
-  "rules://path/to/dns-rules.txt"
-]
+"client": {
+  "routing": {
+    "dns": {
+      "rules": ["rules://path/to/dns-rules.txt"]
+    }
+  }
+}
+```
+
+当 canonical `ip`/`dns` 子对象不存在时，也接受 `client.routing` 下的直接别名 `dns-rules`（兼容旧格式）：
+
+```json
+"routing": {
+  "dns-rules": ["rules://path/to/dns-rules.txt"]
+}
 ```
 
 规则文件使用域名后缀 / 通配符条目，每条映射到一个 resolver 地址。

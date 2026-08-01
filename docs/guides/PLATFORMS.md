@@ -16,7 +16,7 @@
 
 This document explains how OPENPPP2 binds one shared runtime core to different host networking models, with detailed API coverage for each platform backend, build-time organization, and cross-platform development guidelines.
 
-## 1. Canonical client routing policy
+## Overview: Canonical Client Routing Policy
 
 When `client.routing` is present as an object, it is the authoritative client IP/DNS policy. The canonical object contains only `ip.bypass`, `ip.routes`, `ip.peer-routes`, and `dns.rules`. The top-level `--mode=client`/`--mode=proxy` and independent `client.proxy-only` flag select runtime behavior; `client.proxy-only` is read regardless of whether the canonical object is present. Legacy `client.routes` and `client.peer-routes` remain fallback inputs only when the canonical object is absent. An old nested mode key is ignored and is not serialized.
 
