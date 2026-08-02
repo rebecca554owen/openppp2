@@ -248,7 +248,7 @@ namespace ppp {
                     if (ec == boost::system::errc::success || ec == boost::system::errc::resource_unavailable_try_again) {
                         while (bytes_transferred > 0) {
                             const std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = owner_->BufferAllocator;
-                            const std::shared_ptr<IPFrame> response_packet = IPFrame::Parse(allocator, buffer_.get(), static_cast<int>(bytes_transferred));
+                            const std::shared_ptr<IPFrame> response_packet = IPFrame::Parse(allocator, buffer_, buffer_.get(), static_cast<int>(bytes_transferred));
                             if (NULLPTR == response_packet) {
                                 break;
                             }
@@ -268,7 +268,7 @@ namespace ppp {
                                     break;
                                 }
 
-                                const std::shared_ptr<IPFrame> request_packet = IPFrame::Parse(allocator, payload->Buffer.get(), payload->Length);
+                                const std::shared_ptr<IPFrame> request_packet = IPFrame::Parse(allocator, payload->Buffer, payload->Buffer.get(), payload->Length);
                                 if (NULLPTR == request_packet) {
                                     break;
                                 }
