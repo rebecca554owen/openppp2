@@ -267,7 +267,7 @@ namespace ppp {
                 /** @brief Handles inbound FRP disconnect notification. */
                 virtual bool                                                OnFrpDisconnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port) noexcept { return true; }
                 /** @brief Handles inbound FRP stream payload. */
-                virtual bool                                                OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length) noexcept { return true; }
+                virtual bool                                                OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const std::shared_ptr<Byte>& owner, const void* packet, int packet_length) noexcept { return true; }
 
             protected:
                 /** @brief Handles inbound LAN advertisement. */

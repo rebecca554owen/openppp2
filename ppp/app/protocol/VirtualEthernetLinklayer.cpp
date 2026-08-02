@@ -671,7 +671,7 @@ namespace ppp {
 
                             int remote_port = global::PACKET_Word(p, packet_length);
                             if (remote_port != 0 && packet_length > 0) {
-                                return OnFrpPush(transmission, connection_id, in, remote_port, p, packet_length);
+                                return OnFrpPush(transmission, connection_id, in, remote_port, owner, p, packet_length);
                             }
                         }
                     } else {

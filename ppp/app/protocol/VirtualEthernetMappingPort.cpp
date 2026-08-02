@@ -554,14 +554,14 @@ namespace ppp {
             }
 
             /** @brief Sends stream payload to local accepted TCP client. */
-            bool VirtualEthernetMappingPort::Server::Connection::SendToFrpUser(const void* packet, int packet_size) noexcept {
+            bool VirtualEthernetMappingPort::Server::Connection::SendToFrpUser(const std::shared_ptr<Byte>& owner, const void* packet, int packet_size) noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 3) {               // Must be active
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingPortServerConnectionUserSendStateInvalid);
                 }
 
-                // Copy packet data to a shared buffer
-                std::shared_ptr<Byte> messages = Copy(mapping_port_->buffer_allocator_, packet, packet_size);
+                // Zero-copy when owner is available, otherwise fall back to memcpy.
+                std::shared_ptr<Byte> messages = Copy(mapping_port_->buffer_allocator_, owner, packet, packet_size);
                 if (NULLPTR == messages) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingPortServerConnectionUserSendBufferAllocFailed);
                 }
@@ -851,13 +851,13 @@ namespace ppp {
             }
 
             /** @brief Handles FRP stream payload in server role. */
-            bool VirtualEthernetMappingPort::Server_OnFrpPush(int connection_id, const void* packet, int packet_length) noexcept {
+            bool VirtualEthernetMappingPort::Server_OnFrpPush(int connection_id, const std::shared_ptr<Byte>& owner, const void* packet, int packet_length) noexcept {
                 Server::ConnectionPtr connection = Server_GetConnection(connection_id);
                 if (NULLPTR == connection) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionNotFound);
                 }
 
-                bool ok = connection->SendToFrpUser(packet, packet_length);
+                bool ok = connection->SendToFrpUser(owner, packet, packet_length);
                 if (!ok) {
                     connection->Dispose();
                 }
@@ -1331,14 +1331,14 @@ namespace ppp {
             }
 
             /** @brief Sends FRP stream payload to local destination TCP service. */
-            bool VirtualEthernetMappingPort::Client::Connection::SendToDestinationServer(const void* packet, int packet_size) noexcept {
+            bool VirtualEthernetMappingPort::Client::Connection::SendToDestinationServer(const std::shared_ptr<Byte>& owner, const void* packet, int packet_size) noexcept {
                 int connection_state = connection_stated_.load();
                 if (connection_state != 3) {                    // Must be active
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingPortClientConnectionSendStateInvalid);
                 }
 
-                // Copy packet to shared buffer
-                std::shared_ptr<Byte> messages = Copy(mapping_port_->buffer_allocator_, packet, packet_size);
+                // Zero-copy when owner is available, otherwise fall back to memcpy.
+                std::shared_ptr<Byte> messages = Copy(mapping_port_->buffer_allocator_, owner, packet, packet_size);
                 if (NULLPTR == messages) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MappingPortClientConnectionSendBufferAllocFailed);
                 }
@@ -1445,13 +1445,13 @@ namespace ppp {
             }
 
             /** @brief Handles inbound FRP stream payload in client role. */
-            bool VirtualEthernetMappingPort::Client_OnFrpPush(int connection_id, const void* packet, int packet_length) noexcept {
+            bool VirtualEthernetMappingPort::Client_OnFrpPush(int connection_id, const std::shared_ptr<Byte>& owner, const void* packet, int packet_length) noexcept {
                 Client::ConnectionPtr connection = Client_GetConnection(connection_id);
                 if (NULLPTR == connection) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionNotFound);
                 }
 
-                bool ok = connection->SendToDestinationServer(packet, packet_length);
+                bool ok = connection->SendToDestinationServer(owner, packet, packet_length);
                 if (!ok) {
                     connection->Dispose();
                 }

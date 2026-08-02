@@ -3982,10 +3982,10 @@ namespace ppp {
             }
 
             /** @brief Dispatches FRP TCP payload callback to mapped client port. */
-            bool VEthernetExchanger::OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length) noexcept {
+            bool VEthernetExchanger::OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const std::shared_ptr<Byte>& owner, const void* packet, int packet_length) noexcept {
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
                 if (NULLPTR != mapping_port) {
-                    mapping_port->Client_OnFrpPush(connection_id, packet, packet_length);
+                    mapping_port->Client_OnFrpPush(connection_id, owner, packet, packet_length);
                 }
 
                 return true;
