@@ -545,7 +545,7 @@ namespace ppp {
                         break;                              // no more data or read error
                     }
 
-                    if (!PacketInput(transmission, packet.get(), packet_length, y)) {
+                    if (!PacketInput(transmission, packet, packet.get(), packet_length, y)) {
                         if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                         }
@@ -617,7 +617,7 @@ namespace ppp {
              * @details The first byte selects action; remaining payload is parsed by
              * action-specific wire-format readers before calling `On*` handlers.
              */
-            bool VirtualEthernetLinklayer::PacketInput(const ITransmissionPtr& transmission, Byte* p, int packet_length, YieldContext& y) noexcept
+            bool VirtualEthernetLinklayer::PacketInput(const ITransmissionPtr& transmission, const std::shared_ptr<Byte>& owner, Byte* p, int packet_length, YieldContext& y) noexcept
             {
                 if (NULLPTR == p || packet_length < 1) {
                     return global::PACKET_Fail(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
@@ -689,7 +689,7 @@ namespace ppp {
 
                         int remote_port = global::PACKET_Word(p, packet_length);
                         if (remote_port != 0 && packet_length > 0) {
-                            return OnFrpSendTo(transmission, in, remote_port, destinationEP, p, packet_length, y);
+                            return OnFrpSendTo(transmission, in, remote_port, destinationEP, owner, p, packet_length, y);
                         }
                     }
                 }
@@ -697,7 +697,7 @@ namespace ppp {
                     if (packet_length > 0) {
                         ppp::telemetry::Log(Level::kDebug, "protocol", "ECHO received");
                         ppp::telemetry::Count("protocol.echo.received", 1);
-                        return OnEcho(transmission, p, packet_length, y);
+                        return OnEcho(transmission, owner, p, packet_length, y);
                     } else {
                         return packet_length == 0;
                     }

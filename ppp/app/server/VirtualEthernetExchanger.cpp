@@ -1081,8 +1081,8 @@ namespace ppp {
             }
 
             /** @brief Handles ICMP echo payload forwarded from client. */
-            bool VirtualEthernetExchanger::OnEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
-                SendEchoToDestination(transmission, packet, packet_length);
+            bool VirtualEthernetExchanger::OnEcho(const ITransmissionPtr& transmission, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept {
+                SendEchoToDestination(transmission, owner, packet, packet_length);
                 return true;
             }
 
@@ -2312,7 +2312,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
             }
 
             /** @brief Parses and forwards ICMP packet to echo subsystem after firewall checks. */
-            bool VirtualEthernetExchanger::SendEchoToDestination(const ITransmissionPtr& transmission, Byte* packet, int packet_length) noexcept {
+            bool VirtualEthernetExchanger::SendEchoToDestination(const ITransmissionPtr& transmission, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length) noexcept {
                 if (disposed_) {
                     return false;
                 }
@@ -2330,7 +2330,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                 }
 
                 std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = echo->BufferAllocator;
-                std::shared_ptr<IPFrame> ip = IPFrame::Parse(allocator, packet, packet_length);
+                std::shared_ptr<IPFrame> ip = IPFrame::Parse(allocator, owner, packet, packet_length);
                 if (NULLPTR == ip) {
                     return false;
                 }
@@ -2503,7 +2503,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
             }
 
             /** @brief Forwards FRP UDP payload to corresponding mapping port. */
-            bool VirtualEthernetExchanger::OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept {
+            bool VirtualEthernetExchanger::OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, false, remote_port);
                 if (NULLPTR != mapping_port) {
                     mapping_port->Server_OnFrpSendTo(packet, packet_length, sourceEP);

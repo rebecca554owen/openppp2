@@ -569,7 +569,7 @@ namespace ppp {
                  * @param y              Coroutine yield context.
                  * @return true if handled; false to close the session.
                  */
-                virtual bool                                                            OnEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept override;
+                virtual bool                                                            OnEcho(const ITransmissionPtr& transmission, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept override;
 
                 /**
                  * @brief Handles a UDP send-to callback received through the remote transport.
@@ -711,7 +711,7 @@ namespace ppp {
                  * @param y              Coroutine yield context.
                  * @return true if handled; false to close the session.
                  */
-                virtual bool                                                            PacketInput(const ITransmissionPtr& transmission, Byte* p, int packet_length, YieldContext& y) noexcept;
+                virtual bool                                                            PacketInput(const ITransmissionPtr& transmission, const std::shared_ptr<Byte>& owner, Byte* p, int packet_length, YieldContext& y) noexcept;
 
             private:
                 /**
@@ -977,7 +977,7 @@ namespace ppp {
                  * @param y              Coroutine yield context.
                  * @return true if handled; false to close the session.
                  */
-                virtual bool                                                            OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept override;
+                virtual bool                                                            OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept override;
 
                 /**
                  * @brief Handles an FRP TCP connect request from the remote server.
