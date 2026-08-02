@@ -290,8 +290,8 @@ namespace ppp {
              * @param packet_length Payload length in bytes.
              * @param destinationEP Destination endpoint associated with the payload.
              */
-            void VEthernetDatagramPort::OnMessage(void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
-                ports_.datagram_output(sourceEP_, destinationEP, packet, packet_length, true);
+            void VEthernetDatagramPort::OnMessage(const std::shared_ptr<Byte>& owner, void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept {
+                ports_.datagram_output(sourceEP_, destinationEP, owner, packet, packet_length, true);
             }
 
 #if defined(_ANDROID)
@@ -396,7 +396,7 @@ namespace ppp {
                         bool disposing = false;
                         if (ec == boost::system::errc::success) {
                             if (sz > 0) {
-                                OnMessage(buffer_.get(), sz, remoteEP_);
+                                OnMessage(buffer_, buffer_.get(), sz, remoteEP_);
                             }
                         }
                         elif(ec == boost::system::errc::operation_canceled) {

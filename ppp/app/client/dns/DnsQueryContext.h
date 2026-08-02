@@ -30,6 +30,7 @@ struct DnsQueryContext final {
     std::function<bool(
         const boost::asio::ip::udp::endpoint&,
         const boost::asio::ip::udp::endpoint&,
+        const std::shared_ptr<Byte>&,
         void*, int, bool)> datagram_output;
 
     std::shared_ptr<ppp::tap::ITap> tap;

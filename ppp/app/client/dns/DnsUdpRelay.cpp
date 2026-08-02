@@ -148,8 +148,8 @@ namespace ppp {
                                         handle, (int)size);
                                     operation->CompleteResponse(
                                         [query, buffer, source, destination, size]() noexcept {
-                                            query.datagram_output(source, destination, buffer.get(),
-                                                static_cast<int>(size), false);
+                                            query.datagram_output(source, destination, buffer,
+                                                buffer.get(), static_cast<int>(size), false);
                                         });
                                     return;
                                 }

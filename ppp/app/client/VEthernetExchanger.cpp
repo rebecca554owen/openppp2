@@ -307,8 +307,8 @@ namespace ppp {
                 udp::UdpRelayHostPorts host;
                 host.datagram_output =
                     [self](const boost::asio::ip::udp::endpoint& source, const boost::asio::ip::udp::endpoint& destination,
-                           void* packet, int packet_size, bool caching) noexcept {
-                        return self->switcher_->DatagramOutput(source, destination, packet, packet_size, caching);
+                           const std::shared_ptr<Byte>& owner, void* packet, int packet_size, bool caching) noexcept {
+                        return self->switcher_->DatagramOutput(source, destination, owner, packet, packet_size, caching);
                     };
                 host.get_transmission = [self]() noexcept { return self->transmission_; };
                 host.create_port =

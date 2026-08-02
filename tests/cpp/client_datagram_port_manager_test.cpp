@@ -32,7 +32,7 @@ udp_client::UdpRelayHostPorts MakeFilledPorts() noexcept {
     ports.get_tap = []() noexcept { return std::shared_ptr<ppp::tap::ITap>(); };
     ports.get_configuration = []() noexcept { return std::shared_ptr<ppp::configurations::AppConfiguration>(); };
     ports.datagram_output = [](const boost::asio::ip::udp::endpoint&, const boost::asio::ip::udp::endpoint&,
-                               void*, int, bool) noexcept { return true; };
+                               const std::shared_ptr<ppp::Byte>&, void*, int, bool) noexcept { return true; };
     ports.rewrite_fakeip = [](const boost::asio::ip::address& address) noexcept { return address; };
     ports.do_send_to = [](const udp_client::ITransmissionPtr&, const boost::asio::ip::udp::endpoint&,
                           const boost::asio::ip::udp::endpoint&, ppp::Byte*, int,
@@ -273,7 +273,7 @@ BOOST_AUTO_TEST_CASE(receive_without_port_reinjects_to_tun) {
     int reinjected = 0;
     udp_client::UdpRelayHostPorts ports = MakeFilledPorts();
     ports.datagram_output = [&reinjected](const boost::asio::ip::udp::endpoint&, const boost::asio::ip::udp::endpoint&,
-                                          void*, int, bool) noexcept { ++reinjected; return true; };
+                                          const std::shared_ptr<ppp::Byte>&, void*, int, bool) noexcept { ++reinjected; return true; };
     udp_client::ClientDatagramPortManager m(ports);
 
     unsigned char buf[4] = {1, 2, 3, 4};

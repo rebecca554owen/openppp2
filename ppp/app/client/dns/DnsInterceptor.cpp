@@ -565,7 +565,7 @@ namespace ppp {
                             return context.datagram_output(
                                 IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source),
                                 boost::asio::ip::udp::endpoint(destinationIP, PPP_DNS_SYS_PORT),
-                                synthesized.data(), static_cast<int>(synthesized.size()), false);
+                                nullptr, synthesized.data(), static_cast<int>(synthesized.size()), false);
                         }
                     }
 
@@ -586,7 +586,7 @@ namespace ppp {
                             return context.datagram_output(
                                 IPEndPoint::ToEndPoint<boost::asio::ip::udp>(frame->Source),
                                 boost::asio::ip::udp::endpoint(destinationIP, PPP_DNS_SYS_PORT),
-                                dns_packet, static_cast<int>(dns_size), false);
+                                nullptr, dns_packet, static_cast<int>(dns_size), false);
                         }
                     }
 
@@ -680,7 +680,7 @@ namespace ppp {
                                 ppp::telemetry::Count("dns.fake_ip.allocated", 1);
                                 context.datagram_output(
                                     sourceEP, destEP,
-                                    fake_response.data(), static_cast<int>(fake_response.size()), false);
+                                    nullptr, fake_response.data(), static_cast<int>(fake_response.size()), false);
                                 if (allocation.should_resolve) {
                                     SpawnFakeIpBackgroundResolve(
                                         fake_ip_pool, resolver, configuration, plan,

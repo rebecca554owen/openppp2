@@ -672,6 +672,10 @@ namespace ppp {
             }
 
             bool VEthernetNetworkSwitcher::DatagramOutput(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, void* packet, int packet_size, bool caching) noexcept {
+                return DatagramOutput(sourceEP, destinationEP, nullptr, packet, packet_size, caching);
+            }
+
+            bool VEthernetNetworkSwitcher::DatagramOutput(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const std::shared_ptr<Byte>& owner, void* packet, int packet_size, bool caching) noexcept {
                 if (NULLPTR == packet || packet_size < 1) {
                     return false;
                 }
@@ -688,7 +692,19 @@ namespace ppp {
                         return false;
                     }
 
-                    messages->Buffer = wrap_shared_pointer(reinterpret_cast<Byte*>(packet));
+                    // Zero-copy when owner is available; otherwise allocate + copy for safety.
+                    if (NULLPTR != owner) {
+                        messages->Buffer = ppp::wrap_shared_pointer(reinterpret_cast<Byte*>(packet), owner);
+                    }
+
+                    if (NULLPTR == messages->Buffer) {
+                        std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = GetBufferAllocator();
+                        messages->Buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, packet_size);
+                        if (NULLPTR == messages->Buffer) {
+                            return false;
+                        }
+                        memcpy(messages->Buffer.get(), packet, packet_size);
+                    }
                     messages->Length = packet_size;
 
                     std::shared_ptr<UdpFrame> frame = make_shared_object<UdpFrame>();

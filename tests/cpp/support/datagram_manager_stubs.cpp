@@ -96,7 +96,7 @@ namespace ppp {
                 return true;
             }
 
-            void VEthernetDatagramPort::OnMessage(void*, int, const boost::asio::ip::udp::endpoint&) noexcept {
+            void VEthernetDatagramPort::OnMessage(const std::shared_ptr<Byte>&, void*, int, const boost::asio::ip::udp::endpoint&) noexcept {
                 udp::test::DatagramPortSpyInstance().onmessage++;
             }
 

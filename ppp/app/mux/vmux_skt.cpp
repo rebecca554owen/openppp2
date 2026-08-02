@@ -446,46 +446,16 @@ namespace vmux {
 
     /**
      * @brief Queue inbound peer payload and flush to local socket.
+     *
+     * Legacy 2-arg overload — delegates to the zero-copy 3-arg variant with a
+     * null owner, preserving the original alloc+memcpy behavior.
+     *
      * @param payload Payload bytes from vmux frame.
      * @param payload_size Payload size in bytes.
      * @return true when payload is accepted for forwarding.
      */
     bool vmux_skt::input(Byte* payload, int payload_size) noexcept {
-        if (status_.disposed_) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
-            return false;
-        }
-
-        std::shared_ptr<Byte> buffer;
-        if (payload_size > 0) {
-            buffer = mux_->make_byte_array(payload_size);
-            if (NULLPTR != buffer) {
-                memcpy(buffer.get(), payload, payload_size);
-            }
-            else {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketInputBufferAllocFailed);
-                return false;
-            }
-
-            if (!rx_congestions(payload_size)) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
-                return false;
-            }
-        }
-
-        rx_queue_.emplace_back(packet{ buffer,  payload_size });
-        if (status_.sending_) {
-            return true;
-        }
-
-        packet_queue::iterator packet_tail = rx_queue_.begin();
-        packet_queue::iterator packet_endl = rx_queue_.end();
-        if (packet_tail == packet_endl) {
-            return true;
-        }
-
-        packet fpacket = *packet_tail;
-        return forward_to_tx_socket(fpacket.buffer, fpacket.buffer_size, &packet_tail);
+        return input(nullptr, payload, payload_size);
     }
 
     /**

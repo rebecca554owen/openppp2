@@ -167,8 +167,8 @@ namespace ppp {
                 if (NULLPTR != owner_->dns_controller_) {
                     const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(owner_->shared_from_this());
                     dns::DnsQueryContext dns_context;
-                    dns_context.datagram_output = [self](const auto& source, const auto& destination, void* packet, int size, bool caching) noexcept {
-                        return self->DatagramOutput(source, destination, packet, size, caching);
+                    dns_context.datagram_output = [self](const auto& source, const auto& destination, const std::shared_ptr<Byte>& owner, void* packet, int size, bool caching) noexcept {
+                        return self->DatagramOutput(source, destination, owner, packet, size, caching);
                     };
                     dns_context.tap = owner_->GetTap();
                     dns_context.configuration = owner_->configuration_;

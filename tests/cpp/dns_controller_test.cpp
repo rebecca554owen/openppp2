@@ -88,7 +88,7 @@ private:
 
 dns::DnsQueryContext MakeQueryContext(int& datagram_outputs) {
     dns::DnsQueryContext context;
-    context.datagram_output = [&datagram_outputs](const auto&, const auto&, void*, int, bool) {
+    context.datagram_output = [&datagram_outputs](const auto&, const auto&, const std::shared_ptr<ppp::Byte>&, void*, int, bool) {
         ++datagram_outputs;
         return true;
     };
