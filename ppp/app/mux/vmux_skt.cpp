@@ -489,6 +489,60 @@ namespace vmux {
     }
 
     /**
+     * @brief Zero-copy variant of @ref input.
+     * @param owner Shared pointer that owns the memory region of @p payload.
+     *              When non-null, the payload is referenced via wrap_shared_pointer
+     *              instead of being copied into a freshly allocated buffer.
+     * @param payload Payload bytes from vmux frame.
+     * @param payload_size Payload size in bytes.
+     * @return true when payload is accepted for forwarding.
+     */
+    bool vmux_skt::input(const std::shared_ptr<Byte>& owner, Byte* payload, int payload_size) noexcept {
+        if (status_.disposed_) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+            return false;
+        }
+
+        std::shared_ptr<Byte> buffer;
+        if (payload_size > 0) {
+            if (NULLPTR != owner) {
+                // Zero-copy: alias the owner buffer to reference the payload region.
+                buffer = ppp::wrap_shared_pointer(payload, owner);
+            }
+            else {
+                buffer = mux_->make_byte_array(payload_size);
+                if (NULLPTR != buffer) {
+                    memcpy(buffer.get(), payload, payload_size);
+                }
+            }
+
+            if (NULLPTR == buffer) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketInputBufferAllocFailed);
+                return false;
+            }
+
+            if (!rx_congestions(payload_size)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+                return false;
+            }
+        }
+
+        rx_queue_.emplace_back(packet{ buffer,  payload_size });
+        if (status_.sending_) {
+            return true;
+        }
+
+        packet_queue::iterator packet_tail = rx_queue_.begin();
+        packet_queue::iterator packet_endl = rx_queue_.end();
+        if (packet_tail == packet_endl) {
+            return true;
+        }
+
+        packet fpacket = *packet_tail;
+        return forward_to_tx_socket(fpacket.buffer, fpacket.buffer_size, &packet_tail);
+    }
+
+    /**
      * @brief Send local payload to remote vmux peer.
      * @param packet Payload pointer.
      * @param packet_length Payload length.

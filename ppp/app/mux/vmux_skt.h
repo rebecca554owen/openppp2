@@ -94,6 +94,8 @@ namespace vmux {
 
         /** @brief Push peer payload into local output queue. */
         bool                                            input(Byte* payload, int payload_size) noexcept;
+        /** @brief Zero-copy variant: queue inbound peer payload backed by owner shared_ptr. */
+        bool                                            input(const std::shared_ptr<Byte>& owner, Byte* payload, int payload_size) noexcept;
         /** @brief Send local payload to peer; synchronously rejects calls outside the mux strand. */
         bool                                            send_to_peer(const void* packet, int packet_length, const SendAsynchronousCallback& ac) noexcept;
         

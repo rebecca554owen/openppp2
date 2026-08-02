@@ -47,7 +47,7 @@ Go 1.22 and Node 22 are already in the base image.
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **openppp2** (44317 symbols, 88035 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **openppp2** (41883 symbols, 80496 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

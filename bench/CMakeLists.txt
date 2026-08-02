@@ -94,6 +94,12 @@ ppp_add_bench(bm_crypto_chain SOURCES udp/bm_crypto_chain.cpp
     "${OPENPPP2_ROOT}/ppp/cryptography/ssea.cpp"
     ${PPP_CRYPTO_SRCS} ${PPP_AESNI_IMPL_SRCS})
 
+ppp_add_bench(bm_ssea SOURCES udp/bm_ssea.cpp
+    support/bench_stubs.cpp support/bench_alloc_stub.cpp
+    "${OPENPPP2_ROOT}/ppp/cryptography/ssea.cpp"
+    ${PPP_CRYPTO_SRCS} ${PPP_AESNI_IMPL_SRCS})
+target_compile_options(bm_ssea PRIVATE -mssse3 -mavx2 -mpopcnt)
+
 ppp_add_bench(bm_endpoint_serialize SOURCES udp/bm_endpoint_serialize.cpp)
 
 ppp_add_bench(bm_packet_codec SOURCES udp/bm_packet_codec.cpp
@@ -119,13 +125,46 @@ ppp_add_bench(allocator_stress SOURCES udp/allocator_stress.cpp
     ${PPP_POOL_SRCS})
 target_link_libraries(allocator_stress PRIVATE rt)
 
+# ---- P0 micro-benchmarks (Phase 2) -------------------------------------------
+
+# Internet checksum — SSE2 SIMD vs scalar, links checksum.cpp directly.
+# Must NOT link packet_stubs.cpp (symbol clash with checksum.cpp).
+ppp_add_bench(bm_checksum SOURCES udp/bm_checksum.cpp
+    support/bench_stubs.cpp support/bench_alloc_stub.cpp support/net_stubs.cpp
+    "${OPENPPP2_ROOT}/ppp/net/native/checksum.cpp")
+
+# RIB/FIB longest-prefix-match lookup — links rib.cpp (needs net_stubs for
+# Socket::GetDefaultTTL + StringToAddress).
+ppp_add_bench(bm_rib_lpm SOURCES udp/bm_rib_lpm.cpp
+    support/bench_stubs.cpp support/bench_alloc_stub.cpp support/net_stubs.cpp
+    "${OPENPPP2_ROOT}/ppp/net/native/rib.cpp")
+
+# VMux FEC XOR codec — header-only, no .cpp linkage needed.
+ppp_add_bench(bm_vmux_fec SOURCES udp/bm_vmux_fec.cpp)
+
+# VMux ACK Tracker — header-only.
+ppp_add_bench(bm_vmux_ack SOURCES udp/bm_vmux_ack.cpp)
+
+# VMux Retransmit Buffer — header-only.
+ppp_add_bench(bm_vmux_rtx SOURCES udp/bm_vmux_rtx.cpp)
+
+# VMux Flow Reorder Buffer — header-only.
+ppp_add_bench(bm_vmux_reorder SOURCES udp/bm_vmux_reorder.cpp)
+
 if(BUILD_TESTING)
     add_test(NAME bench_crypto_compatibility COMMAND compat_check)
     add_test(NAME bench_evp_simd_selection COMMAND evp_simd_test)
     add_test(NAME bench_allocator_stress COMMAND allocator_stress)
     add_test(NAME bench_crypto_chain_smoke COMMAND bm_crypto_chain --benchmark_min_time=0.001)
+    add_test(NAME bench_ssea_smoke COMMAND bm_ssea --benchmark_min_time=0.001)
     add_test(NAME bench_endpoint_serialize_smoke COMMAND bm_endpoint_serialize --benchmark_min_time=0.001)
     add_test(NAME bench_packet_codec_smoke COMMAND bm_packet_codec --benchmark_min_time=0.001)
+    add_test(NAME bench_checksum_smoke COMMAND bm_checksum --benchmark_min_time=0.001)
+    add_test(NAME bench_rib_lpm_smoke COMMAND bm_rib_lpm --benchmark_min_time=0.001)
+    add_test(NAME bench_vmux_fec_smoke COMMAND bm_vmux_fec --benchmark_min_time=0.001)
+    add_test(NAME bench_vmux_ack_smoke COMMAND bm_vmux_ack --benchmark_min_time=0.001)
+    add_test(NAME bench_vmux_rtx_smoke COMMAND bm_vmux_rtx --benchmark_min_time=0.001)
+    add_test(NAME bench_vmux_reorder_smoke COMMAND bm_vmux_reorder --benchmark_min_time=0.001)
 
     set_tests_properties(
         bench_crypto_compatibility
@@ -136,6 +175,19 @@ if(BUILD_TESTING)
         PROPERTIES LABELS "crypto;correctness" TIMEOUT 30)
 
     set_tests_properties(
+        bench_ssea_smoke
+        PROPERTIES LABELS "crypto;ssea" TIMEOUT 60)
+
+    set_tests_properties(
         bench_allocator_stress
         PROPERTIES LABELS "allocator;stress" TIMEOUT 180)
+
+    set_tests_properties(
+        bench_checksum_smoke
+        bench_rib_lpm_smoke
+        bench_vmux_fec_smoke
+        bench_vmux_ack_smoke
+        bench_vmux_rtx_smoke
+        bench_vmux_reorder_smoke
+        PROPERTIES LABELS "micro;smoke" TIMEOUT 60)
 endif()

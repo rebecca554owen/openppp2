@@ -451,6 +451,7 @@ namespace ppp {
                     const ITransmissionPtr&                                                 transmission, 
                     const boost::asio::ip::udp::endpoint&                                   sourceEP,
                     const boost::asio::ip::udp::endpoint&                                   destinationEP,
+                    const std::shared_ptr<Byte>&                                            owner,
                     Byte*                                                                   packet, 
                     int                                                                     packet_length,
                     bool                                                                    static_transit) noexcept;
@@ -491,6 +492,7 @@ namespace ppp {
                     const ITransmissionPtr&                                                 transmission, 
                     const boost::asio::ip::udp::endpoint&                                   sourceEP, 
                     const boost::asio::ip::udp::endpoint&                                   destinationEP, 
+                    const std::shared_ptr<Byte>&                                            owner,
                     Byte*                                                                   packet, 
                     int                                                                     packet_length,
                     bool                                                                    static_transit) noexcept;
@@ -561,7 +563,7 @@ namespace ppp {
                  * @param y             Coroutine yield context.
                  * @return True on successful forwarding.
                  */
-                bool                                                                        SendPacketToDestination(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept;
+                bool                                                                        SendPacketToDestination(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept;
     
             private:    
                 /**

@@ -184,6 +184,14 @@ ENDIF()
 # If the current compiler environment is detected to support AES.
 OPTION(ENABLE_SIMD "Enable x86/x64 SIMD AES-NI implementation" OFF)
 
+# Enable SSEA SIMD acceleration (SSSE3/SSE4.1/SSE4.2/AVX/AVX2) for the
+# ssea-simd codec/transform suite.  Requires ENABLE_SIMD=ON as a prerequisite.
+# When OFF, ssea-simd falls back to SSE2-only kernels at runtime regardless
+# of the CPU's actual capability, because the higher-level intrinsics are
+# gated behind compiler feature macros that are only defined when the
+# corresponding -m flags are passed.
+OPTION(ENABLE_SSEA_SIMD "Enable SSEA SIMD acceleration (SSSE3+AVX2, requires ENABLE_SIMD)" OFF)
+
 # Optional telemetry/observability facade (default OFF for zero-cost on low-end hardware).
 OPTION(PPP_TELEMETRY "Enable optional telemetry/OTel facade (adds non-zero runtime cost)" OFF)
 IF(PPP_TELEMETRY)
@@ -240,6 +248,18 @@ IF(__SIMD__)
 
     # Add the AES_NI compiler macro.
     ADD_DEFINITIONS(-D__SIMD__)
+
+    # SSEA SIMD acceleration: enable the instruction sets needed by the
+    # ssea-simd codec/transform suite so the compiler defines the feature
+    # macros (__SSSE3__, __SSE4_1__, __SSE4_2__, __AVX__, __AVX2__,
+    # __POPCNT__) that gate the higher-level intrinsics.  Without these
+    # flags the runtime CPUID probe detects the level, but the compiled
+    # code for that level does not exist, so dispatch falls back to SSE2.
+    IF(ENABLE_SSEA_SIMD)
+        IF(NOT MSVC AND PLATFORM_ARCH_X86)
+            ADD_COMPILE_OPTIONS(-mssse3 -msse4.1 -msse4.2 -mpopcnt -mavx -mavx2)
+        ENDIF()
+    ENDIF()
 
     # Additional options for the old version of GCC.
     IF(NOT MSVC AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 8.0)
