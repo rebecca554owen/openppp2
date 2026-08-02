@@ -3541,7 +3541,7 @@ namespace ppp {
             }
 
             /** @brief Handles UDP callback packet delivered by remote exchanger. */
-            bool VEthernetExchanger::OnSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept {
+            bool VEthernetExchanger::OnSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 return datagram_manager_->OnSendTo(transmission, sourceEP, destinationEP, packet, packet_length, y);
             }
 

@@ -655,7 +655,7 @@ namespace ppp {
                         if (sourceEP.port() != 0 && packet_length >= 0) {
                             // call preparation hook and then the actual send handler
                             if (OnPreparedSendTo(transmission, sourceHost, sourceEP, destinationHost, destinationEP, p, packet_length, y)) {
-                                return OnSendTo(transmission, sourceEP, destinationEP, p, packet_length, y);
+                                return OnSendTo(transmission, sourceEP, destinationEP, owner, p, packet_length, y);
                             }
                         }
                     }
