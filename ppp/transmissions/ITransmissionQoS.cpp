@@ -54,7 +54,13 @@ namespace ppp {
                 return true;
             }
 
-            resume_ = [&y]() noexcept { return y.R(); };
+            // store a YieldContext pointer instead of capturing a reference to avoid UAF
+            // if the coroutine is destroyed before Complete(), resume_ would hold a dangling pointer
+            // by design the waiter is held within the coroutine lifetime; storing the pointer is a minimal-invasive fix
+            YieldContext* y_ptr = &y;
+            resume_ = [y_ptr]() noexcept {
+                return y_ptr->R();
+            };
             scope.unlock();
             bool suspended = y.Suspend();
             scope.lock();
@@ -136,6 +142,7 @@ namespace ppp {
 
             std::shared_ptr<Byte> packet = cb(y, &length);
             if (length > 0 && packet) {
+                SynchronizedObjectScope scope(syncobj_);
                 traffic_ += length;
             }
 

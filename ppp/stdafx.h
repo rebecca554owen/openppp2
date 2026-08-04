@@ -532,7 +532,7 @@ static constexpr const char*                                                PPP_
 
     "211.148.192.141"
 };
-// P2-3 regression guard: pin the expected entry count so that any implicit
+//  regression guard: pin the expected entry count so that any implicit
 // adjacent-string concatenation (caused by a missing comma) will be caught
 // at compile time.  If you intentionally add/remove entries, update this
 // number to match the new count.
@@ -1891,11 +1891,16 @@ namespace ppp {
         }
 
         memset(memory, 0, sizeof(T));
-        return std::shared_ptr<T>(new (memory) T(std::forward<A&&>(args)...),
-            [](T* p) noexcept {
-                p->~T();
-                Mfree(p);
-            });
+        try {
+            return std::shared_ptr<T>(new (memory) T(std::forward<A&&>(args)...),
+                [](T* p) noexcept {
+                    p->~T();
+                    Mfree(p);
+                });
+        } catch (...) {
+            Mfree(memory);
+            return NULLPTR;
+        }
     }
 
     /**

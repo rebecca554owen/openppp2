@@ -491,10 +491,21 @@ namespace vmux {
                 return false;
             }
 
+            constexpr int MAX_RX_QUEUE_SIZE = 1024;
+            constexpr int MAX_RX_QUEUE_BYTES = 16 * 1024 * 1024;
+
+            if (rx_queue_.size() >= MAX_RX_QUEUE_SIZE || rx_bytes_pending_ + payload_size > MAX_RX_QUEUE_BYTES) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketInputQueueOverflow);
+                close();
+                return false;
+            }
+
             if (!rx_congestions(payload_size)) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
                 return false;
             }
+
+            rx_bytes_pending_ += payload_size;
         }
 
         rx_queue_.emplace_back(packet{ buffer,  payload_size });
@@ -967,6 +978,7 @@ namespace vmux {
         if (NULLPTR != packet_tail) {
             int location = FALSE;
             if (status_.sending_.compare_exchange_strong(location, TRUE)) {
+                rx_bytes_pending_ -= payload_size;
                 rx_queue_.erase(*packet_tail);
             }
             else {

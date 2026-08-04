@@ -98,10 +98,10 @@ namespace ppp
                 int reft = ntohs(iphdr->len);
                 if (len != reft)
                 {
-                    /* Truncate the size of the IP messages. */
                     if (reft > len)
                     {
-                        iphdr->len = htons(len);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPacketMalformed);
+                        return NULLPTR;
                     }
                     else
                     {

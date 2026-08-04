@@ -71,11 +71,13 @@ def require_samples(label, path, samples):
 
 
 def main():
-    if len(sys.argv) != 3:
+    fail_on_regression = "--fail-on-regression" in sys.argv
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if len(args) != 2:
         print(__doc__)
         sys.exit(2)
 
-    baseline_path, candidate_path = sys.argv[1:]
+    baseline_path, candidate_path = args
     baseline = load(baseline_path)
     candidate = load(candidate_path)
 
@@ -115,6 +117,10 @@ def main():
 
     print("-" * 100)
     print(f"improved={improved}  regressed={regressed}  noise={noise}")
+
+    if fail_on_regression and regressed > 0:
+        print(f"FAIL: {regressed} benchmark(s) regressed (--fail-on-regression)", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

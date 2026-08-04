@@ -154,15 +154,19 @@ bool PrepareClientLoopbackEnvironment(
             }
 
             auto geo_result = ppp::app::client::GeoRuleGenerator::Generate(*configuration, &bypass_sources);
-            if (!geo_result.output_bypass_path.empty()) {
+            if (!geo_result.output_bypass_path.empty() || !geo_result.output_dns_rules_path.empty()) {
+                if (!geo_result.output_bypass_path.empty()) {
 #if defined(_LINUX)
-                ethernet->AddLoadIPList(geo_result.output_bypass_path, network_interface->BypassNic, network_interface->BypassNgw, ppp::string());
+                    ethernet->AddLoadIPList(geo_result.output_bypass_path, network_interface->BypassNic, network_interface->BypassNgw, ppp::string());
 #else
-                ethernet->AddLoadIPList(geo_result.output_bypass_path, network_interface->BypassNgw, ppp::string());
+                    ethernet->AddLoadIPList(geo_result.output_bypass_path, network_interface->BypassNgw, ppp::string());
 #endif
-            }
-            if (!geo_result.output_dns_rules_path.empty()) {
-                ethernet->LoadAllDnsRules(geo_result.output_dns_rules_path, true);
+                }
+                if (!geo_result.output_dns_rules_path.empty()) {
+                    ethernet->LoadAllDnsRules(geo_result.output_dns_rules_path, true);
+                }
+            } else {
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "bootstrap", "Geo rule generation produced no output (disabled or empty sources)");
             }
         }
 
