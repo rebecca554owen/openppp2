@@ -141,6 +141,8 @@ namespace ppp
                 Adjust(listenfd_);
                 if (!Socket::ReuseSocketAddress(listenfd_, true))
                 {
+                    closesocket(listenfd_);
+                    listenfd_ = INVALID_SOCKET;
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                     return false;
                 }
@@ -148,12 +150,16 @@ namespace ppp
                 BOOL bEnable = FALSE;
                 if (setsockopt(listenfd_, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<char*>(&bEnable), sizeof(bEnable)) < 0)
                 {
+                    closesocket(listenfd_);
+                    listenfd_ = INVALID_SOCKET;
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                     return false;
                 }
 
                 if (bind(listenfd_, reinterpret_cast<sockaddr*>(&in6), sizeof(in6)) < 0)
                 {
+                    closesocket(listenfd_);
+                    listenfd_ = INVALID_SOCKET;
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketBindFailed);
                     return false;
                 }
@@ -181,12 +187,16 @@ namespace ppp
                 Adjust(listenfd_);
                 if (!Socket::ReuseSocketAddress(listenfd_, true))
                 {
+                    closesocket(listenfd_);
+                    listenfd_ = INVALID_SOCKET;
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOptionSetFailed);
                     return false;
                 }
 
                 if (bind(listenfd_, reinterpret_cast<sockaddr*>(&in4), sizeof(in4)) < 0)
                 {
+                    closesocket(listenfd_);
+                    listenfd_ = INVALID_SOCKET;
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketBindFailed);
                     return false;
                 }
@@ -199,6 +209,8 @@ namespace ppp
 
             if (listen(listenfd_, backlog) < 0)
             {
+                closesocket(listenfd_);
+                listenfd_ = INVALID_SOCKET;
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketListenFailed);
                 return false;
             }
@@ -206,12 +218,18 @@ namespace ppp
             hEvent_ = WSACreateEvent();
             if (hEvent_ == WSA_INVALID_EVENT)
             {
+                closesocket(listenfd_);
+                listenfd_ = INVALID_SOCKET;
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32SocketEventCreateFailed);
                 return false;
             }
 
             if (WSAEventSelect(listenfd_, hEvent_, FD_ACCEPT | FD_CLOSE) != NOERROR)
             {
+                WSACloseEvent(hEvent_);
+                hEvent_ = WSA_INVALID_EVENT;
+                closesocket(listenfd_);
+                listenfd_ = INVALID_SOCKET;
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Win32SocketEventSelectFailed);
                 return false;
             }
@@ -308,12 +326,11 @@ namespace ppp
                         }
                         elif(events.lNetworkEvents & FD_CLOSE)
                         {
-                            if (events.iErrorCode[FD_ACCEPT_BIT] == 0) /* event is operation_canceled. */
+                            if (events.iErrorCode[FD_CLOSE_BIT] != 0)
                             {
-                                return;
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAcceptFailed);
                             }
-
-                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAcceptFailed);
+                            /* Do not return early on FD_CLOSE - must call Next() to keep accept loop alive */
                         }
                     }
                     else

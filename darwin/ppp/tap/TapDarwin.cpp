@@ -761,6 +761,13 @@ namespace ppp
                     return true;
                 }
 
+                /* Distinguish transient EAGAIN from hard errors */
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
+                    return false;
+                }
+
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
                 return false;
             }

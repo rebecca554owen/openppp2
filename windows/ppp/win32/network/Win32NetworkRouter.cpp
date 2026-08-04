@@ -20,15 +20,22 @@ namespace ppp
                 }
 
                 int events = 0;
-                for (DWORD dwNumEntries = 0; dwNumEntries < table->dwNumEntries; dwNumEntries++)
+                for (DWORD dwNumEntries = 0; dwNumEntries < table->dwNumEntries; )
                 {
                     MIB_IPFORWARDROW& route = table->table[dwNumEntries];
+                    bool deleted = false;
                     if (loop(route))
                     {
                         if (Router::Delete(route))
                         {
                             events++;
+                            table->dwNumEntries--;
+                            deleted = true;
                         }
+                    }
+                    if (!deleted)
+                    {
+                        dwNumEntries++;
                     }
                 }
 

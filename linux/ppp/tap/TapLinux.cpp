@@ -777,7 +777,8 @@ namespace ppp {
 
             // By default, try to enable tun/tap-driver multi-queue mode, if not single-queue mode.
             // https://www.kernel.org/doc/Documentation/networking/tuntap.txt
-            strncpy(ifr.ifr_name, ifrName, IFNAMSIZ);
+            strncpy(ifr.ifr_name, ifrName, IFNAMSIZ - 1);
+            ifr.ifr_name[IFNAMSIZ - 1] = '\0';
 
             bool fails = false;
 #if defined(IFF_MULTI_QUEUE)
@@ -820,11 +821,6 @@ namespace ppp {
         }
 
         bool TapLinux::SetIPAddress(const ppp::string& ifrName, const ppp::string& addressIP, const ppp::string& mask) noexcept {
-            if (ifrName.empty()) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
-                return false;
-            }
-
             IfcctlSocket ifc_ctl_sock;
             if (ifc_ctl_sock.sock_v4 == -1) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
@@ -832,8 +828,10 @@ namespace ppp {
             }
 
             struct ifreq ifr;
-            memset(&ifr, 0, sizeof(ifr));
-            strcpy(ifr.ifr_name, ifrName.data());
+            if (!CopyInterfaceName(ifr, ifrName)) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkInterfaceConfigureFailed);
+                return false;
+            }
 
             struct sockaddr_in* addr = (struct sockaddr_in*)&(ifr.ifr_addr);
             addr->sin_family = AF_INET;
@@ -1107,18 +1105,15 @@ namespace ppp {
         }
 
         ppp::string TapLinux::GetIPAddress(const ppp::string& ifrName) noexcept {
-            if (ifrName.empty()) {
-                return "";
-            }
-
             IfcctlSocket ifc_ctl_sock;
             if (ifc_ctl_sock.sock_v4 == -1) {
                 return "";
             }
 
             struct ifreq ifr;
-            memset(&ifr, 0, sizeof(ifr));
-            strcpy(ifr.ifr_name, ifrName.data());
+            if (!CopyInterfaceName(ifr, ifrName)) {
+                return "";
+            }
 
             struct sockaddr_in* addr = (struct sockaddr_in*)&(ifr.ifr_addr);
             addr->sin_family = AF_INET;
@@ -1134,18 +1129,15 @@ namespace ppp {
         }
 
         ppp::string TapLinux::GetMaskAddress(const ppp::string& ifrName) noexcept {
-            if (ifrName.empty()) {
-                return "";
-            }
-
             IfcctlSocket ifc_ctl_sock;
             if (ifc_ctl_sock.sock_v4 == -1) {
                 return "";
             }
 
             struct ifreq ifr;
-            memset(&ifr, 0, sizeof(ifr));
-            strcpy(ifr.ifr_name, ifrName.data());
+            if (!CopyInterfaceName(ifr, ifrName)) {
+                return "";
+            }
 
             struct sockaddr_in* addr = (struct sockaddr_in*)&(ifr.ifr_netmask);
             addr->sin_family = AF_INET;
@@ -1160,18 +1152,15 @@ namespace ppp {
         }
 
         ppp::string TapLinux::GetHardwareAddress(const ppp::string& ifrName) noexcept {
-            if (ifrName.empty()) {
-                return "";
-            }
-
             IfcctlSocket ifc_ctl_sock;
             if (ifc_ctl_sock.sock_v4 == -1) {
                 return "";
             }
 
             struct ifreq ifr;
-            memset(&ifr, 0, sizeof(ifr));
-            strncpy(ifr.ifr_name, ifrName.data(), ifrName.size());
+            if (!CopyInterfaceName(ifr, ifrName)) {
+                return "";
+            }
 
             if (ioctl(ifc_ctl_sock.sock_v4, SIOCGIFHWADDR, &ifr)) {
                 return "";
@@ -1181,18 +1170,15 @@ namespace ppp {
         }
 
         int TapLinux::GetInterfaceIndex(const ppp::string& ifrName) noexcept {
-            if (ifrName.empty()) {
-                return -1;
-            }
-
             IfcctlSocket ifc_ctl_sock;
             if (ifc_ctl_sock.sock_v4 == -1) {
                 return -1;
             }
 
             struct ifreq ifr;
-            memset(&ifr, 0, sizeof(ifr));
-            strncpy(ifr.ifr_name, ifrName.data(), ifrName.size());
+            if (!CopyInterfaceName(ifr, ifrName)) {
+                return -1;
+            }
 
             if (ioctl(ifc_ctl_sock.sock_v4, SIOGIFINDEX, &ifr)) {
                 return -1;
@@ -1298,7 +1284,8 @@ namespace ppp {
             }
 
             bool any = false;
-            for (;;) {
+            constexpr int MAX_DELETE_ATTEMPTS = 100;
+            for (int attempts = 0; attempts < MAX_DELETE_ATTEMPTS; attempts++) {
                 int status = system(cmd);
                 if (status != 0) {
                     break;
