@@ -149,3 +149,4 @@ __pycache__/
 work/
 work/
 .gitnexus/
+go/daemon/daemon

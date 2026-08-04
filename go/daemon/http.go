@@ -17,6 +17,25 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+func (d *Daemon) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get("Authorization")
+		if token == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing Authorization header"})
+			return
+		}
+		// Accept either "Bearer <token>" or a bare "<token>" header
+		if strings.HasPrefix(token, "Bearer ") {
+			token = strings.TrimPrefix(token, "Bearer ")
+		}
+		if token != d.cfg.AuthToken {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid auth token"})
+			return
+		}
+		next(w, r)
+	}
+}
+
 func (d *Daemon) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -40,6 +59,9 @@ func (d *Daemon) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, ConfigPayload{Content: string(content)})
 	case http.MethodPut, http.MethodPost:
+		/* Limit request body size to prevent memory exhaustion */
+		const MAX_BODY_SIZE = 2 * 1024 * 1024
+		r.Body = http.MaxBytesReader(w, r.Body, MAX_BODY_SIZE)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})

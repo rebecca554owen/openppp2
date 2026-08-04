@@ -11,6 +11,7 @@ import (
 
 type Config struct {
 	Listen     string            `json:"listen"`
+	AuthToken  string            `json:"authToken"`
 	ManagedAPI ManagedAPIConfig  `json:"managedApi"`
 	Instance   InstanceConfig    `json:"instance"`
 	UI         UIConfig          `json:"ui"`
@@ -39,7 +40,7 @@ type UIConfig struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		Listen: ":18080",
+		Listen: "127.0.0.1:18080",
 		ManagedAPI: ManagedAPIConfig{
 			BaseURL: "http://127.0.0.1:10000",
 			Prefix:  "/api/managed/",
@@ -80,6 +81,10 @@ func LoadConfigFromArgs(args []string) (*Config, error) {
 	cfg := DefaultConfig()
 	if err := json.Unmarshal(content, cfg); err != nil {
 		return nil, fmt.Errorf("parse daemon config: %w", err)
+	}
+
+	if cfg.AuthToken == "" {
+		return nil, errors.New("authToken is required for daemon API authentication")
 	}
 
 	if cfg.Listen == "" {
