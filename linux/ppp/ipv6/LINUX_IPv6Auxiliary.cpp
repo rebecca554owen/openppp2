@@ -107,8 +107,23 @@ namespace {
      * @return Absolute snapshot file path.
      */
     static ppp::string GetIPv6SysctlSnapshotPath() noexcept {
-        return "/tmp/openppp2_ipv6_sysctl_snapshot.json";
-    }
+        // Cache the path after the first call so save and restore use the
+        // same file. A fresh random name per call would make every restore
+        // miss the snapshot written moments earlier.
+        static ppp::string cached_path;
+        if (!cached_path.empty()) {
+            return cached_path;
+        }
+
+        const char* tmpdir = getenv("TMPDIR");
+        if (!tmpdir || !tmpdir[0]) {
+            tmpdir = "/var/tmp";
+        }
+
+        char template_path[PATH_MAX];
+        snprintf(template_path, sizeof(template_path), "%s/openppp2_ipv6_sysctl_snapshot.json", tmpdir);
+        cached_path = template_path;
+        return cached_path;    }
 
     using ppp::linux::ipv6::auxiliary::detail::IsAllowedSysctlSnapshotKey;
     using ppp::linux::ipv6::auxiliary::detail::IsSafeSysctlKey;

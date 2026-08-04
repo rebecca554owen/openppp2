@@ -28,9 +28,17 @@ namespace ppp
                         if (Router::Delete(route))
                         {
                             events++;
+                            /* Compact the table: move later entries down so the
+                               deleted slot is reused and the walk stays in sync. */
+                            for (DWORD j = dwNumEntries + 1; j < table->dwNumEntries; j++)
+                            {
+                                table->table[j - 1] = table->table[j];
+                            }
+                            table->dwNumEntries--;
+                            continue;
                         }
                     }
-                }
+                    dwNumEntries++;                }
 
                 return events;
             }

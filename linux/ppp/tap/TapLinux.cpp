@@ -1299,8 +1299,7 @@ namespace ppp {
 
             bool any = false;
             for (;;) {
-                int status = system(cmd);
-                if (status != 0) {
+                int status = system(cmd);                if (status != 0) {
                     break;
                 }
                 else {

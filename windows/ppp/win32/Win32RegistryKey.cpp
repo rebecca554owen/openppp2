@@ -143,7 +143,8 @@ namespace ppp
             }
 
             ppp::vector<WORD> dataArray(dataSize / sizeof(WORD));
-            memcpy(dataArray.data(), dataBuffer.data(), dataSize);
+            size_t copySize = (dataSize / sizeof(WORD)) * sizeof(WORD);
+            memcpy(dataArray.data(), dataBuffer.data(), copySize);
 
             if (NULLPTR != bOK)
             {
