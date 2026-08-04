@@ -225,7 +225,6 @@ namespace ssea
             }
             return SimdLevel::SSE2;
 #else
-            (void)regs;
             return SimdLevel::Scalar;
 #endif
         }();
