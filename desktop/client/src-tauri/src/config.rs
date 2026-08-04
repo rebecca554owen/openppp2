@@ -49,15 +49,17 @@ pub fn build_node_config_with_base(
     if !root.is_object() {
         return Err(ConfigError::InvalidFullConfig);
     }
-    merge_object(
-        root.get_mut("key").and_then(Value::as_object_mut).unwrap(),
-        key,
-    );
+
+    let key_obj = root
+        .get_mut("key")
+        .and_then(Value::as_object_mut)
+        .ok_or(ConfigError::InvalidFullConfig)?;
+    merge_object(key_obj, key);
 
     let client = root
         .get_mut("client")
         .and_then(Value::as_object_mut)
-        .unwrap();
+        .ok_or(ConfigError::InvalidFullConfig)?;
     if let Some(overrides) = node.client.as_ref().and_then(Value::as_object) {
         merge_object(client, overrides);
     }
@@ -70,7 +72,7 @@ pub fn build_node_config_with_base(
         let target = root
             .get_mut("websocket")
             .and_then(Value::as_object_mut)
-            .unwrap();
+            .ok_or(ConfigError::InvalidFullConfig)?;
         merge_object(target, websocket);
     }
     Ok(root)
