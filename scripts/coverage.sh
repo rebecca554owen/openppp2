@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-${ROOT}/build-cov}"
-THIRD_PARTY="${THIRD_PARTY_LIBRARY_DIR:-/root/dev}"
+THIRD_PARTY="${THIRD_PARTY_LIBRARY_DIR:-${ROOT}/third-party}"
 
 PROXY_SOURCES=(
     "ppp/app/ApplicationMode.cpp"
