@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../models/config_profile.dart';
 import '../services/profile_store.dart';
@@ -14,6 +16,7 @@ class ProfilesPage extends StatefulWidget {
 
 class _ProfilesPageState extends State<ProfilesPage> {
   final _store = ProfileStore();
+  StreamSubscription<void>? _storeSub;
   List<ConfigProfile> _profiles = const [];
   String? _activeId;
   bool _loading = true;
@@ -22,7 +25,7 @@ class _ProfilesPageState extends State<ProfilesPage> {
   void initState() {
     super.initState();
     _load();
-    _store.changes.listen((_) {
+    _storeSub = _store.changes.listen((_) {
       if (mounted) _load();
     });
   }
@@ -101,6 +104,7 @@ class _ProfilesPageState extends State<ProfilesPage> {
       if (!mounted) return;
       if (progressShown) Navigator.of(context, rootNavigator: true).pop();
       await _load();
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('已导入/更新 $count 个节点')),
       );
@@ -121,6 +125,12 @@ class _ProfilesPageState extends State<ProfilesPage> {
         ),
       );
     }
+  }
+
+  @override
+  void dispose() {
+    _storeSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _edit(ConfigProfile p) async {
