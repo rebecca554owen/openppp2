@@ -1706,10 +1706,10 @@ namespace ppp {
             }
 
             memcpy(ifr.ifr_name, oldName.data(), oldName.size());
-            ifr.ifr_name[oldName.size() + 1] = '\x0';
+            ifr.ifr_name[oldName.size()] = '\x0';
 
             memcpy(ifr.ifr_newname, ifrName.data(), ifrName.size());
-            ifr.ifr_name[ifrName.size() + 1] = '\x0';
+            ifr.ifr_newname[ifrName.size()] = '\x0';
 
             bool ok = ioctl(dev_handle, SIOCSIFNAME, &ifr) == 0;
             if (!ok) {
