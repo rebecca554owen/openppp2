@@ -20,15 +20,21 @@ if(EXISTS "${OPENPPP2_LOCAL_BOOST_ROOT}/boost/version.hpp")
         OPENPPP2_BOOST_VERSION_LINE
         REGEX "^#define BOOST_VERSION [0-9]+$")
     if(NOT OPENPPP2_BOOST_VERSION_LINE MATCHES "BOOST_VERSION 108600$")
-        message(FATAL_ERROR
-            "Local third-party Boost must be 1.86.0: ${OPENPPP2_LOCAL_BOOST_ROOT}")
+        message(WARNING
+            "Local third-party Boost version mismatch at ${OPENPPP2_LOCAL_BOOST_ROOT} (expected 1.86.0); falling back to system Boost")
+        set(OPENPPP2_BOOST_VERSION_MISMATCH TRUE)
+    else()
+        set(OPENPPP2_BOOST_VERSION_MISMATCH FALSE)
     endif()
-    if(NOT EXISTS "${OPENPPP2_LOCAL_BOOST_CONTEXT}")
-        message(FATAL_ERROR
-            "Local Boost 1.86.0 is missing libboost_context.a: "
-            "${OPENPPP2_LOCAL_BOOST_CONTEXT}")
+    if(NOT OPENPPP2_BOOST_VERSION_MISMATCH)
+        if(NOT EXISTS "${OPENPPP2_LOCAL_BOOST_CONTEXT}")
+            message(FATAL_ERROR
+                "Local Boost 1.86.0 is missing libboost_context.a: "
+                "${OPENPPP2_LOCAL_BOOST_CONTEXT}")
+        endif()
     endif()
 
+    if(NOT OPENPPP2_BOOST_VERSION_MISMATCH)
     add_library(openppp2_boost_context STATIC IMPORTED GLOBAL)
     set_target_properties(openppp2_boost_context PROPERTIES
         IMPORTED_LOCATION "${OPENPPP2_LOCAL_BOOST_CONTEXT}"
@@ -36,6 +42,7 @@ if(EXISTS "${OPENPPP2_LOCAL_BOOST_ROOT}/boost/version.hpp")
     set(OPENPPP2_BOOST_CONTEXT_TARGET openppp2_boost_context)
     set(OPENPPP2_BOOST_INCLUDE_DIR "${OPENPPP2_LOCAL_BOOST_ROOT}")
     message(STATUS "Using local Boost 1.86.0: ${OPENPPP2_LOCAL_BOOST_ROOT}")
+    endif()
 else()
     find_package(Boost REQUIRED COMPONENTS context)
     set(OPENPPP2_BOOST_CONTEXT_TARGET Boost::context)

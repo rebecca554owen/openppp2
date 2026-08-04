@@ -145,6 +145,12 @@ if /I "%~1"=="x64" (
     goto :parse_args_loop
 )
 
+if /I "%~1"=="arm64" (
+    set "TARGET=arm64"
+    shift
+    goto :parse_args_loop
+)
+
 if /I "%~1"=="all" (
     set "TARGET=all"
     shift
