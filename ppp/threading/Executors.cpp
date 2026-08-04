@@ -642,9 +642,15 @@ namespace ppp
                 ExecutorLinkedList& fifo = Internal->ContextFifo;
                 ExecutorThreadTable& threads = Internal->Threads;
                 ExecutorTable& contexts = Internal->ContextTable;
-                SynchronizedObjectScope scope(Internal->Lock);
 
-                for (int i = contexts.size(); i < completionPortThreads; i++)
+                /* Release lock during thread creation to avoid blocking all executor calls */
+                int current_size;
+                {
+                    SynchronizedObjectScope scope(Internal->Lock);
+                    current_size = contexts.size();
+                }
+
+                for (int i = current_size; i < completionPortThreads; i++)
                 {
                     bool bok = Executors_CreateNewThread(allocator);
                     if (!bok)
@@ -825,11 +831,7 @@ namespace ppp
             std::shared_ptr<ExecutorsInternal> i = Internal;
             if (NULLPTR != i)
             {
-                SynchronizedObjectScope scope(i->Lock);
-                if (NULLPTR != i->Default)
-                {
-                    return i->TickCount.load(std::memory_order_relaxed);
-                }
+                return i->TickCount.load(std::memory_order_relaxed);
             }
 
             return ppp::GetTickCount();

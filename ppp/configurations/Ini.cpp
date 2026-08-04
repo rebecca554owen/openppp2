@@ -34,13 +34,9 @@ namespace ppp {
                     continue;
                 }
 
-                std::size_t index = line.find('#');
-                if (index != ppp::string::npos) {
-                    if (index == 0) {
-                        continue;
-                    }
-
-                    line = line.substr(0, index);
+                /* Only strip # if it's at the start (actual comment line), not within a value */
+                if (!line.empty() && line[0] == '#') {
+                    continue;
                 }
 
                 /**
@@ -104,6 +100,7 @@ namespace ppp {
                  * Supports `key=value` and `key:value` syntax.
                  */
 if (sectionKey.size()) { 
+                    ppp::string::size_type index;
                     index = line.find('=');
                     if (index == ppp::string::npos) {
                         index = line.find(':');

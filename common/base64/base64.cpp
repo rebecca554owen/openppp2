@@ -175,6 +175,16 @@ static ppp::string decode(String encoded_string, bool remove_linebreaks) {
     size_t length_of_string = encoded_string.length();
     size_t pos = 0;
 
+    /* Validate length is multiple of 4 or has valid padding to prevent out-of-bounds reads */
+    if (length_of_string % 4 != 0) {
+        /* Check if the last chunk has valid padding */
+        size_t remainder = length_of_string % 4;
+        if (remainder < 2) {
+            /* Invalid base64: last chunk must have at least 2 characters */
+            return ppp::string();
+        }
+    }
+
     //
     // The approximate length (bytes) of the decoded string might be one or
     // two bytes smaller, depending on the amount of trailing equal signs

@@ -46,6 +46,10 @@ namespace ppp {
                 if (counts < 1) {
                     return NULLPTR;
                 }
+                /** Guard against integer overflow when converting element count to byte size. */
+                if (static_cast<size_t>(counts) > (std::numeric_limits<int>::max)() / sizeof(TValueType)) {
+                    return NULLPTR;
+                }
 
                 std::shared_ptr<TValueType> buf;
                 /** Use stream allocator when available to keep allocation policy consistent. */
@@ -61,10 +65,6 @@ namespace ppp {
                     return NULLPTR;
                 }
 
-                /** Guard against integer overflow when converting element count to byte size. */
-                if (static_cast<size_t>(counts) > (std::numeric_limits<int>::max)() / sizeof(TValueType)) {
-                    return NULLPTR;
-                }
 
                 int size = static_cast<int>((static_cast<size_t>(counts) * sizeof(TValueType)));
                 int len = _stream.Read(buf.get(), 0, size);
