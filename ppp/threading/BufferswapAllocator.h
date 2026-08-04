@@ -100,15 +100,20 @@ namespace ppp
                 if (NULLPTR == memory) {
                     return make_shared_object<T>(std::forward<A&&>(args)...);
                 }
-                
+
                 auto self = shared_from_this();
                 memset(memory, 0, sizeof(T));
 
-                return std::shared_ptr<T>(new (memory) T(std::forward<A&&>(args)...),
-                    [self, this](T* p) noexcept {
-                        p->~T();
-                        Free(p);
-                    });
+                try {
+                    return std::shared_ptr<T>(new (memory) T(std::forward<A&&>(args)...),
+                        [self, this](T* p) noexcept {
+                            p->~T();
+                            Free(p);
+                        });
+                } catch (...) {
+                    Free(memory);
+                    return NULLPTR;
+                }
             }
 
             /**

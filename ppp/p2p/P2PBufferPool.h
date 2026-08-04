@@ -80,7 +80,7 @@ namespace ppp {
 
             private:
                 void ReturnToPool() noexcept {
-                    if (data_ && pool_) {
+                    if (data_ && pool_ && pool_->IsAlive()) {
                         pool_->Release(data_);
                         data_ = nullptr;
                         pool_ = nullptr;
@@ -99,6 +99,7 @@ namespace ppp {
             explicit P2PBufferPool(int count = DEFAULT_BUFFER_POOL_COUNT) noexcept
                 : total_(std::clamp(count, 1, 1024))
                 , available_(total_)
+                , alive_(true)
                 , free_list_(static_cast<unsigned int>(total_)) {
                 storage_.reset(static_cast<uint8_t*>(
                     std::malloc(static_cast<size_t>(total_) * P2P_BUFFER_SIZE)));
@@ -117,7 +118,13 @@ namespace ppp {
             P2PBufferPool(const P2PBufferPool&) = delete;
             P2PBufferPool& operator=(const P2PBufferPool&) = delete;
 
-            ~P2PBufferPool() noexcept = default;
+            ~P2PBufferPool() noexcept {
+                alive_.store(false, std::memory_order_release);
+            }
+
+            bool IsAlive() const noexcept {
+                return alive_.load(std::memory_order_acquire);
+            }
 
             /**
              * @brief Borrows a buffer from the pool.
@@ -168,6 +175,7 @@ namespace ppp {
 
             int                                         total_;         ///< Number of pre-allocated buffers.
             std::atomic<int>                            available_;     ///< Current number of buffers in free list.
+            std::atomic<bool>                           alive_;         ///< Pool is alive (false after destructor starts).
             std::unique_ptr<uint8_t, decltype(&std::free)> storage_{nullptr, std::free}; ///< Contiguous buffer storage.
             boost::lockfree::queue<uint8_t*>            free_list_;     ///< Lock-free free list.
         };

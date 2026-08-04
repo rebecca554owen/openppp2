@@ -156,6 +156,7 @@ namespace vmux {
 
         packet_queue                                    rx_queue_;          ///< Inbound payload queue pending delivery to local socket.
         int64_t                                         rx_congestions_;    ///< Signed congestion counter; negative means backpressure applied.
+        int64_t                                         rx_bytes_pending_ = 0; ///< Total bytes in rx_queue_ for overflow detection.
 
         std::shared_ptr<boost::asio::ip::tcp::socket>   tx_socket_;         ///< Local TCP socket to which inbound data is forwarded.
         std::shared_ptr<Byte>                           tx_buffer_;         ///< Persistent receive buffer for the local socket read loop.

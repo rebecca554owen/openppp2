@@ -828,15 +828,15 @@ namespace lwip {
     }
 
     struct pbuf* netstack_pbuf_copy(const void* packet, int size) noexcept {
-        if (!packet || size < 1 || !netif_) {
+        if (!packet || size < 1 || size > UINT16_MAX || !netif_) {
             return NULLPTR;
         }
 
-        struct pbuf* pbuf = netstack_pbuf_alloc(size);
+        struct pbuf* pbuf = netstack_pbuf_alloc(static_cast<uint16_t>(size));
         if (!pbuf) {
             return NULLPTR;
         }
-        
+
         memcpy(pbuf->payload, packet, size);
         return pbuf;
     }

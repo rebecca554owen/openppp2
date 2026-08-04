@@ -461,19 +461,31 @@ namespace ppp
             }
 
             std::shared_ptr<ITap> self = shared_from_this();
-            stream->async_read_some(boost::asio::buffer(_packet, sizeof(_packet)), 
+            std::shared_ptr<Byte> packet_buffer = ppp::make_shared_alloc<Byte>(ITap::Mtu + 4);
+            if (NULLPTR == packet_buffer)
+            {
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+            }
+
+            stream->async_read_some(boost::asio::buffer(packet_buffer.get(), ITap::Mtu + 4),
                 boost::asio::bind_executor(*_strand,
-                [self, this, stream](const boost::system::error_code& ec, std::size_t sz) noexcept
+                [self, this, stream, packet_buffer](const boost::system::error_code& ec, std::size_t sz) noexcept
                 {
                     if (ec == boost::system::errc::operation_canceled)
                     {
                         return;
                     }
 
-                    int len = std::max<int>(ec ? -1 : sz, -1);
+                    if (ec)
+                    {
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tap", "Read error: %s", ec.message().data());
+                        return;
+                    }
+
+                    int len = static_cast<int>(sz);
                     if (len > 0)
                     {
-                        PacketInputEventArgs e{ _packet, len };
+                        PacketInputEventArgs e{ packet_buffer.get(), len };
                         OnInput(e);
                     }
 
@@ -595,12 +607,17 @@ namespace ppp
                 boost::asio::bind_executor(*_strand,
                     [self, this, stream, packet](const boost::system::error_code& ec, std::size_t sz) noexcept
                     {
-                        /**
-                         * @brief Completion handler finalizes on cancellation errors.
-                         */
                         if (ec == boost::system::errc::operation_canceled)
                         {
                             Finalize();
+                            return;
+                        }
+
+                        if (ec && ec != boost::asio::error::eof)
+                        {
+                            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tap", "Write failed: %s", ec.message().data());
+                            Finalize();
+                            return;
                         }
 
                         DrainWriteQueue();

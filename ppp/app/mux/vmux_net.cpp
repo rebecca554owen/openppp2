@@ -228,7 +228,7 @@ namespace vmux {
     }
 
     ppp::app::mux::MuxRuntimeState vmux_net::get_runtime_state() const noexcept {
-        // Prefer lock-free snapshot published on the vmux strand (P2-5).
+        // Prefer lock-free snapshot published on the vmux strand.
         if (auto snap = std::atomic_load_explicit(&runtime_snapshot_, std::memory_order_acquire)) {
             return *snap;
         }

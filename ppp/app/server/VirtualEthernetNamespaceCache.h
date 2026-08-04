@@ -128,7 +128,7 @@ namespace ppp {
                 /**
                  * @brief Retrieves a cached DNS response and rewrites its transaction ID.
                  *
-                 * @details **Copy-on-read (P0-5 fix):** The method allocates a local copy of
+                 * @details **Copy-on-read fix:** The method allocates a local copy of
                  *          the cached packet and writes the caller-supplied @p trans_id into
                  *          the copy.  The original cached buffer is never mutated, so
                  *          concurrent Get() callers on the same key do not race on the

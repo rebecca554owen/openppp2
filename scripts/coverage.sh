@@ -26,10 +26,10 @@ cmake -S "${ROOT}" -B "${BUILD_DIR}" \
 cmake --build "${BUILD_DIR}" -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
 cd "${BUILD_DIR}"
-export LLVM_PROFILE_FILE="default.profraw"
+export LLVM_PROFILE_FILE="%p-%m.profraw"
 ctest --output-on-failure
 
-llvm-profdata merge -sparse default.profraw -o default.profdata
+llvm-profdata merge -sparse *.profraw -o default.profdata
 
 REPORT_ARGS=()
 for src in "${PROXY_SOURCES[@]}"; do

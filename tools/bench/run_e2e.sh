@@ -57,8 +57,9 @@ for size in 64 1400; do
     iperf3 -c 127.0.0.1 -p 7000 --connect-timeout 5000 -u --bitrate "$BITRATE" --length "$size" --time "$DURATION" --json \
         > "$OUT/e2e-$size.json"
     python3 "$HERE/validate_e2e.py" "$OUT/e2e-$size.json" "$BITRATE" > "$OUT/e2e-$size.summary.json"
-    wait "${pids[-1]}"
-    unset 'pids[-1]'
+    last_idx=$((${#pids[@]} - 1))
+    wait "${pids[$last_idx]}"
+    unset 'pids[$last_idx]'
 done
 
 echo "E2E results: $OUT"
