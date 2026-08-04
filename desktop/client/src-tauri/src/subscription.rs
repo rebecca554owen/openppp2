@@ -268,10 +268,16 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
     }
     let temporary = path.with_extension("tmp");
     fs::write(&temporary, bytes)?;
-    if path.exists() {
-        fs::remove_file(path)?;
+
+    #[cfg(unix)]
+    {
+        fs::rename(&temporary, path)
     }
-    fs::rename(temporary, path)
+
+    #[cfg(windows)]
+    {
+        crate::replace_file_windows(&temporary, path)
+    }
 }
 
 fn now_ms() -> u64 {

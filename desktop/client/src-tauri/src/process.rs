@@ -52,6 +52,8 @@ pub enum ProcessError {
     AlreadyRunning,
     #[error("无法启动 ppp: {0}")]
     Spawn(#[from] std::io::Error),
+    #[error("进程锁已损坏")]
+    LockPoisoned,
 }
 
 type Emitter = Arc<dyn Fn(ProcessEvent) + Send + Sync + 'static>;
@@ -73,11 +75,11 @@ impl ProcessManager {
     }
 
     pub fn is_running(&self) -> bool {
-        self.child.lock().expect("process lock poisoned").is_some()
+        self.child.lock().ok().and_then(|guard| guard.as_ref()).is_some()
     }
 
     pub fn start(&mut self, spec: CommandSpec) -> Result<u32, ProcessError> {
-        let mut slot = self.child.lock().expect("process lock poisoned");
+        let mut slot = self.child.lock().map_err(|_| ProcessError::LockPoisoned)?;
         if slot.is_some() {
             return Err(ProcessError::AlreadyRunning);
         }
@@ -113,7 +115,7 @@ impl ProcessManager {
     }
 
     pub fn stop(&mut self) -> Result<(), ProcessError> {
-        let pid = match self.child.lock().expect("process lock poisoned").as_ref() {
+        let pid = match self.child.lock().map_err(|_| ProcessError::LockPoisoned)?.as_ref() {
             Some(child) => child.id(),
             None => return Ok(()),
         };
@@ -125,7 +127,7 @@ impl ProcessManager {
             }
             thread::sleep(Duration::from_millis(25));
         }
-        if let Some(child) = self.child.lock().expect("process lock poisoned").as_mut() {
+        if let Some(child) = self.child.lock().map_err(|_| ProcessError::LockPoisoned)?.as_mut() {
             child.kill()?;
         }
         Ok(())
@@ -142,9 +144,12 @@ fn monitor_child(child: Arc<Mutex<Option<Child>>>, emit: Emitter, stats_path: Op
                 read_stats(path, &mut offset, &mut pending, &mut sampler, &emit);
             }
             let exit = {
-                let mut slot = child.lock().expect("process lock poisoned");
+                let slot = match child.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => break,
+                };
                 match slot
-                    .as_mut()
+                    .as_ref()
                     .and_then(|process| process.try_wait().ok())
                     .flatten()
                 {
@@ -216,6 +221,12 @@ fn request_graceful_stop(pid: u32) {
 #[cfg(unix)]
 fn request_graceful_stop(pid: u32) {
     unsafe {
-        libc::kill(pid as i32, libc::SIGTERM);
+        let result = libc::kill(pid as i32, libc::SIGTERM);
+        if result == -1 {
+            let errno = *libc::__error();
+            if errno != libc::ESRCH {
+                eprintln!("kill({}, SIGTERM) failed: errno {}", pid, errno);
+            }
+        }
     }
 }
