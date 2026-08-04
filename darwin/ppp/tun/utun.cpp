@@ -347,7 +347,7 @@ namespace ppp
                     /* Log real errno before potentially overwriting; also flag ENOBUFS separately as recoverable */
                     if (route_errno == ENOBUFS)
                     {
-                        ppp::telemetry::Log(ppp::telemetry::Level::kWarn, "tap", "darwin route ENOBUFS (transient) action=%d dst=%u mask=%u gw=%u", action, dst, mask, nexthop);
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "tap", "darwin route ENOBUFS (transient) action=%d dst=%u mask=%u gw=%u", action, dst, mask, nexthop);
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RouteAddFailed);
                         return RouteMutationResult::Failed;
                     }

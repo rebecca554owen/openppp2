@@ -90,6 +90,9 @@ func (s *Server) handleRestoreProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func readProfileBody(r *http.Request) ([]byte, error) {
+	/* Limit request body size to prevent memory exhaustion (2MB like ppp/Admin.go) */
+	const MAX_BODY_SIZE = 2 * 1024 * 1024
+	r.Body = http.MaxBytesReader(nil, r.Body, MAX_BODY_SIZE)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, err

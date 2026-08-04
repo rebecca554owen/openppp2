@@ -92,7 +92,13 @@ func (m *Manager) Save(name string, content []byte) error {
 	if m.backupCfg.Enabled {
 		_ = m.createBackupLocked(name)
 	}
-	return os.WriteFile(path, content, 0o644)
+
+	// Atomic write: write to temp file then rename
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, content, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func (m *Manager) Delete(name string) error {
