@@ -90,6 +90,7 @@ jobs:
             -G Ninja \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
+            -DTHIRD_PARTY_LIBRARY_DIR=/root/dev \
             -DENABLE_COVERAGE=ON
 
       - name: Build
@@ -151,7 +152,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-go
-          path: go/build/coverage/go-summary.txt
+          path: go/guardian/build/coverage/go-summary.txt
           retention-days: 7
 
   flutter:

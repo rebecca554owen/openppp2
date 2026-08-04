@@ -25,13 +25,21 @@ jobs:
     runs-on: macos-latest
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(github.event_name == 'pull_request' && '{"include":[{"arch":"arm64","third_repo":"Liz-Nozomi/openppp2-macos-arm64-environment"}]}' || '{"include":[{"arch":"arm64","third_repo":"Liz-Nozomi/openppp2-macos-arm64-environment"},{"arch":"x86_64","third_repo":"liulilittle/openppp2-macos-amd64-environment"}]}') }}
+      matrix:
+        include:
+          - arch: arm64
+            third_repo: Liz-Nozomi/openppp2-macos-arm64-environment
+            third_repo_sha: 56d8b2e08956564ce1e916da9f17dad6b6c38a26
+          - arch: x86_64
+            third_repo: liulilittle/openppp2-macos-amd64-environment
+            third_repo_sha: b1c9ca285c0154c57c443263c0b334bc7064ca2a
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Clone third-party environment
         run: git clone --depth 1 "https://github.com/${{ matrix.third_repo }}.git" "${{ runner.temp }}/3rd"
+          git -C "${{ runner.temp }}/3rd" checkout "${{ matrix.third_repo_sha }}"
 
       - name: Build openppp2
         run: |
@@ -73,14 +81,17 @@ jobs:
         include:
           - arch: arm64
             third_repo: Liz-Nozomi/openppp2-macos-arm64-environment
+            third_repo_sha: 56d8b2e08956564ce1e916da9f17dad6b6c38a26
           - arch: x86_64
             third_repo: liulilittle/openppp2-macos-amd64-environment
+            third_repo_sha: b1c9ca285c0154c57c443263c0b334bc7064ca2a
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Clone third-party environment
         run: git clone --depth 1 "https://github.com/${{ matrix.third_repo }}.git" "${{ runner.temp }}/3rd"
+          git -C "${{ runner.temp }}/3rd" checkout "${{ matrix.third_repo_sha }}"
 
       - name: Build openppp2 (ASan)
         run: |

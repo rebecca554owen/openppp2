@@ -54,6 +54,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Iterate over each configuration file
+failures=0
 for config_file in "$CONFIGS_DIR"/*; do
     # Skip if not a regular file
     [ -f "$config_file" ] || continue
@@ -79,6 +80,7 @@ for config_file in "$CONFIGS_DIR"/*; do
     THIRD_PARTY_LIBRARY_DIR="$THIRD_PARTY_ROOT" cmake .. -DCMAKE_BUILD_TYPE=Release
     if [ $? -ne 0 ]; then
         echo "CMake configuration failed for $config_name"
+        failures=$((failures + 1))
         restore_original
         continue
     fi
@@ -88,6 +90,7 @@ for config_file in "$CONFIGS_DIR"/*; do
     make -j$(nproc)
     if [ $? -ne 0 ]; then
         echo "Build failed for $config_name"
+        failures=$((failures + 1))
         restore_original
         continue
     fi
@@ -105,6 +108,7 @@ for config_file in "$CONFIGS_DIR"/*; do
 
     if [ -z "$ppp_executable" ] || [ ! -f "$ppp_executable" ]; then
         echo "Could not find ppp executable for $config_name"
+        failures=$((failures + 1))
         restore_original
         continue
     fi
@@ -115,6 +119,7 @@ for config_file in "$CONFIGS_DIR"/*; do
         cp "$ppp_executable" "$BIN_DIR/ppp"
         if [ ! -f "$BIN_DIR/ppp" ]; then
             echo "Failed to copy ppp to $BIN_DIR/ppp"
+            failures=$((failures + 1))
             restore_original
             continue
         fi
@@ -143,4 +148,8 @@ for config_file in "$CONFIGS_DIR"/*; do
     restore_original
 done
 
+if [ "$failures" -gt 0 ]; then
+    echo "ERROR: $failures build(s) failed." >&2
+    exit 1
+fi
 echo "All builds completed."

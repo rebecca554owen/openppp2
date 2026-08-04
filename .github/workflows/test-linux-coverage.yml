@@ -43,14 +43,14 @@ jobs:
           if [ ! -d build-cov ]; then exit 0; fi
           cmake --build build-cov
           cd build-cov
-          export LLVM_PROFILE_FILE=default.profraw
+          export LLVM_PROFILE_FILE="%p-%m.profraw"
           ctest --output-on-failure
 
       - name: Report coverage
         run: |
-          if [ ! -f build-cov/default.profraw ]; then exit 0; fi
+          if [ ! -f build-cov/*.profraw ]; then exit 0; fi
           cd build-cov
-          llvm-profdata merge -sparse default.profraw -o default.profdata
+          llvm-profdata merge -sparse *.profraw -o default.profdata
           llvm-cov report ./tests/openppp2_tests -instr-profile=default.profdata \
             ../ppp/app/ApplicationMode.cpp \
             ../ppp/tap/TapStub.cpp \

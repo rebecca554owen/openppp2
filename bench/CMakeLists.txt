@@ -65,9 +65,12 @@ function(ppp_add_bench target)
     target_compile_definitions(${target} PRIVATE FUNCTION __SIMD__)
     target_compile_options(${target} PRIVATE
         -O3 -DNDEBUG
-        -maes -msse2 -mpclmul
         -Wno-format -Wno-deprecated-declarations
         -Wno-tautological-constant-out-of-range-compare)
+    # AES-NI intrinsics are x86-only; -maes hard-fails on ARM/macOS.
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|i[3-6]86|amd64)$")
+        target_compile_options(${target} PRIVATE -maes -msse2 -mpclmul)
+    endif()
 
     if(ENABLE_ASAN)
         target_compile_options(${target} PRIVATE -fsanitize=address -fno-omit-frame-pointer)
@@ -110,7 +113,10 @@ ppp_add_bench(bm_packet_codec SOURCES udp/bm_packet_codec.cpp
 ppp_add_bench(bm_allocator SOURCES udp/bm_allocator.cpp
     support/bench_stubs.cpp support/bench_pool_stub.cpp support/buddy_impl.cpp
     ${PPP_POOL_SRCS})
-target_link_libraries(bm_allocator PRIVATE rt)
+# librt (shm_open etc.) is Linux-only; macOS provides it in libSystem.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(bm_allocator PRIVATE rt)
+endif()
 
 ppp_add_bench(compat_check SOURCES udp/compat_check.cpp
     support/bench_stubs.cpp support/bench_alloc_stub.cpp
@@ -123,7 +129,9 @@ ppp_add_bench(evp_simd_test SOURCES udp/evp_simd_test.cpp
 ppp_add_bench(allocator_stress SOURCES udp/allocator_stress.cpp
     support/bench_stubs.cpp support/bench_pool_stub.cpp support/buddy_impl.cpp
     ${PPP_POOL_SRCS})
-target_link_libraries(allocator_stress PRIVATE rt)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(allocator_stress PRIVATE rt)
+endif()
 
 # ---- P0 micro-benchmarks (Phase 2) -------------------------------------------
 

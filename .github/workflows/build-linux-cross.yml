@@ -32,6 +32,7 @@ jobs:
 
       - name: Clone third-party environment
         run: git clone --depth 1 https://github.com/liulilittle/openppp2-ubuntu-3rd-environment.git "${{ runner.temp }}/3rd"
+          git -C "${{ runner.temp }}/3rd" checkout a4defe073d998a35f5862b75179e55a1ed6da6a7
 
       - name: Install cross-compiler
         run: |
