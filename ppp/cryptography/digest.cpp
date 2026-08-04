@@ -96,8 +96,14 @@ namespace ppp {
                 }
                 else {
                     Byte md5[16];
-                    int md5len;
+                    // initialize the variable to prevent undefined behavior
+                    int md5len = 16;
                     if (!ComputeMD5(ppp::string((char*)data, size), md5, md5len)) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
+                        return false;
+                    }
+                    // Add overflow protection
+                    if (md5len < 0 || md5len > 16) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
                         return false;
                     }

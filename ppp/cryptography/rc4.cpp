@@ -152,7 +152,7 @@ namespace ppp {
                 return false;
             }
 
-            unsigned char x = (unsigned char)(E ? subtract : -subtract); // Extra additive constant for confusion
+            unsigned char x = (unsigned char)(E ? subtract : subtract);
             /**
              * @brief Core PRGA loop with custom index progression and post-XOR offset.
              */
@@ -168,8 +168,8 @@ namespace ppp {
 
                 mid = (sbox[low] + sbox[high]) % sboxlen; // Standard formula for output index
                 if (E) {
-                    // Encryption: data = (data xor S[mid]) - x
-                    data[i] = (unsigned char)((data[i] ^ sbox[mid]) - x);
+                    // Encryption: data = (data xor S[mid]) + x
+                    data[i] = (unsigned char)((data[i] ^ sbox[mid]) + x);
                 }
                 else {
                     // Decryption: data = (data - x) xor S[mid]
@@ -269,6 +269,15 @@ namespace ppp {
             }
         }
 
+        RC4::~RC4() noexcept {
+            if (!_password.empty()) {
+                OPENSSL_cleanse(const_cast<char*>(_password.data()), _password.size());
+            }
+            if (_sbox) {
+                OPENSSL_cleanse(_sbox.get(), RC4_MAXBIT);
+            }
+        }
+
         /**
          * @brief Encrypts input data into an allocated output buffer.
          * @param allocator Buffer allocator.
@@ -307,9 +316,19 @@ namespace ppp {
 
             memcpy(plaintext.get(), data, datalen);
 
-            // Uses the variant with (low + keylen) % sboxlen – another intentional modification.
+            std::shared_ptr<Byte> sbox_copy = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, RC4_MAXBIT);
+            if (NULLPTR == sbox_copy) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                return NULLPTR;
+            }
+
+            {
+                std::lock_guard<std::mutex> scope(_syncobj);
+                memcpy(sbox_copy.get(), _sbox.get(), RC4_MAXBIT);
+            }
+
             if (!rc4_crypt_sbox_c((unsigned char*)_password.data(), _password.size(),
-                (unsigned char*)_sbox.get(), RC4_MAXBIT, (unsigned char*)plaintext.get(), datalen, _subtract, _E)) {
+                (unsigned char*)sbox_copy.get(), RC4_MAXBIT, (unsigned char*)plaintext.get(), datalen, _subtract, _E)) {
                 if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4CryptSboxCFailedWithoutSpecificError);
                 }

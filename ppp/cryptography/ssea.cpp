@@ -563,13 +563,11 @@ namespace ppp
 
             next *= 1103515245;
             next += 12345;
-            result <<= 10;
-            result ^= (unsigned int)(next / 65536) % 1024;
+            result = (result << 10) | ((unsigned int)(next / 65536) % 1024);
 
             next *= 1103515245;
             next += 12345;
-            result <<= 10;
-            result ^= (unsigned int)(next / 65536) % 1024;
+            result = (result << 10) | ((unsigned int)(next / 65536) % 1024);
 
             *seed = next;
             return result;
@@ -592,10 +590,17 @@ namespace ppp
         // Returns:
         //   Random integer within the range.
         // -----------------------------------------------------------------------------
-        int ssea::random_next(unsigned int* seed, int min, int max) noexcept 
+        int ssea::random_next(unsigned int* seed, int min, int max) noexcept
         {
+            /* Guard against max<min and avoid division by zero/negative modulo */
+            if (max < min)
+            {
+                return min;
+            }
+
             int v = random_next(seed);
-            return v % (max - min + 1) + min;
+            int range = max - min + 1;
+            return (v % range) + min;
         }
 
         /**
@@ -643,12 +648,16 @@ namespace ppp
                 kf = ssea::random_next((unsigned int*)&kf);
             }
 
-            int32_t* p32 = (int32_t*)min;
+            /* Use memcpy to avoid strict aliasing violation and potential SIGBUS on ARM */
+            uint8_t* p8 = (uint8_t*)min;
             // Process 32-bit words
             for (int i = 0; i < count; i++)
             {
-                *p32 = *p32 ^ kf;
-                p32++;
+                uint32_t word;
+                memcpy(&word, p8, sizeof(word));
+                word ^= static_cast<uint32_t>(kf);
+                memcpy(p8, &word, sizeof(word));
+                p8 += 4;
 
                 if constexpr (kf_random_next)
                 {
@@ -656,12 +665,14 @@ namespace ppp
                 }
             }
 
-            int16_t* p16 = (int16_t*)p32;
             // Process the next 16 bits if remainder >=2
             if (remainder >> 1)
             {
-                *p16 = (int16_t)(*p16 ^ kf);
-                p16++;
+                uint16_t halfword;
+                memcpy(&halfword, p8, sizeof(halfword));
+                halfword ^= static_cast<uint16_t>(kf);
+                memcpy(p8, &halfword, sizeof(halfword));
+                p8 += 2;
 
                 if constexpr (kf_random_next)
                 {
@@ -669,7 +680,6 @@ namespace ppp
                 }
             }
 
-            int8_t* p8 = (int8_t*)p16;
             // Process the last byte if remainder is odd
             if (remainder & 1) 
             {

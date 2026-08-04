@@ -244,7 +244,13 @@ namespace aesni {
         }
     }
 
-    // AES-256-GCM encryption
+    // SECURITY WARNING: This is NOT a secure GCM implementation!
+    // It only performs CTR mode encryption without GHASH authentication tag generation/verification.
+    // This provides NO authenticity or integrity protection and is vulnerable to tampering.
+    // MUST be replaced with OpenSSL EVP_aes_*_gcm() for production use.
+    // See: https://wiki.openssl.org/index.php/EVP_Authenticated_Encryption_and_Decryption
+    //
+    // AES-256-GCM encryption (INCOMPLETE - missing GHASH authentication)
     void aes256_gcm_encrypt(uint8_t* ciphertext, const uint8_t* plaintext, size_t len, const uint8_t* iv, size_t iv_len, const __m128i* round_key) noexcept {
         // Step 1: Compute H = E_k(0^128)
         __m128i H = aes256_encrypt_block(_mm_setzero_si128(), round_key);
@@ -279,7 +285,12 @@ namespace aesni {
         gctr(ciphertext, plaintext, len, round_key, icb);
     }
 
-    // AES-256-GCM decryption
+    // SECURITY WARNING: This is NOT a secure GCM implementation!
+    // It only performs CTR mode decryption without GHASH authentication tag verification.
+    // This provides NO authenticity or integrity protection and is vulnerable to tampering.
+    // MUST be replaced with OpenSSL EVP_aes_*_gcm() for production use.
+    //
+    // AES-256-GCM decryption (INCOMPLETE - missing GHASH authentication)
     void aes256_gcm_decrypt(uint8_t* plaintext, const uint8_t* ciphertext, size_t len, const uint8_t* iv, size_t iv_len, const __m128i* round_key) noexcept {
         // Step 1: Compute H = E_k(0^128)
         __m128i H = aes256_encrypt_block(_mm_setzero_si128(), round_key);
