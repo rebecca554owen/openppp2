@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Copyright  : Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.
 # Description: PPP PRIVATE NETWORK™ 1 LINUX BUILD SCRIPT CROSS.(X) 1.0.0 VERSION.
@@ -26,6 +27,8 @@ PPP_THIRD_PARTY_LIBRARY_DIR() {
         echo $THIRD_PARTY_LIBRARY_PATH
         return
     fi
+
+    return 1
 }
 
 PPP_build() {
@@ -34,14 +37,15 @@ PPP_build() {
         PLATFORM="amd64"
     fi
 
-    THIRD_PARTY_LIBRARY_DIR=$(PPP_THIRD_PARTY_LIBRARY_DIR $1 $PLATFORM)
-    if [ -z "$THIRD_PARTY_LIBRARY_DIR" ]; then
+    THIRD_PARTY_LIBRARY_DIR=$(PPP_THIRD_PARTY_LIBRARY_DIR $1 $PLATFORM) || {
+        echo "skip $PLATFORM: no third-party library dir found" >&2
         return
-    fi
+    }
     
-    rm -rf build/
-    mkdir -p build/
-    cd build/
+    BUILD_DIR=build-$PLATFORM
+    rm -rf $BUILD_DIR
+    mkdir -p $BUILD_DIR
+    cd $BUILD_DIR
 
     ncpu=$(nproc)
     PLATFORM_LD=$3
@@ -58,7 +62,7 @@ PPP_build() {
 
     rm -rf ppp
     cd ../
-    rm -rf build/
+    rm -rf $BUILD_DIR
 }
 
 apt-get update -y

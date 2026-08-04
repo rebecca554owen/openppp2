@@ -5,7 +5,7 @@ Write-Host "============================================================"
 Write-Host " openppp2 Windows x64 Release Build Script"
 Write-Host "============================================================"
 
-$projDir = "E:\Desktop\openppp2-next\openppp2"
+$projDir = $PSScriptRoot
 $vcpkgRoot = "C:\vcpkg"
 $triplet = "x64-windows-static"
 $config = "Release"
@@ -64,8 +64,13 @@ Write-Host "cl.exe found: $clPath"
 Write-Host "`n[2/5] Setting up vcpkg..."
 if (-not (Test-Path "$vcpkgRoot\vcpkg.exe")) {
     Write-Host "Cloning vcpkg..."
-    if (Test-Path $vcpkgRoot) { Remove-Item -Recurse -Force $vcpkgRoot }
-    git clone https://github.com/microsoft/vcpkg.git $vcpkgRoot
+    if (Test-Path $vcpkgRoot) {
+        # Never delete a user-provided directory; reuse it instead.
+        Write-Host "vcpkg root exists but vcpkg.exe is missing - bootstrapping in place"
+    } else {
+        git clone https://github.com/microsoft/vcpkg.git $vcpkgRoot
+        if ($LASTEXITCODE -ne 0) { Write-Error "vcpkg clone failed"; exit 1 }
+    }
     Write-Host "Bootstrapping vcpkg..."
     & "$vcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
     if ($LASTEXITCODE -ne 0) {
@@ -74,10 +79,13 @@ if (-not (Test-Path "$vcpkgRoot\vcpkg.exe")) {
     }
 } else {
     Write-Host "vcpkg already installed at $vcpkgRoot"
-    # Update to latest
+    # Update to latest; fail loudly when the pull fails instead of building
+    # against a stale or half-updated tree.
     Push-Location $vcpkgRoot
     git pull
+    if ($LASTEXITCODE -ne 0) { Pop-Location; Write-Error "vcpkg update failed"; exit 1 }
     & "$vcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
+    if ($LASTEXITCODE -ne 0) { Pop-Location; Write-Error "vcpkg bootstrap failed"; exit 1 }
     Pop-Location
 }
 

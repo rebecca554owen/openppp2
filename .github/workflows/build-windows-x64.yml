@@ -45,7 +45,7 @@ jobs:
         run: |
           $vcpkgPath = "C:\vcpkg"
           if (-not (Test-Path $vcpkgPath)) {
-            git clone https://github.com/microsoft/vcpkg.git $vcpkgPath
+            git clone --depth 1 --branch 2026.07.29 https://github.com/microsoft/vcpkg.git $vcpkgPath
             cd $vcpkgPath
             .\bootstrap-vcpkg.bat
           } else {
@@ -96,6 +96,7 @@ jobs:
           msbuild .\ppp.vcxproj /m /restore `
             /p:Configuration=${{ matrix.configuration }} `
             /p:Platform=${{ matrix.platform }} `
+            /p:SolutionDir="$env:GITHUB_WORKSPACE\\" `
             /p:VcpkgEnableManifest=false `
             /p:VcpkgEnabled=true `
             /p:VcpkgUseStatic=true
@@ -107,9 +108,21 @@ jobs:
           $artifactDir = "artifact"
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 
-          foreach ($f in @('ppp.exe', 'PaperAirplane.dll', 'wintun.dll')) {
-            $src = Join-Path $out $f
+          # Required build output - fail loudly when missing so a broken
+          # artifact cannot be released silently.
+          $pppExe = Join-Path $out 'ppp.exe'
+          if (-not (Test-Path $pppExe)) {
+            Write-Error "Required build output missing: ppp.exe (expected at $pppExe)"
+            exit 1
+          }
+          Copy-Item $pppExe $artifactDir -Force
+
+          # Prebuilt companion binaries live under Driver/x64, not in the
+          # msbuild output - copy them from their real location.
+          foreach ($f in @('PaperAirplane.dll', 'wintun.dll')) {
+            $src = Join-Path $env:GITHUB_WORKSPACE "Driver\x64\$f"
             if (Test-Path $src) { Copy-Item $src $artifactDir -Force }
+            else { Write-Warning "Optional companion binary missing: Driver\x64\$f" }
           }
 
           # Driver binaries (x64)
