@@ -107,6 +107,19 @@ namespace ppp {
                 return chunk;
             }
 
+            /**
+             * @brief Zero-copy slice overload of @ref Copy.
+             *
+             * @warning The returned shared_ptr aliases @p owner's buffer WITHOUT
+             *          copying. Callers MUST guarantee @p data points inside
+             *          @p owner's allocation (i.e. the owner buffer is NOT reused
+             *          or overwritten until the returned slice is consumed) and
+             *          MUST consume the slice synchronously or keep the source
+             *          region stable for the slice's whole lifetime. Reusing the
+             *          source buffer before consumption silently corrupts data.
+             *          Prefer the copy-based overload unless the fast path is
+             *          proven safe on the calling path.
+             */
             std::shared_ptr<Byte> IAsynchronousWriteIoQueue::Copy(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const std::shared_ptr<Byte>& owner, const void* data, int datalen) noexcept {
                 if (NULLPTR == data || 1 > datalen) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueCopyInvalidArguments);

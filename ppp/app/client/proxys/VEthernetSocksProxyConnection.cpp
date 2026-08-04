@@ -696,7 +696,11 @@ namespace ppp {
                             bool disposing = false;
                             if (ec == boost::system::errc::success) {
                                 if (sz > 0) {
-                                    std::shared_ptr<Byte> packet = ppp::net::asio::IAsynchronousWriteIoQueue::Copy(allocator, udp_buffer, udp_buffer.get(), (int)sz);
+                                    // NOTE: must copy, not zero-copy slice. udp_buffer_ is a
+                                    // reused receive buffer; the packet is consumed asynchronously
+                                    // via YieldContext::Spawn below, so the next async_receive_from
+                                    // would overwrite a slice before ForwardUdpAssociatePacket runs.
+                                    std::shared_ptr<Byte> packet = ppp::net::asio::IAsynchronousWriteIoQueue::Copy(allocator, udp_buffer.get(), (int)sz);
                                     if (NULLPTR == packet) {
                                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                                     }

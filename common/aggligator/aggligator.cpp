@@ -1814,6 +1814,7 @@ namespace aggligator
     //----------------------------------------------------------------------------
     bool aggligator::convergence::input(Byte* packet, int packet_length, const std::shared_ptr<Byte>& owner) noexcept
     {
+        (void)owner;                                                         // Kept for signature compatibility; the out-of-order path must copy (see below)
         if (NULLPTR == packet || packet_length < 4)                         // Need at least sequence number
         {
             return false;
@@ -1902,16 +1903,17 @@ namespace aggligator
         }
 
         // Out-of-order packet: store in receive queue (sorted by seq)
+        // NOTE: this branch must ALWAYS copy. The connection receive buffer
+        // (connection::buffer_) is a single reusable buffer: the next async_read
+        // overwrites it before the queued packet is delivered once the missing
+        // sequence arrives. A zero-copy slice (wrap_shared_pointer) would point
+        // into that reused buffer and silently deliver corrupted payload.
         recv_packet r;
         r.seq = seq;
         r.length = packet_length;
-        if (owner) {
-            r.packet = ppp::wrap_shared_pointer(packet, owner);              // Zero-copy slice
-        } else {
-            r.packet = aggligator->make_shared_bytes(packet_length);         // Copy data
-            if (r.packet) {
-                memcpy(r.packet.get(), packet, packet_length);
-            }
+        r.packet = aggligator->make_shared_bytes(packet_length);         // Copy data
+        if (r.packet) {
+            memcpy(r.packet.get(), packet, packet_length);
         }
         if (r.packet)
         {
