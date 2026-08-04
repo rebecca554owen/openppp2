@@ -1077,7 +1077,7 @@ namespace ppp {
             }
 
             /**
-             * @brief Security posture warnings (P0-2).
+             * @brief Security posture warnings.
              *
              * Weak keys, example keys, short keys and plaintext mode are detected here
              * and surfaced as non-fatal warnings.  They never block startup — the
@@ -1110,7 +1110,7 @@ namespace ppp {
                 }
 
                 /**
-                 * @brief Legacy cipher algorithm warnings (P1-7).
+                 * @brief Legacy cipher algorithm warnings.
                  *
                  * Detects RC4, single-DES, Blowfish, CAST5, SEED, IDEA and
                  * cipher key lengths below 128 bits.  These warnings never

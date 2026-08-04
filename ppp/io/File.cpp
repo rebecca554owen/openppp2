@@ -272,6 +272,16 @@ namespace ppp {
                     ppp::diagnostics::ErrorCode::FileOpenFailed, std::shared_ptr<Byte>());
             }
 
+            /* Check file size before reading to detect >2GB files that would be silently truncated by MemoryStream's int limit */
+            fseek(file_, 0, SEEK_END);
+            long file_size = ftell(file_);
+            fseek(file_, 0, SEEK_SET);
+
+            if (file_size > std::numeric_limits<int>::max()) {
+                fclose(file_);
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::FileReadFailed, std::shared_ptr<Byte>());
+            }
+
             MemoryStream stream_;
             char buff_[1400];
 
@@ -291,7 +301,7 @@ namespace ppp {
             }
 
             fclose(file_);
-            
+
             length = stream_.GetPosition();
             return stream_.GetBuffer();
         }
