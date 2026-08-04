@@ -194,10 +194,13 @@ class VmuxBenchmarkContractTests(unittest.TestCase):
             fakebin.mkdir()
             output.mkdir()
             iperf = fakebin / "iperf3"
+            prepare_hook = fakebin / "prepare-hook"
             fake_iperf = (
                 "#!/bin/sh\n"
                 "printf '%s\\n' '{\"end\":{\"sum_received\":{\"bits_per_second\":1000000}}}'\n"
             )
+            prepare_hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            prepare_hook.chmod(0o755)
             telemetry = directory / "telemetry.json"
             manifest = directory / "endpoints.json"
             telemetry.write_text(
@@ -227,6 +230,7 @@ class VmuxBenchmarkContractTests(unittest.TestCase):
                 encoding="utf-8",
             )
             rel_bin = fakebin.relative_to(ROOT).as_posix()
+            rel_prepare_hook = prepare_hook.relative_to(ROOT).as_posix()
             rel_output = output.relative_to(ROOT).as_posix()
             rel_telemetry = telemetry.relative_to(ROOT).as_posix()
             rel_manifest = manifest.relative_to(ROOT).as_posix()
@@ -235,7 +239,8 @@ class VmuxBenchmarkContractTests(unittest.TestCase):
                 f"chmod +x {shlex.quote(rel_bin + '/iperf3')} && "
                 f"PATH=\"{rel_bin}:$PATH\" benchmarks/vmux/run.sh --execute "
                 f"--scenario flow-one-flow --duration 1 --server 127.0.0.1 "
-                f"--telemetry {shlex.quote(rel_telemetry)} --prepare-hook /bin/true "
+                f"--telemetry {shlex.quote(rel_telemetry)} "
+                f"--prepare-hook {shlex.quote(rel_prepare_hook)} "
                 f"--endpoint-manifest {shlex.quote(rel_manifest)} "
                 f"--output {shlex.quote(rel_output)}"
             )

@@ -1,7 +1,10 @@
 #!/bin/sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-cmake -S "$ROOT/tests/cpp" -B "$ROOT/build/test" -G Ninja -DENABLE_COVERAGE=ON
+THIRD_PARTY=${THIRD_PARTY_LIBRARY_DIR:-"$ROOT/third-party"}
+cmake -S "$ROOT/tests/cpp" -B "$ROOT/build/test" -G Ninja \
+  -DTHIRD_PARTY_LIBRARY_DIR="$THIRD_PARTY" \
+  -DENABLE_COVERAGE=ON
 cmake --build "$ROOT/build/test" --target p2p_replay_window_test dns_buffer_test base64_test
 mkdir -p "$ROOT/build/coverage"
 LLVM_PROFILE_FILE="$ROOT/build/coverage/%p-%m.profraw" \

@@ -7,6 +7,9 @@
 # to ASan/UBSan).
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-cmake -S "$ROOT/tests/cpp" -B "$ROOT/build/test-tsan" -G Ninja -DENABLE_TSAN=ON
+THIRD_PARTY=${THIRD_PARTY_LIBRARY_DIR:-"$ROOT/third-party"}
+cmake -S "$ROOT/tests/cpp" -B "$ROOT/build/test-tsan" -G Ninja \
+  -DTHIRD_PARTY_LIBRARY_DIR="$THIRD_PARTY" \
+  -DENABLE_TSAN=ON
 cmake --build "$ROOT/build/test-tsan"
 ctest --test-dir "$ROOT/build/test-tsan" --output-on-failure
