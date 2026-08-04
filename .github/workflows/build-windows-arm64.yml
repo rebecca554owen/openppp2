@@ -106,9 +106,21 @@ jobs:
           $artifactDir = "artifact"
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 
-          foreach ($f in @('ppp.exe', 'PaperAirplane.dll', 'wintun.dll')) {
-            $src = Join-Path $out $f
+          # Required build output - fail loudly when missing so a broken
+          # artifact cannot be released silently.
+          $pppExe = Join-Path $out 'ppp.exe'
+          if (-not (Test-Path $pppExe)) {
+            Write-Error "Required build output missing: ppp.exe (expected at $pppExe)"
+            exit 1
+          }
+          Copy-Item $pppExe $artifactDir -Force
+
+          # Prebuilt companion binaries live under Driver/x64, not in the msbuild
+          # output - copy them from their real location.
+          foreach ($f in @('PaperAirplane.dll', 'wintun.dll')) {
+            $src = Join-Path $env:GITHUB_WORKSPACE "Driver\x64\$f"
             if (Test-Path $src) { Copy-Item $src $artifactDir -Force }
+            else { Write-Warning "Optional companion binary missing: Driver\x64\$f" }
           }
 
           # Driver binaries (ARM64)

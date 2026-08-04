@@ -140,7 +140,7 @@ IF(PLATFORM_DEBUG)
         SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_DEBUG -g3")
     ENDIF()
 ELSEIF(NOT MSVC)
-    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3")
+    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -DNDEBUG")
 ENDIF()
 
 # C/CXX
@@ -151,7 +151,7 @@ IF(PLATFORM_DEBUG)
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_DEBUG -g3")
     ENDIF()
 ELSEIF(NOT MSVC)
-    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG")
 ENDIF()
 
 IF(MSVC AND NOT PLATFORM_DEBUG)
@@ -312,7 +312,16 @@ ELSE()
 ENDIF()
 
 # Set the tripartite library directorys.
-SET(THIRD_PARTY_LIBRARY_DIR /root/dev CACHE PATH "Third-party library root directory")
+# P1-5.3: Use $ENV{HOME}/dev as default (works on macOS/Windows/Linux), fallback to /root/dev for CI
+IF(DEFINED ENV{HOME})
+    SET(THIRD_PARTY_LIBRARY_DIR "$ENV{HOME}/dev" CACHE PATH "Third-party library root directory")
+ELSE()
+    SET(THIRD_PARTY_LIBRARY_DIR /root/dev CACHE PATH "Third-party library root directory")
+ENDIF()
+
+IF(NOT PLATFORM_SYSTEM_WINDOWS AND NOT EXISTS "${THIRD_PARTY_LIBRARY_DIR}")
+    MESSAGE(FATAL_ERROR "THIRD_PARTY_LIBRARY_DIR '${THIRD_PARTY_LIBRARY_DIR}' does not exist. Pass -DTHIRD_PARTY_LIBRARY_DIR=<path> to point at the third-party tree.")
+ENDIF()
 
 IF(PLATFORM_SYSTEM_WINDOWS)
     SET(OPENSSL_USE_STATIC_LIBS TRUE)

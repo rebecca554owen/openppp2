@@ -100,15 +100,33 @@ jobs:
 
       - name: Prepare release assets
         run: |
+          set -euo pipefail
           mkdir -p release-assets
-          find artifacts -type f -size +0c \
-            \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.apk' \) \
-            -exec cp {} release-assets/ \;
 
-          if ! find release-assets -maxdepth 1 -type f -print -quit | grep -q .; then
-            echo "No non-empty release assets found"
-            exit 1
-          fi
+          workflows=(
+            "build-android.yml"
+            "build-linux-amd64.yml"
+            "build-linux-cross.yml"
+            "build-macos.yml"
+            "build-windows-x64.yml"
+            "build-windows-arm64.yml"
+            "build-go-guardian.yml"
+          )
+
+          # Require at least one non-empty archive from every expected workflow
+          # so a half-built matrix cannot silently produce a partial release.
+          for workflow in "${workflows[@]}"; do
+            artifact_dir="artifacts/${workflow%.yml}"
+            count=$(find "$artifact_dir" -type f -size +0c \
+              \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.apk' \) | wc -l)
+            if [ "$count" -eq 0 ]; then
+              echo "::error::No non-empty release asset from $workflow (dir: $artifact_dir)"
+              exit 1
+            fi
+            find "$artifact_dir" -type f -size +0c \
+              \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.apk' \) \
+              -exec cp {} release-assets/ \;
+          done
 
           echo "Release assets:"
           find release-assets -maxdepth 1 -type f -printf '%f\t%s bytes\n' | sort
