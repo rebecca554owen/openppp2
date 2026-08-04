@@ -55,7 +55,11 @@ class OtlpExporter {
         .timeout(const Duration(seconds: 12));
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      final body = response.body;
+      const maxBodyLength = 64 * 1024;
+      var body = response.body;
+      if (body.length > maxBodyLength) {
+        body = body.substring(0, maxBodyLength);
+      }
       throw OtlpExportException(
         body.isEmpty
             ? 'OpenTelemetry 上传失败：HTTP ${response.statusCode}'
