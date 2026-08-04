@@ -35,12 +35,14 @@ namespace ppp {
         std::shared_ptr<Byte> Ciphertext::Encrypt(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, Byte* data, int datalen, int& outlen) noexcept {
             outlen = -1;
 
-            if (NULLPTR != evp_) {
-                return evp_->Encrypt(allocator, data, datalen, outlen);
+            std::shared_ptr<EVP> evp = evp_;
+            if (NULLPTR != evp) {
+                return evp->Encrypt(allocator, data, datalen, outlen);
             }
 
-            if (NULLPTR != rc4_) {
-                return rc4_->Encrypt(allocator, data, datalen, outlen);
+            std::shared_ptr<RC4> rc4 = rc4_;
+            if (NULLPTR != rc4) {
+                return rc4->Encrypt(allocator, data, datalen, outlen);
             }
 
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
@@ -58,12 +60,14 @@ namespace ppp {
         std::shared_ptr<Byte> Ciphertext::Decrypt(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, Byte* data, int datalen, int& outlen) noexcept {
             outlen = -1;
 
-            if (NULLPTR != evp_) {
-                return evp_->Decrypt(allocator, data, datalen, outlen);
+            std::shared_ptr<EVP> evp = evp_;
+            if (NULLPTR != evp) {
+                return evp->Decrypt(allocator, data, datalen, outlen);
             }
 
-            if (NULLPTR != rc4_) {
-                return rc4_->Decrypt(allocator, data, datalen, outlen);
+            std::shared_ptr<RC4> rc4 = rc4_;
+            if (NULLPTR != rc4) {
+                return rc4->Decrypt(allocator, data, datalen, outlen);
             }
 
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
