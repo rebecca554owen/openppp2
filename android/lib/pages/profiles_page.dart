@@ -92,7 +92,12 @@ class _ProfilesPageState extends State<ProfilesPage> {
         context: context,
         barrierDismissible: false,
         builder: (_) => const Center(child: CircularProgressIndicator()),
-      );
+      ).then((_) {
+        // The dialog was dismissed (e.g. by the system back button) before the
+        // fetch finished; mark it gone so the finally block does not pop the
+        // route on top of the home page and exit the app.
+        progressShown = false;
+      });
     }
 
     try {
@@ -102,7 +107,6 @@ class _ProfilesPageState extends State<ProfilesPage> {
         subscription: subscription,
       );
       if (!mounted) return;
-      if (progressShown) Navigator.of(context, rootNavigator: true).pop();
       await _load();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -110,7 +114,6 @@ class _ProfilesPageState extends State<ProfilesPage> {
       );
     } catch (e) {
       if (!mounted) return;
-      if (progressShown) Navigator.of(context, rootNavigator: true).pop();
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -124,6 +127,10 @@ class _ProfilesPageState extends State<ProfilesPage> {
           ],
         ),
       );
+    } finally {
+      if (progressShown && mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
     }
   }
 
