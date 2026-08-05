@@ -167,7 +167,7 @@ namespace ppp {
             bool                                                                                    InstallRecordProtectors(const ppp::cryptography::RecordKeyMaterial& material) noexcept;
             /**
              * @brief Derives v2.2.0 record keys from the handshake random material
-             *        (zero-configuration, protocol §2.3) and installs both direction
+             *        (zero-configuration, protocol section 2.3) and installs both direction
              *        protectors (call after handshake).
              * @return True when both protectors were installed.
              */

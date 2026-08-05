@@ -18,7 +18,7 @@ static int fail(const char* msg)
 
 int main()
 {
-    // 0. HKDF record key derivation (v2.2.0 §6 domain separation)
+    // 0. HKDF record key derivation (v2.2.0 section 6 domain separation)
     {
         std::array<uint8_t, 32> exporter = {};
         std::array<uint8_t, 32> handshake = {};
