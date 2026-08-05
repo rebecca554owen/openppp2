@@ -85,6 +85,12 @@ REGISTER(aes128cfb_simd,    "simd-aes-128-cfb");
 REGISTER(aes256cfb_openssl, "aes-256-cfb");
 REGISTER(aes256cfb_simd,    "simd-aes-256-cfb");
 
+// v2.2.0 EVP GCM vs SIMD pseudo-GCM baseline
+REGISTER(aes256gcm_openssl, "aes-256-gcm");
+REGISTER(aes128gcm_openssl,  "aes-128-gcm");
+REGISTER(simd_gcm256,        "simd-aes-256-gcm");
+REGISTER(simd_gcm128,        "simd-aes-128-gcm");
+
 #undef REGISTER
 
 BENCHMARK_MAIN();
