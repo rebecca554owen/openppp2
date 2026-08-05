@@ -1551,6 +1551,7 @@ namespace ppp {
                 ivv = TransportAuthHandshakeCapabilityCodec::EncodeServerIvv(
                     ivv, configuration_->server.transport_auth.enabled &&
                         !IsServerLoopbackIngress());
+                handshake_ivv_ = ivv;
                 if (!Transmission_Handshake_SessionId(configuration_, this, y, ivv)) {
                     return 0;
                 }
@@ -1676,6 +1677,7 @@ namespace ppp {
             }
 
             Int128 ivv = Transmission_Handshake_SessionId(configuration_, this, y);
+            handshake_ivv_ = ivv;
             if (ivv != 0) {
                 bool peer_supports_transport_auth_v1 = false;
                 bool peer_enables_transport_auth_v1 = false;
@@ -1886,9 +1888,102 @@ namespace ppp {
         // ITransmissionBridge binary encrypt/decrypt implementations.
         // -----------------------------------------------------------------------------
         /**
+         * @brief Installs the v2.2.0 AEAD record protectors for both directions.
+         * @param material Derived record key material.
+         * @return True when both protectors are installed and valid.
+         */
+        bool ITransmission::InstallRecordProtectors(const ppp::cryptography::RecordKeyMaterial& material) noexcept {
+            const std::uint8_t carrier_kind =
+                GetAuthenticatedCarrierKind() == AuthenticatedCarrierKind::WebSocket ? 1 : 0;
+            auto send = std::make_shared<ppp::cryptography::AuthenticatedRecordProtector>(
+                material.client_to_server_key,
+                material.client_to_server_nonce_prefix,
+                ppp::cryptography::RecordDirection::ClientToServer,
+                carrier_kind);
+            auto recv = std::make_shared<ppp::cryptography::AuthenticatedRecordProtector>(
+                material.server_to_client_key,
+                material.server_to_client_nonce_prefix,
+                ppp::cryptography::RecordDirection::ServerToClient,
+                carrier_kind);
+            if (!send->IsValid() || !recv->IsValid()) {
+                return false;
+            }
+
+            std::atomic_store(&record_protector_send_, std::move(send));
+            std::atomic_store(&record_protector_recv_, std::move(recv));
+            return true;
+        }
+
+        /**
+         * @brief Derives v2.2.0 record keys from the authenticated carrier exporter
+         *        and installs both direction protectors.
+         * @return True when both protectors were installed.
+         */
+        bool ITransmission::InstallRecordProtectorsFromHandshake() noexcept {
+            if (!IsHandshakeComplete()) {
+                return false;
+            }
+            if (IsRecordProtectionActive()) {
+                return true;   // idempotent
+            }
+            if (handshake_ivv_ == 0) {
+                return false;
+            }
+
+            // v2.2.0 zero-configuration record key derivation (protocol §2.3):
+            // input = handshake random ivv (16B) || configuration key, then HKDF.
+            ppp::cryptography::RecordKeyContext ctx;
+            std::array<std::uint8_t, 64> ikm{};
+            std::size_t ikm_len = 0;
+            const std::uint8_t* ivv_bytes = reinterpret_cast<const std::uint8_t*>(&handshake_ivv_);
+            for (std::size_t i = 0; i < sizeof(handshake_ivv_) && ikm_len < ikm.size(); ++i) {
+                ikm[ikm_len++] = ivv_bytes[i];
+            }
+            const ppp::string& pkey = configuration_->key.protocol_key;
+            for (std::size_t i = 0; i < pkey.size() && ikm_len < ikm.size(); ++i) {
+                ikm[ikm_len++] = static_cast<std::uint8_t>(pkey[i]);
+            }
+            ctx.exporter_secret = ikm.data();
+            ctx.exporter_secret_len = ikm_len;
+            ctx.carrier_kind =
+                GetAuthenticatedCarrierKind() == AuthenticatedCarrierKind::WebSocket ? 1 : 0;
+
+            ppp::cryptography::RecordKeyMaterial material;
+            if (!ppp::cryptography::DeriveRecordKeyMaterial(ctx, material)) {
+                return false;
+            }
+            return InstallRecordProtectors(material);
+        }
+
+        /**
          * @brief Encrypts payload via packet encryption path selected by cipher state.
          */
         std::shared_ptr<Byte> ITransmissionBridge::EncryptBinary(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept {
+            // v2.2.0 AEAD record layer: when installed, Seal() replaces the
+            // legacy double-CFB data path entirely.
+            std::shared_ptr<ppp::cryptography::AuthenticatedRecordProtector> protector =
+                std::atomic_load(&transmission->record_protector_send_);
+            if (protector && protector->IsValid()) {
+                if (datalen < 1 || NULLPTR == data) {
+                    outlen = ~0;
+                    return NULLPTR;
+                }
+                std::shared_ptr<Byte> output = ppp::threading::BufferswapAllocator::MakeByteArray(
+                    transmission->BufferAllocator, datalen + 28);
+                if (NULLPTR == output) {
+                    outlen = ~0;
+                    return NULLPTR;
+                }
+                std::size_t output_len = 0;
+                if (!protector->Seal(data, static_cast<std::size_t>(datalen),
+                                     output.get(), output_len)) {
+                    outlen = ~0;
+                    return NULLPTR;
+                }
+                outlen = static_cast<int>(output_len);
+                return output;
+            }
+
             bool safest = !transmission->handshaked_.load(std::memory_order_acquire);
             AppConfigurationPtr cfg = transmission->configuration_;
             const auto& alloc = transmission->BufferAllocator;
@@ -1909,6 +2004,32 @@ namespace ppp {
          * @brief Decrypts payload via packet decryption path selected by cipher state.
          */
         std::shared_ptr<Byte> ITransmissionBridge::DecryptBinary(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept {
+            // v2.2.0 AEAD record layer: when installed, Open() authenticates and
+            // reverses the record.  Authentication failures return null so the
+            // caller closes the carrier.
+            std::shared_ptr<ppp::cryptography::AuthenticatedRecordProtector> protector =
+                std::atomic_load(&transmission->record_protector_recv_);
+            if (protector && protector->IsValid()) {
+                if (datalen < 1 || NULLPTR == data) {
+                    outlen = ~0;
+                    return NULLPTR;
+                }
+                std::shared_ptr<Byte> output = ppp::threading::BufferswapAllocator::MakeByteArray(
+                    transmission->BufferAllocator, datalen);
+                if (NULLPTR == output) {
+                    outlen = ~0;
+                    return NULLPTR;
+                }
+                std::size_t output_len = 0;
+                if (!protector->Open(data, static_cast<std::size_t>(datalen),
+                                     output.get(), output_len)) {
+                    outlen = ~0;
+                    return NULLPTR;
+                }
+                outlen = static_cast<int>(output_len);
+                return output;
+            }
+
             bool safest = !transmission->handshaked_.load(std::memory_order_acquire);
             AppConfigurationPtr cfg = transmission->configuration_;
             const auto& alloc = transmission->BufferAllocator;

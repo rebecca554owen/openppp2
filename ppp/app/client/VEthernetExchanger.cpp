@@ -688,6 +688,11 @@ namespace ppp {
                         std::move(result))) {
                     return fail(ppp::diagnostics::ErrorCode::SessionAuthFailed);
                 }
+                // v2.2.0: acknowledgement fully received and verified in the
+                // legacy encoding; install the AEAD record protectors now (§9).
+                if (!transmission->InstallRecordProtectorsFromHandshake()) {
+                    return fail(ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                }
                 return true;
             }
 
