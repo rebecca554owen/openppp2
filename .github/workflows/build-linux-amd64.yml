@@ -200,7 +200,7 @@ jobs:
           wget -q "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
           tar zxf openssl-*.tar.gz && rm openssl-*.tar.gz
           mv openssl-* openssl
-          cd openssl && ./Configure && make -j$(nproc)
+          cd openssl && ./Configure no-asm && make -j$(nproc)
 
       - name: Build jemalloc
         if: steps.cache-third.outputs.cache-hit != 'true'
