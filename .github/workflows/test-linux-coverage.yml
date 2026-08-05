@@ -1,8 +1,6 @@
 name: Test · Linux coverage
 
 on:
-  push:
-    branches: [dev, main]
   workflow_dispatch:
 
 concurrency:
