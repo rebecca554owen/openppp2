@@ -1,6 +1,8 @@
 package ppp
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"log"
 	"os"
@@ -58,7 +60,12 @@ type AdminConfiguration struct {
 }
 
 func defaultManagedServerConfiguration() *ManagedServerConfiguration {
+	key := make([]byte, 16)
+	if _, err := rand.Read(key); err == nil {
+		key = []byte(hex.EncodeToString(key))
+	}
 	return &ManagedServerConfiguration{
+		Key:      string(key),
 		Prefixes: ":10000",
 		Path:     "/ppp/webhook",
 		Interfaces: &InterfacesConfiguration{
