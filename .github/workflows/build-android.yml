@@ -119,7 +119,7 @@ jobs:
             echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR"
             echo "TP=$TP"
             echo "BOOST_SRC_DIR=$TP/boost-src"
-            echo "BOOST_OUT_DIR=$TP/boost"
+            echo "BOOST_OUT_DIR=$TP/boost/$PPP_ANDROID_ABI"
             echo "OPENSSL_SRC_DIR=$TP/openssl-src"
             echo "OPENSSL_OUT_DIR=$TP/openssl/$PPP_ANDROID_ABI"
           } >> "$GITHUB_ENV"
@@ -173,8 +173,8 @@ jobs:
             mv "$extract" "$BOOST_SRC_DIR"
           fi
 
-          rm -rf "$BOOST_OUT_DIR/$PPP_ANDROID_ABI"
-          mkdir -p "$BOOST_OUT_DIR/$PPP_ANDROID_ABI"
+          rm -rf "$BOOST_OUT_DIR"
+          mkdir -p "$BOOST_OUT_DIR"
 
           user_config="$(mktemp)"
           cat > "$user_config" <<EOF
@@ -220,10 +220,10 @@ jobs:
             stage
 
           rm -f "$user_config"
-          find "$BOOST_OUT_DIR/stage/lib" -type f -name 'libboost_*.a' -exec cp {} "$BOOST_OUT_DIR/$PPP_ANDROID_ABI/" \;
+          find "$BOOST_OUT_DIR/stage/lib" -type f -name 'libboost_*.a' -exec cp {} "$BOOST_OUT_DIR/" \;
 
           for lib in system coroutine thread context regex filesystem; do
-            test -f "$BOOST_OUT_DIR/$PPP_ANDROID_ABI/libboost_${lib}.a"
+            test -f "$BOOST_OUT_DIR/libboost_${lib}.a"
           done
 
       - name: Verify Android third-party dependencies
@@ -234,30 +234,31 @@ jobs:
           test -d "$OPENSSL_OUT_DIR/include/openssl"
           test -f "$BOOST_SRC_DIR/boost/version.hpp"
           for lib in system coroutine thread context regex filesystem; do
-            test -f "$BOOST_OUT_DIR/$PPP_ANDROID_ABI/libboost_${lib}.a"
+            test -f "$BOOST_OUT_DIR/libboost_${lib}.a"
           done
 
       - name: Build openppp2
         run: |
           set -euo pipefail
           export PPP_ANDROID_ABI
-
+          build_dir="$GITHUB_WORKSPACE/build/android-actions/${{ matrix.abi }}"
           output_dir="$GITHUB_WORKSPACE/bin/android/${{ matrix.abi }}"
-          mkdir -p "$output_dir"
+          rm -rf "$build_dir"
+          mkdir -p "$build_dir" "$output_dir"
 
-          cd android && mkdir -p build && cd build
-          cmake .. \
+          cd "$build_dir"
+          cmake "$GITHUB_WORKSPACE/android" \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$output_dir" \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_TOOLCHAIN_FILE="${NDK_ROOT}/build/cmake/android.toolchain.cmake" \
             -DCMAKE_SYSTEM_NAME=Android \
             -DANDROID_ABI=${{ matrix.abi }} \
             -DANDROID_NATIVE_API_LEVEL=$ANDROID_API \
             -DANDROID_STL=c++_static \
+            -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$output_dir" \
             -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
             -DBOOST_ANDROID_INCLUDE_DIR="$BOOST_SRC_DIR" \
-            -DBOOST_ANDROID_LIB_DIR="$BOOST_OUT_DIR/$PPP_ANDROID_ABI" \
+            -DBOOST_ANDROID_LIB_DIR="$BOOST_OUT_DIR" \
             -DOPENSSL_ANDROID_ROOT="$OPENSSL_OUT_DIR"
           make -j"$(nproc)"
 
