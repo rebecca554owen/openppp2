@@ -6,10 +6,6 @@
 name: Build · Go Guardian
 
 on:
-  push:
-    branches: [dev, main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:

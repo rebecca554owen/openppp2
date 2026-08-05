@@ -6,10 +6,6 @@
 name: Build · Android
 
 on:
-  push:
-    branches: [dev, main]
-  pull_request:
-    branches: [main, codex/runtime-ui-lifecycle-integration]
   workflow_dispatch:
 
 concurrency:
