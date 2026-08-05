@@ -7,7 +7,7 @@ name: Build · Windows x64
 
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
   pull_request:
     branches: [main, codex/runtime-ui-lifecycle-integration]
   workflow_dispatch:
@@ -32,7 +32,7 @@ jobs:
         platform: [x64]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: microsoft/setup-msbuild@v2
         with:
@@ -56,7 +56,7 @@ jobs:
           & "$vcpkgPath\vcpkg.exe" integrate install
 
       - name: Cache vcpkg installed packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             C:\vcpkg\installed
@@ -156,7 +156,7 @@ jobs:
           if (Test-Path $zip) { Remove-Item $zip -Force }
           Compress-Archive -Path (Join-Path $artifactDir '*') -DestinationPath $zip -Force
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openppp2-windows-${{ matrix.platform }}-${{ matrix.configuration }}
           path: openppp2-windows-${{ matrix.platform }}-${{ matrix.configuration }}.zip

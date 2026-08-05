@@ -13,7 +13,7 @@ ADD_DEFINITIONS(-D_ANDROID)
 ADD_DEFINITIONS(-D_LINUX)
 ADD_DEFINITIONS(-DFUNCTION)
 ADD_DEFINITIONS(-DBUDDY_ALLOC_IMPLEMENTATION)
-ADD_DEFINITIONS(-D_ANDROID_REDEF_STD_IN_OUT_ERR)
+ADD_DEFINITIONS(-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION)
 SET(PROJECT_ROOT_DIR "${PROJECT_SOURCE_DIR}/../")
 
 # ENV.
@@ -79,7 +79,34 @@ SET(CMAKE_CXX_STANDARD 17)
 SET(CMAKE_EXE_LINKER_FLAGS "-static-libstdc++ -rdynamic -Wl,-Bstatic")
 
 # Set the tripartite library directorys.
-SET(THIRD_PARTY_LIBRARY_DIR /root/android CACHE PATH "Third-party library root directory")
+SET(THIRD_PARTY_LIBRARY_DIR "${PROJECT_ROOT_DIR}/third-party" CACHE PATH "Android third-party root directory")
+
+IF(NOT ANDROID_ABI)
+    MESSAGE(FATAL_ERROR "ANDROID_ABI is required for the Android build.")
+ENDIF()
+
+SET(BOOST_ANDROID_LIB_DIR "${THIRD_PARTY_LIBRARY_DIR}/boost/${ANDROID_ABI}" CACHE PATH "Android Boost static library directory")
+SET(OPENSSL_ANDROID_ROOT "${THIRD_PARTY_LIBRARY_DIR}/openssl-${ANDROID_ABI}" CACHE PATH "Android OpenSSL install root")
+SET(BOOST_ANDROID_INCLUDE_DIR "${THIRD_PARTY_LIBRARY_DIR}/boost-src" CACHE PATH "Android Boost include directory")
+SET(OPENSSL_ANDROID_INCLUDE_DIR "${OPENSSL_ANDROID_ROOT}/include")
+SET(OPENSSL_ANDROID_LIB_DIR "${OPENSSL_ANDROID_ROOT}/lib")
+
+SET(OPENPPP2_ANDROID_STATIC_LIBS
+    "${OPENSSL_ANDROID_LIB_DIR}/libssl.a"
+    "${OPENSSL_ANDROID_LIB_DIR}/libcrypto.a"
+    "${BOOST_ANDROID_LIB_DIR}/libboost_system.a"
+    "${BOOST_ANDROID_LIB_DIR}/libboost_coroutine.a"
+    "${BOOST_ANDROID_LIB_DIR}/libboost_thread.a"
+    "${BOOST_ANDROID_LIB_DIR}/libboost_context.a"
+    "${BOOST_ANDROID_LIB_DIR}/libboost_regex.a"
+    "${BOOST_ANDROID_LIB_DIR}/libboost_filesystem.a"
+)
+
+FOREACH(OPENPPP2_STATIC_LIB ${OPENPPP2_ANDROID_STATIC_LIBS})
+    IF(NOT EXISTS "${OPENPPP2_STATIC_LIB}")
+        MESSAGE(FATAL_ERROR "Missing Android static dependency: ${OPENPPP2_STATIC_LIB}")
+    ENDIF()
+ENDFOREACH()
 
 # Set the compiled header file search directorys.
 INCLUDE_DIRECTORIES(
@@ -89,14 +116,8 @@ INCLUDE_DIRECTORIES(
     ${PROJECT_ROOT_DIR}/common/lwip/my
     ${PROJECT_ROOT_DIR}/common/lwip/include
 
-    ${THIRD_PARTY_LIBRARY_DIR}/boost
-    ${THIRD_PARTY_LIBRARY_DIR}/openssl/$ENV{PPP_ANDROID_ABI}/include
-)
-
-# Set the third library connection directory to searchs.
-LINK_DIRECTORIES(
-    ${THIRD_PARTY_LIBRARY_DIR}/boost/$ENV{PPP_ANDROID_ABI}
-    ${THIRD_PARTY_LIBRARY_DIR}/openssl/$ENV{PPP_ANDROID_ABI}/lib
+    ${BOOST_ANDROID_INCLUDE_DIR}
+    ${OPENSSL_ANDROID_INCLUDE_DIR}
 )
 
 SET(BUILD_SHARED_LIBS ON)
@@ -130,23 +151,18 @@ FILE(GLOB_RECURSE SOURCE_FILES
     ${PROJECT_ROOT_DIR}/android/OpenPPP2VpnProtectBridge.cpp
     ${PROJECT_ROOT_DIR}/android/OpenPPP2TelemetryBridge.cpp)
 
+# Android uses MobileRoutePlatform. Do not compile the desktop route adapters
+# pulled in by the recursive ppp source glob.
+LIST(REMOVE_ITEM SOURCE_FILES
+    "${PROJECT_ROOT_DIR}/ppp/app/client/route/DarwinRoutePlatform.cpp"
+    "${PROJECT_ROOT_DIR}/ppp/app/client/route/LinuxRoutePlatform.cpp"
+    "${PROJECT_ROOT_DIR}/ppp/app/client/route/WindowsRoutePlatform.cpp")
+
 # Add the compiled output binary files.
 ADD_LIBRARY(${NAME} SHARED ${SOURCE_FILES} ${PLATFORM_SOURCE_FILES} ${AES_NI_SOURCE_FILES})
 
-# Set the compilation output files path.
-SET(LIBRARY_OUTPUT_PATH ${PROJECT_ROOT_DIR}/bin/android/${ANDROID_ABI})
-
 # Set up library connections to dependent libraries.
 TARGET_LINK_LIBRARIES(${NAME}
-    libssl.a
-    libcrypto.a
-
+    ${OPENPPP2_ANDROID_STATIC_LIBS}
     log
-    dl
-
-    libboost_system.a
-    libboost_coroutine.a
-    libboost_thread.a
-    libboost_context.a
-    libboost_regex.a
-    libboost_filesystem.a)
+    dl)

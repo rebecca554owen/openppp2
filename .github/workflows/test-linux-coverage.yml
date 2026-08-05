@@ -2,7 +2,7 @@ name: Test · Linux coverage
 
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
   workflow_dispatch:
 
 concurrency:
@@ -14,7 +14,7 @@ jobs:
     name: Unit tests + LLVM cov
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install build dependencies
         run: |

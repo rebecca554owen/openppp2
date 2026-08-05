@@ -7,7 +7,7 @@ name: Build · macOS
 
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
   pull_request:
     branches: [main, codex/runtime-ui-lifecycle-integration]
   workflow_dispatch:
@@ -35,10 +35,11 @@ jobs:
             third_repo_sha: b1c9ca285c0154c57c443263c0b334bc7064ca2a
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Clone third-party environment
-        run: git clone --depth 1 "https://github.com/${{ matrix.third_repo }}.git" "${{ runner.temp }}/3rd"
+        run: |
+          git clone --depth 1 "https://github.com/${{ matrix.third_repo }}.git" "${{ runner.temp }}/3rd"
           git -C "${{ runner.temp }}/3rd" checkout "${{ matrix.third_repo_sha }}"
 
       - name: Build openppp2
@@ -59,7 +60,7 @@ jobs:
           echo "ARTIFACT=$ARTIFACT" >> $GITHUB_ENV
           cd bin && zip -r "$ARTIFACT" ppp
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.ARTIFACT }}
           path: bin/${{ env.ARTIFACT }}
@@ -87,10 +88,11 @@ jobs:
             third_repo_sha: b1c9ca285c0154c57c443263c0b334bc7064ca2a
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Clone third-party environment
-        run: git clone --depth 1 "https://github.com/${{ matrix.third_repo }}.git" "${{ runner.temp }}/3rd"
+        run: |
+          git clone --depth 1 "https://github.com/${{ matrix.third_repo }}.git" "${{ runner.temp }}/3rd"
           git -C "${{ runner.temp }}/3rd" checkout "${{ matrix.third_repo_sha }}"
 
       - name: Build openppp2 (ASan)
@@ -112,7 +114,7 @@ jobs:
           echo "ARTIFACT_ASAN=$ARTIFACT" >> $GITHUB_ENV
           cd bin && zip -r "$ARTIFACT" ppp
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openppp2-darwin-${{ matrix.arch }}-asan
           path: bin/openppp2-darwin-${{ matrix.arch }}-asan.zip
