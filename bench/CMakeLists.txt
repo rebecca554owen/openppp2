@@ -92,6 +92,19 @@ ppp_add_bench(bm_crypto SOURCES udp/bm_crypto.cpp
     support/bench_stubs.cpp support/bench_alloc_stub.cpp
     ${PPP_CRYPTO_SRCS} ${PPP_AESNI_IMPL_SRCS})
 
+# v2.2.0 AEAD record protector functional tests (Seal/Open/tamper/replay/truncation).
+add_executable(bm_arp_test udp/bm_arp_test.cpp
+    support/bench_stubs.cpp support/bench_alloc_stub.cpp
+    "${OPENPPP2_ROOT}/ppp/cryptography/AuthenticatedRecordProtector.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/RecordKeyDerivation.cpp")
+target_compile_features(bm_arp_test PRIVATE cxx_std_17)
+target_include_directories(bm_arp_test PRIVATE ${OPENPPP2_BENCH_INCLUDES})
+target_compile_options(bm_arp_test PRIVATE
+    -O2 -DNDEBUG -Wno-deprecated-declarations
+    -Wno-tautological-constant-out-of-range-compare)
+target_link_libraries(bm_arp_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+add_test(NAME arp_functional COMMAND bm_arp_test)
+
 ppp_add_bench(bm_crypto_chain SOURCES udp/bm_crypto_chain.cpp
     support/bench_stubs.cpp support/bench_alloc_stub.cpp
     "${OPENPPP2_ROOT}/ppp/cryptography/ssea.cpp"

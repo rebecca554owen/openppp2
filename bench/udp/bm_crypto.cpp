@@ -47,6 +47,48 @@ static bool roundtrip_ok(const char* method) {
     return std::memcmp(dec.get(), data.data(), data.size()) == 0;
 }
 
+// v2.2.0: GCM must reject tampered ciphertext/tag (authentication check).
+static bool tamper_rejected(const char* method) {
+    auto c = make_benchmark_cipher(method);
+    std::vector<Byte> data = make_payload(256);
+
+    int enclen = 0;
+    std::shared_ptr<Byte> enc = c->Encrypt(nullptr, data.data(), (int)data.size(), enclen);
+    if (!enc || enclen <= 16) {
+        return false;
+    }
+
+    // Flip one bit in the final tag byte.
+    std::vector<Byte> tampered(enc.get(), enc.get() + enclen);
+    tampered[tampered.size() - 1] ^= 0x01;
+
+    int declen = 0;
+    std::shared_ptr<Byte> dec = c->Decrypt(nullptr, tampered.data(), (int)tampered.size(), declen);
+    return dec == nullptr;   // must be rejected
+}
+
+static void BM_TamperRejected(benchmark::State& state, const char* method) {
+    if (!Ciphertext::Support(ppp::string(method))) {
+        state.SkipWithError("cipher method not supported");
+        return;
+    }
+    if (!tamper_rejected(method)) {
+        state.SkipWithError("tampered record was NOT rejected - authentication broken");
+        return;
+    }
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(tamper_rejected(method));
+    }
+}
+
+#define REGISTER_TAMPER(name, method) \
+    BENCHMARK_CAPTURE(BM_TamperRejected, name, method)->Repetitions(3)
+
+REGISTER_TAMPER(aes256gcm_tamper, "aes-256-gcm");
+REGISTER_TAMPER(aes128gcm_tamper, "aes-128-gcm");
+
+#undef REGISTER_TAMPER
+
 static void BM_Encrypt(benchmark::State& state, const char* method) {
     if (!Ciphertext::Support(ppp::string(method))) {
         state.SkipWithError("cipher method not supported (simd-* needs __SIMD__ + AES-NI)");

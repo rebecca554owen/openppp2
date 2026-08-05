@@ -209,8 +209,12 @@ namespace ppp {
             }
 
             // ENCR-DATA
+            // GCM output = ciphertext (+ 16-byte tag); other modes may append a final block.
+            const bool gcm = EVP_CIPHER_mode(_cipher) == EVP_CIPH_GCM_MODE;
+            const int tag_len = gcm ? 16 : 0;
+            const int capacity = datalen + EVP_CIPHER_block_size(_cipher) + tag_len;
             int feedbacklen = datalen + EVP_CIPHER_block_size(_cipher);
-            std::shared_ptr<Byte> cipherText = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, feedbacklen);
+            std::shared_ptr<Byte> cipherText = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, capacity);
             if (NULLPTR == cipherText) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
@@ -223,15 +227,27 @@ namespace ppp {
                 return NULLPTR;
             }
 
-            // ⚠️ EVP_CipherFinal_ex is missing here - final block never output!
-            // MUST add:
-            //   int finalLen = 0;
-            //   if (EVP_CipherFinal_ex(_encryptCTX.get(), cipherText.get() + feedbacklen, &finalLen) < 1) {
-            //       outlen = ~0;
-            //       return NULLPTR;
-            //   }
-            //   feedbacklen += finalLen;
-            // For GCM, also extract tag with EVP_CIPHER_CTX_ctrl and append to output.
+            // EVP_CipherFinal_ex flushes any remaining block and, for GCM,
+            // finalizes the authentication tag computation.
+            int finalLen = 0;
+            if (EVP_CipherFinal_ex(_encryptCTX.get(), cipherText.get() + feedbacklen, &finalLen) < 1) {
+                outlen = ~0;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
+                return NULLPTR;
+            }
+            feedbacklen += finalLen;
+
+            // For GCM: extract the 16-byte authentication tag and append it to
+            // the ciphertext.  Without this the output is unauthenticated.
+            if (gcm) {
+                if (EVP_CIPHER_CTX_ctrl(_encryptCTX.get(), EVP_CTRL_GCM_GET_TAG, 16,
+                                        cipherText.get() + feedbacklen) < 1) {
+                    outlen = ~0;
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
+                    return NULLPTR;
+                }
+                feedbacklen += tag_len;
+            }
 
             outlen = feedbacklen;
             return cipherText;
@@ -289,29 +305,50 @@ namespace ppp {
             }
 
             // DECR-DATA
-            int feedbacklen = datalen + EVP_CIPHER_block_size(_cipher);
+            const bool gcm = EVP_CIPHER_mode(_cipher) == EVP_CIPH_GCM_MODE;
+            const int tag_len = gcm ? 16 : 0;
+            // For GCM the last 16 bytes of the input are the authentication tag.
+            if (gcm && datalen <= tag_len) {
+                outlen = ~0;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+                return NULLPTR;
+            }
+            const int ciphertext_len = gcm ? datalen - tag_len : datalen;
+
+            int feedbacklen = ciphertext_len + EVP_CIPHER_block_size(_cipher);
             std::shared_ptr<Byte> cipherText = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, feedbacklen);
             if (NULLPTR == cipherText) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
             }
 
+            // For GCM: provide the expected tag BEFORE the final call so that
+            // EVP_CipherFinal_ex verifies it.
+            if (gcm) {
+                if (EVP_CIPHER_CTX_ctrl(_decryptCTX.get(), EVP_CTRL_GCM_SET_TAG, tag_len,
+                                        const_cast<Byte*>(data + ciphertext_len)) < 1) {
+                    outlen = ~0;
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+                    return NULLPTR;
+                }
+            }
+
             if (EVP_CipherUpdate(_decryptCTX.get(),
-                cipherText.get(), &feedbacklen, data, datalen) < 1) {
+                cipherText.get(), &feedbacklen, data, ciphertext_len) < 1) {
                 outlen = ~0;
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                 return NULLPTR;
             }
 
-            // ⚠️ EVP_CipherFinal_ex is missing here - final block never decrypted!
-            // For GCM, tag verification never happens - accepting ANY ciphertext!
-            // MUST add:
-            //   int finalLen = 0;
-            //   if (EVP_CipherFinal_ex(_decryptCTX.get(), cipherText.get() + feedbacklen, &finalLen) < 1) {
-            //       outlen = ~0;
-            //       return NULLPTR;  // Will fail here if GCM tag verification fails
-            //   }
-            //   feedbacklen += finalLen;
+            // EVP_CipherFinal_ex verifies the GCM tag (fails on tampering) and
+            // flushes any remaining decrypted block.
+            int finalLen = 0;
+            if (EVP_CipherFinal_ex(_decryptCTX.get(), cipherText.get() + feedbacklen, &finalLen) < 1) {
+                outlen = ~0;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+                return NULLPTR;
+            }
+            feedbacklen += finalLen;
 
             outlen = feedbacklen;
             return cipherText;
@@ -348,11 +385,19 @@ namespace ppp {
                     break;
                 }
 
+                // GCM uses a 96-bit nonce; make it explicit for forward-compatibility.
+                if (EVP_CIPHER_mode(_cipher) == EVP_CIPH_GCM_MODE) {
+                    if ((exception = EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_GCM_SET_IVLEN, 12, NULLPTR) < 1)) {
+                        break;
+                    }
+                }
+
                 if ((exception = EVP_CIPHER_CTX_set_key_length(context.get(), EVP_CIPHER_key_length(_cipher)) < 1)) {
                     break;
                 }
 
-                if ((exception = EVP_CIPHER_CTX_set_padding(context.get(), 1) < 1)) {
+                // GCM has no padding; the flag is ignored for it but kept for CBC/ECB.
+                if ((exception = EVP_CIPHER_CTX_set_padding(context.get(), EVP_CIPH_GCM_MODE != EVP_CIPHER_mode(_cipher) ? 1 : 0) < 1)) {
                     break;
                 }
             }
