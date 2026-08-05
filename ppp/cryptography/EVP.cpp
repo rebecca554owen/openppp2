@@ -68,6 +68,27 @@ namespace ppp {
             return _aes.IsAttached();
         }
 
+        bool EVP::IsGcmMode() const noexcept {
+            return NULLPTR != _cipher &&
+                EVP_CIPHER_mode(_cipher) == EVP_CIPH_GCM_MODE;
+        }
+
+        /**
+         * @brief Determines whether a cipher method name contains a GCM (AEAD) marker.
+         * @param method Cipher method name.
+         * @return true when the name contains "gcm", case-insensitively.
+         */
+        static bool IsGcmMethodName(const ppp::string& method) noexcept {
+            for (std::size_t i = 0; i + 3 <= method.size(); ++i) {
+                if ((method[i] == 'g' || method[i] == 'G') &&
+                    (method[i + 1] == 'c' || method[i + 1] == 'C') &&
+                    (method[i + 2] == 'm' || method[i + 2] == 'M')) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         EVP::EVP(const ppp::string& method, const ppp::string& password) noexcept
             : _cipher(NULLPTR)
             , _method(method)
@@ -79,8 +100,13 @@ namespace ppp {
 
             ppp::string probe_method = method;
             const bool explicit_simd = method.compare(0, 5, "simd-") == 0;
+            // GCM (AEAD) method names must never be transparently promoted to their
+            // "simd-" variant: the SIMD GCM implementation is unauthenticated (CTR
+            // without tag), while a plain GCM name selects the real OpenSSL AEAD path
+            // with authentication tags.  Keep the original name for GCM traffic.
+            const bool gcm_method = IsGcmMethodName(method);
 
-            if (g_evp_simd_auto.load(std::memory_order_relaxed) && !explicit_simd) {
+            if (g_evp_simd_auto.load(std::memory_order_relaxed) && !explicit_simd && !gcm_method) {
                 ppp::string simd_variant = ppp::string("simd-") + method;
                 if (aesni::AES::Support(simd_variant)) {
                     probe_method = simd_variant;

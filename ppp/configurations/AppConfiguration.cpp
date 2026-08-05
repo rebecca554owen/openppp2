@@ -523,6 +523,33 @@ namespace ppp {
         }
 
         /**
+         * @brief Emits a telemetry warning when the configured cipher algorithm is an explicit GCM (AEAD) name.
+         *
+         * A plain GCM name (e.g. "aes-256-gcm") is kept as-is and never promoted to the
+         * unauthenticated SIMD GCM variant; the authenticated record layer is only
+         * installed after the transport-auth handshake completes, so explicit GCM
+         * configuration without transport-auth ARP activation cannot carry tags on the
+         * legacy equal-length data path.  Names starting with "simd-" request the
+         * unauthenticated SIMD variant on purpose and are not warned about.
+         *
+         * @param field Configuration field name ("protocol" / "transport").
+         * @param method Cipher algorithm name (e.g. "aes-256-gcm").
+         */
+        static void WarnExplicitGcmCipher(const ppp::string& field, const ppp::string& method) noexcept {
+            if (method.empty() || method.compare(0, 5, "simd-") == 0) {
+                return;
+            }
+
+            if (ToLower(method).find("gcm") == ppp::string::npos) {
+                return;
+            }
+
+            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "config",
+                "key.%s uses explicit gcm cipher; data path requires transport-auth ARP activation, keep simd-*-cfb otherwise",
+                field.c_str());
+        }
+
+        /**
          * @brief Trims selected string fields from configuration groups.
          * @param config Configuration object.
          * @param level Selection level for field groups.
@@ -1120,6 +1147,12 @@ namespace ppp {
                  */
                 WarnLegacyCipherAlgorithm(config.key.protocol);
                 WarnLegacyCipherAlgorithm(config.key.transport);
+
+                /* Explicit GCM (AEAD) algorithm names are preserved (never promoted to
+                 * the unauthenticated SIMD GCM variant); warn that the authenticated
+                 * data path requires transport-auth ARP activation. */
+                WarnExplicitGcmCipher("protocol", config.key.protocol);
+                WarnExplicitGcmCipher("transport", config.key.transport);
 
                 /* EVP::initKey currently derives keys via EVP_BytesToKey(..., EVP_md5(), ...).
                  * This informational warning documents the legacy KDF debt without changing behavior. */

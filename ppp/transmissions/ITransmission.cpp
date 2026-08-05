@@ -842,6 +842,16 @@ namespace ppp {
             int payload_len = 0, header_kf = 0, header_len = 0;
             outlen = 0;
 
+            // v2.2.0: GCM is only valid through the AEAD record protector (ARP).
+            // The legacy packet path is length-preserving and cannot carry the
+            // GCM authentication tag, so reject it explicitly instead of
+            // producing undecodable frames.
+            if ((EVP_protocol && EVP_protocol->IsGcmMode()) ||
+                (EVP_transport && EVP_transport->IsGcmMode())) {
+                return ppp::diagnostics::SetLastError(
+                    ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid, NULLPTR);
+            }
+
             if (EVP_protocol && EVP_transport) {
                 // Layer 1: transport cipher.
                 auto payload = EVP_transport->Encrypt(allocator, data, datalen, payload_len);
@@ -900,6 +910,14 @@ namespace ppp {
 
             int header_kf = 0;
             outlen = 0;
+
+            // v2.2.0: GCM is only valid through the AEAD record protector (ARP).
+            // Reject GCM on the legacy length-preserving path explicitly.
+            if ((EVP_protocol && EVP_protocol->IsGcmMode()) ||
+                (EVP_transport && EVP_transport->IsGcmMode())) {
+                return ppp::diagnostics::SetLastError(
+                    ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid, NULLPTR);
+            }
 
             if (datalen <= EVP_HEADER_MSS) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
