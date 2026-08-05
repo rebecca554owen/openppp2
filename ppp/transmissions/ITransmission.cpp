@@ -929,7 +929,7 @@ namespace ppp {
             }
 
             /** @brief Frame length upper-bound check: reject decoded payloads exceeding PPP_BUFFER_SIZE. */
-            if (payload_len > PPP_BUFFER_SIZE) {
+            if (payload_len > PPP_BUFFER_SIZE + 28) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
             }
 
@@ -990,7 +990,7 @@ namespace ppp {
             }
 
             /** @brief Frame length upper-bound check: reject decoded payloads exceeding PPP_BUFFER_SIZE. */
-            if (payload_len > PPP_BUFFER_SIZE) {
+            if (payload_len > PPP_BUFFER_SIZE + 28) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
             }
 
@@ -1998,8 +1998,23 @@ namespace ppp {
                     outlen = ~0;
                     return NULLPTR;
                 }
-                outlen = static_cast<int>(output_len);
-                return output;
+                // The receive side always reads the legacy packet header
+                // (Transmission_Packet_Read) to recover the payload boundary,
+                // then hands the payload to DecryptBinary.  Wrap the sealed
+                // record with that header so the record length is framed the
+                // same way as the legacy equal-length path.
+                AppConfigurationPtr cfg = transmission->configuration_;
+                const auto& alloc = transmission->BufferAllocator;
+                CiphertextPtr protocol = std::atomic_load(&transmission->protocol_);
+                int header_len = 0, header_kf = 0;
+                std::shared_ptr<Byte> header = Transmission_Header_Encrypt(cfg, alloc,
+                    protocol, static_cast<int>(output_len), header_len, header_kf);
+                if (NULLPTR == header) {
+                    outlen = ~0;
+                    return NULLPTR;
+                }
+                return Transmission_Packet_Pack(alloc, header, header_len,
+                    output, static_cast<int>(output_len), outlen);
             }
 
             bool safest = !transmission->handshaked_.load(std::memory_order_acquire);
