@@ -689,7 +689,7 @@ namespace ppp {
                     return fail(ppp::diagnostics::ErrorCode::SessionAuthFailed);
                 }
                 // v2.2.0: acknowledgement fully received and verified in the
-                // legacy encoding; install the AEAD record protectors now (§9).
+                // legacy encoding; install the AEAD record protectors (now section 9).
                 if (!transmission->InstallRecordProtectorsFromHandshake()) {
                     return fail(ppp::diagnostics::ErrorCode::SessionAuthFailed);
                 }

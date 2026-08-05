@@ -1930,7 +1930,7 @@ namespace ppp {
                 return false;
             }
 
-            // v2.2.0 zero-configuration record key derivation (protocol §2.3):
+            // v2.2.0 zero-configuration record key derivation (protocol section 2.3):
             // input = handshake random ivv (16B) || configuration key, then HKDF.
             ppp::cryptography::RecordKeyContext ctx;
             std::array<std::uint8_t, 64> ikm{};

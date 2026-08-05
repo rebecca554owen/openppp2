@@ -6,7 +6,7 @@
  *
  * Derives per-direction AES-256-GCM record keys and nonce prefixes from the
  * Noise handshake exporter secret plus binding context (see
- * docs/design/v2.2.0/CRYPTO_PROTOCOL_V2_2_0_CN.md §6).
+ * docs/design/v2.2.0/CRYPTO_PROTOCOL_V2_2_0_CN.md section 6).
  */
 
 #include <array>

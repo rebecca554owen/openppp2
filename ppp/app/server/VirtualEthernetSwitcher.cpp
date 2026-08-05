@@ -1947,7 +1947,7 @@ namespace ppp {
                     authenticated = send_control(response);
                 }
                 // v2.2.0: the acknowledgement has been fully written in the legacy
-                // encoding; install the AEAD record protectors now (protocol §9).
+                // encoding; install the AEAD record protectors now (protocol section 9).
                 if (authenticated) {
                     authenticated = transmission->InstallRecordProtectorsFromHandshake();
                 }
