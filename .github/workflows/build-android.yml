@@ -242,9 +242,13 @@ jobs:
           set -euo pipefail
           export PPP_ANDROID_ABI
 
+          output_dir="$GITHUB_WORKSPACE/bin/android/${{ matrix.abi }}"
+          mkdir -p "$output_dir"
+
           cd android && mkdir -p build && cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$output_dir" \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_TOOLCHAIN_FILE="${NDK_ROOT}/build/cmake/android.toolchain.cmake" \
             -DCMAKE_SYSTEM_NAME=Android \
