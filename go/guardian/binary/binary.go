@@ -47,18 +47,37 @@ func detectVersion(path string) string {
 	}
 
 	// Fallback: run the binary and parse version line
+	/* Add --version argument to prevent actually starting service, and limit stdout buffer */
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel2()
-	cmd2 := exec.CommandContext(ctx2, path)
-	var buf2 bytes.Buffer
+	cmd2 := exec.CommandContext(ctx2, path, "--version")
+	const MAX_OUTPUT = 64 * 1024  // 64KB limit
+	var buf2 limitedBuffer
+	buf2.limit = MAX_OUTPUT
 	cmd2.Stdout = &buf2
 	cmd2.Stderr = &buf2
 	_ = cmd2.Run()
-	if m := versionRe.FindStringSubmatch(buf2.String()); m != nil {
+	if m := versionRe.FindStringSubmatch(buf2.buf.String()); m != nil {
 		return m[1]
 	}
 
 	return "unknown"
+}
+
+type limitedBuffer struct {
+	buf   bytes.Buffer
+	limit int
+}
+
+func (lb *limitedBuffer) Write(p []byte) (n int, err error) {
+	if lb.buf.Len() >= lb.limit {
+		return len(p), nil // Silently discard
+	}
+	available := lb.limit - lb.buf.Len()
+	if len(p) > available {
+		p = p[:available]
+	}
+	return lb.buf.Write(p)
 }
 
 func detectArch(path string) string {

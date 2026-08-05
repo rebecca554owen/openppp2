@@ -109,6 +109,13 @@ func applySystemdDefaults(cfg *SystemdConfig) {
 }
 
 func renderUnitFile(cfg SystemdConfig) string {
+	/* Escape systemd unit file special characters (space, %, etc.) */
+	escapeSystemd := func(s string) string {
+		s = strings.ReplaceAll(s, "%", "%%")
+		// Systemd uses backslash for escaping spaces and special chars
+		s = strings.ReplaceAll(s, " ", `\ `)
+		return s
+	}
 	return fmt.Sprintf(`[Unit]
 Description=%s
 After=network.target
@@ -125,7 +132,7 @@ StandardError=journal
 
 [Install]
 WantedBy=%s
-`, cfg.Description, cfg.ExecStart, cfg.WorkingDir, cfg.User, cfg.Restart, cfg.RestartSec, cfg.WantedBy)
+`, cfg.Description, escapeSystemd(cfg.ExecStart), escapeSystemd(cfg.WorkingDir), cfg.User, cfg.Restart, cfg.RestartSec, cfg.WantedBy)
 }
 
 func runSystemctl(args ...string) error {
