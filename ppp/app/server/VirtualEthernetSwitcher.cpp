@@ -2021,6 +2021,19 @@ namespace ppp {
                     return STATUS_ERROR;
                 }
 
+                // v2.2.0 zero-configuration AEAD (KNOWN_ISSUES defect 2): when
+                // transport-auth is disabled the protectors are not installed by
+                // AuthenticatePlainTransport, so install them here whenever the
+                // peer advertised transport-auth v1 capabilities. The call is
+                // idempotent when transport-auth already installed them; failure
+                // is non-fatal and falls back to the legacy CFB data path.
+                if (transmission->PeerSupportsTransportAuthV1() &&
+                    !transmission->InstallRecordProtectorsFromHandshake()) {
+                    ppp::telemetry::Count("server.record_protector.install_failed", 1);
+                    ppp::telemetry::Log(Level::kInfo, "server",
+                        "record protector installation failed; continuing with legacy data path");
+                }
+
                 if (!mux) {
                     return Connect(transmission, session_id, y);
                 }

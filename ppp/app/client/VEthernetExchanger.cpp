@@ -2036,6 +2036,20 @@ namespace ppp {
                                 established = AuthenticatePlainTransport(transmission, y);
                                 transport_auth_failed = !established;
                             }
+                            else if (established) {
+                                // v2.2.0 zero-configuration AEAD (KNOWN_ISSUES
+                                // defect 2): transport-auth is off, but the peer
+                                // advertised transport-auth v1 capabilities;
+                                // install the AEAD record protectors derived from
+                                // handshake material. Failure is non-fatal and
+                                // falls back to the legacy CFB data path.
+                                if (transmission->PeerSupportsTransportAuthV1() &&
+                                    !transmission->InstallRecordProtectorsFromHandshake()) {
+                                    ppp::telemetry::Count("client.record_protector.install_failed", 1);
+                                    ppp::telemetry::Log(Level::kInfo, "client_exchanger",
+                                        "record protector installation failed; continuing with legacy data path");
+                                }
+                            }
                             if (established) {
                                 const bool recovery_carrier_eligible =
                                     IsClientSessionRecoveryCarrierEligible(
