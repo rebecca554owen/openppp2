@@ -970,7 +970,12 @@ namespace ppp {
             config.server.ipv6.mode = NormalizeIPv6Mode(config.server.ipv6.mode);
             bool ipv6_server_enabled = config.server.ipv6.mode == AppConfiguration::IPv6Mode_Nat66 ||
                 config.server.ipv6.mode == AppConfiguration::IPv6Mode_Gua;
-            if (ipv6_server_enabled && !SupportsServerIPv6DataPlane()) {
+            // IPv6 server data-plane availability is only relevant when this
+            // instance actually acts as a server.  Client/proxy instances
+            // (which carry a configured client.server) must not fail startup
+            // on platforms without the server IPv6 backend.
+            if (ipv6_server_enabled && config.client.server.empty() &&
+                !SupportsServerIPv6DataPlane()) {
                 if (config.server.ipv6.mode == AppConfiguration::IPv6Mode_Nat66) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6Nat66Unavailable);
                 }
