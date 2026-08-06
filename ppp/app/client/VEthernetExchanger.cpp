@@ -1769,6 +1769,71 @@ namespace ppp {
                 }
 
                 bool noerror = transmission->HandshakeServer(y, GetId(), false);
+                bool transport_auth_attempted = false;
+                if (noerror) {
+                    // v2.2.0: child data connections participate in
+                    // transport-auth exactly like the main session.  The
+                    // server runs the responder on every accepted connection,
+                    // so the client must run the initiator on child
+                    // connections too; otherwise the server responder reads
+                    // the child's first data frame (SYN) as a TA
+                    // advertisement and drops the connection.
+                    const AppConfigurationPtr configuration = GetConfiguration();
+                    if (configuration) {
+                        ppp::telemetry::Log(Level::kInfo, "client_exchanger",
+                            "child ta-check kind=%d enabled=%d supports=%d enables=%d",
+                            (int)transmission->GetAuthenticatedCarrierKind(),
+                            configuration->client.transport_auth.enabled ? 1 : 0,
+                            transmission->PeerSupportsTransportAuthV1() ? 1 : 0,
+                            transmission->PeerEnablesTransportAuthV1() ? 1 : 0);
+                    }
+                    if (configuration && ShouldRunClientTransportAuth(
+                            transmission->GetAuthenticatedCarrierKind(),
+                            configuration->client.transport_auth.enabled,
+                            transmission->PeerSupportsTransportAuthV1(),
+                            transmission->PeerEnablesTransportAuthV1())) {
+                        transport_auth_attempted = true;
+                        static constexpr int HandshakePending = 0;
+                        static constexpr int HandshakeTimedOut = 1;
+                        static constexpr int HandshakeCompleted = 2;
+                        std::shared_ptr<std::atomic_int> handshake_state =
+                            make_shared_object<std::atomic_int>(HandshakePending);
+                        std::shared_ptr<boost::asio::steady_timer> handshake_timer =
+                            make_shared_object<boost::asio::steady_timer>(*strand);
+                        if (NULLPTR == handshake_state || NULLPTR == handshake_timer) {
+                            noerror = false;
+                            ppp::diagnostics::SetLastErrorCode(
+                                ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                        }
+                        else {
+                            handshake_timer->expires_after(std::chrono::milliseconds(
+                                std::max<int64_t>(1, configuration->transport_auth.handshake_timeout_ms)));
+                            handshake_timer->async_wait(
+                                [transmission, handshake_state](
+                                    const boost::system::error_code& ec) noexcept {
+                                    int expected = HandshakePending;
+                                    if (ec == boost::system::errc::success &&
+                                        handshake_state->compare_exchange_strong(
+                                            expected, HandshakeTimedOut,
+                                            std::memory_order_acq_rel)) {
+                                        transmission->Dispose();
+                                    }
+                                });
+                            noerror = AuthenticatePlainTransport(transmission, y);
+                            int expected = HandshakePending;
+                            const bool handshake_timed_out =
+                                !handshake_state->compare_exchange_strong(
+                                    expected, HandshakeCompleted, std::memory_order_acq_rel) &&
+                                expected == HandshakeTimedOut;
+                            handshake_timer->cancel();
+                            if (handshake_timed_out) {
+                                noerror = false;
+                                ppp::diagnostics::SetLastErrorCode(
+                                    ppp::diagnostics::ErrorCode::SocketTimeout);
+                            }
+                        }
+                    }
+                }
                 if (noerror) {
 #if defined(_IPHONE)
                     if (ios_child_slot && NULLPTR != ios_child_slot_generation) {
@@ -1778,8 +1843,17 @@ namespace ppp {
                     return transmission;
                 }
                 else {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
-                    transmission->Dispose();
+                    if (transport_auth_attempted) {
+                        ppp::telemetry::Log(Level::kInfo, "client_exchanger",
+                            "child transport-auth failed error=%d",
+                            (int)ppp::diagnostics::GetLastErrorCode());
+                    }
+                    if (!transport_auth_attempted) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+                        // AuthenticatePlainTransport already disposed the
+                        // transmission on the transport-auth failure paths.
+                        transmission->Dispose();
+                    }
 #if defined(_IPHONE)
                     if (ios_child_slot) {
                         ReleaseIosChildTransmissionSlot(ios_reserved_generation);

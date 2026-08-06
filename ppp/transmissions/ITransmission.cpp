@@ -111,9 +111,14 @@ namespace ppp {
                     std::atomic_load(&transmission->record_protector_recv_);
                 if (protector && protector->IsValid()) {
                     ppp::telemetry::Count("record.read.used", 1);
+                    ppp::telemetry::Log(Level::kInfo, "arp",
+                        "record read entry protector=1");
                     auto header = ITransmissionBridge::ReadBytes(transmission, y,
                         ppp::cryptography::AuthenticatedRecordProtector::RecordHeaderLength);
                     if (NULLPTR == header) {
+                        ppp::telemetry::Log(Level::kInfo, "arp",
+                            "record header read FAILED err=%d",
+                            (int)ppp::diagnostics::GetLastErrorCode());
                         if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
                             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelReadFailed);
                         }
@@ -126,9 +131,13 @@ namespace ppp {
                         (static_cast<std::uint32_t>(header.get()[2]) << 8) |
                         static_cast<std::uint32_t>(header.get()[3]);
                     if (ciphertext_len < 1 || ciphertext_len > PPP_BUFFER_SIZE) {
+                        ppp::telemetry::Log(Level::kInfo, "arp",
+                            "record len INVALID clen=%u", ciphertext_len);
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                         return NULLPTR;
                     }
+                    ppp::telemetry::Log(Level::kInfo, "arp",
+                        "record header OK clen=%u", ciphertext_len);
 
                     const int record_len = static_cast<int>(ciphertext_len) +
                         ppp::cryptography::AuthenticatedRecordProtector::TagLength;
@@ -149,6 +158,10 @@ namespace ppp {
                     std::memcpy(packet.get() + 12, record.get(), record_len);
                     int plaintext_len = 0;
                     packet = DecryptBinary(transmission, packet.get(), 12 + record_len, plaintext_len);
+                    ppp::telemetry::Log(Level::kInfo, "arp",
+                        "record open %s clen=%u plen=%d err=%d",
+                        NULLPTR != packet ? "OK" : "FAILED", ciphertext_len,
+                        plaintext_len, (int)ppp::diagnostics::GetLastErrorCode());
                     if (NULLPTR != packet) {
                         outlen = plaintext_len;
                     }
@@ -2065,6 +2078,8 @@ namespace ppp {
                 std::atomic_load(&transmission->record_protector_send_);
             if (protector && protector->IsValid()) {
                 ppp::telemetry::Count("record.seal.used", 1);
+                ppp::telemetry::Log(Level::kInfo, "arp",
+                    "seal entry datalen=%d", datalen);
                 if (datalen < 1 || NULLPTR == data) {
                     outlen = ~0;
                     return NULLPTR;
@@ -2078,6 +2093,9 @@ namespace ppp {
                 std::size_t output_len = 0;
                 if (!protector->Seal(data, static_cast<std::size_t>(datalen),
                                      output.get(), output_len)) {
+                    ppp::telemetry::Log(Level::kInfo, "arp",
+                        "seal FAILED datalen=%d err=%d", datalen,
+                        (int)ppp::diagnostics::GetLastErrorCode());
                     outlen = ~0;
                     return NULLPTR;
                 }
@@ -2085,6 +2103,8 @@ namespace ppp {
                 // + sequence), so no legacy base94-style packet header is added.
                 // The receiver reads the record header directly (ReadBinary).
                 outlen = static_cast<int>(output_len);
+                ppp::telemetry::Log(Level::kInfo, "arp",
+                    "seal OK datalen=%d outlen=%d", datalen, outlen);
                 return output;
             }
 
