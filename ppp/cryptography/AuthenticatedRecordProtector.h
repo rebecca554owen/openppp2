@@ -18,6 +18,8 @@
 
 #include <ppp/stdafx.h>
 
+#include <openssl/evp.h>
+
 namespace ppp {
 namespace cryptography {
 
@@ -61,7 +63,15 @@ public:
         const std::array<std::uint8_t, KeyLength>& key,
         const std::array<std::uint8_t, NoncePrefixLength>& nonce_prefix,
         RecordDirection direction,
-        std::uint8_t carrier_kind) noexcept;
+        std::uint8_t carrier_kind,
+        const ppp::string& cipher_name) noexcept;
+
+    /**
+     * @brief Whether a cipher name resolves to a supported OpenSSL AEAD.
+     * @param cipher_name OpenSSL cipher name (e.g. "aes-256-gcm").
+     * @return True when the cipher exists and is GCM, CCM or CHACHA20-POLY1305.
+     */
+    static bool IsSupportedAeadCipher(const ppp::string& cipher_name) noexcept;
 
     ~AuthenticatedRecordProtector() noexcept;
 
@@ -120,6 +130,9 @@ private:
     std::array<std::uint8_t, NoncePrefixLength> nonce_prefix_{};
     RecordDirection                             direction_;
     std::uint8_t                                carrier_kind_;
+    ppp::string                                 cipher_name_;
+    const EVP_CIPHER*                           cipher_ = NULLPTR;
+    bool                                        ccm_mode_ = false;
     std::uint64_t                               send_sequence_ = 0;
     std::uint64_t                               receive_sequence_ = 0;
     bool                                        valid_ = false;

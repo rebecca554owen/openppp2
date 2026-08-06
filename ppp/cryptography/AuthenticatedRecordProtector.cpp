@@ -18,12 +18,59 @@ AuthenticatedRecordProtector::AuthenticatedRecordProtector(
     const std::array<std::uint8_t, KeyLength>& key,
     const std::array<std::uint8_t, NoncePrefixLength>& nonce_prefix,
     RecordDirection direction,
-    std::uint8_t carrier_kind) noexcept
+    std::uint8_t carrier_kind,
+    const ppp::string& cipher_name) noexcept
     : key_(key)
     , nonce_prefix_(nonce_prefix)
     , direction_(direction)
+    , cipher_name_(cipher_name)
     , carrier_kind_(carrier_kind) {
-    valid_ = true;
+    // The record protector only accepts OpenSSL AEAD ciphers: GCM, CCM or
+    // CHACHA20-POLY1305.  A stream cipher (CFB/CTR) or an unknown name is a
+    // configuration error: fail closed so the carrier never falls back to an
+    // unauthenticated data path.
+    cipher_ = EVP_get_cipherbyname(cipher_name_.data());
+    if (NULLPTR == cipher_) {
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
+        valid_ = false;
+        return;
+    }
+
+    const int mode = EVP_CIPHER_mode(cipher_);
+    if (mode == EVP_CIPH_CCM_MODE) {
+        ccm_mode_ = true;
+        valid_ = true;
+        return;
+    }
+
+    const char* cipher_real_name = EVP_CIPHER_name(cipher_);
+    if (mode == EVP_CIPH_GCM_MODE ||
+        (cipher_real_name != NULLPTR && NULLPTR != strstr(cipher_real_name, "CHACHA20"))) {
+        valid_ = true;
+        return;
+    }
+
+    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
+    valid_ = false;
+}
+
+bool AuthenticatedRecordProtector::IsSupportedAeadCipher(const ppp::string& cipher_name) noexcept {
+    if (cipher_name.empty()) {
+        return false;
+    }
+
+    const EVP_CIPHER* cipher = EVP_get_cipherbyname(cipher_name.data());
+    if (NULLPTR == cipher) {
+        return false;
+    }
+
+    const int mode = EVP_CIPHER_mode(cipher);
+    if (mode == EVP_CIPH_GCM_MODE || mode == EVP_CIPH_CCM_MODE) {
+        return true;
+    }
+
+    const char* cipher_real_name = EVP_CIPHER_name(cipher);
+    return cipher_real_name != NULLPTR && NULLPTR != strstr(cipher_real_name, "CHACHA20");
 }
 
 AuthenticatedRecordProtector::~AuthenticatedRecordProtector() noexcept {
@@ -130,14 +177,25 @@ bool AuthenticatedRecordProtector::Seal(
     bool ok = false;
 
     do {
-        if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULLPTR, NULLPTR, NULLPTR) != 1) {
+        if (EVP_EncryptInit_ex(ctx, cipher_, NULLPTR, NULLPTR, NULLPTR) != 1) {
             break;
         }
-        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, NonceLength, NULLPTR) != 1) {
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN, NonceLength, NULLPTR) != 1) {
             break;
         }
         if (EVP_EncryptInit_ex(ctx, NULLPTR, NULLPTR, key_.data(), nonce) != 1) {
             break;
+        }
+        if (ccm_mode_) {
+            // CCM needs the tag length and the total message length (AAD +
+            // plaintext) declared before any data is fed.
+            if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, TagLength, NULLPTR) != 1) {
+                break;
+            }
+            if (EVP_EncryptUpdate(ctx, NULLPTR, &len, NULLPTR,
+                                  static_cast<int>(aad_len + plaintext_len)) != 1) {
+                break;
+            }
         }
         if (EVP_EncryptUpdate(ctx, NULLPTR, &len, aad, static_cast<int>(aad_len)) != 1) {
             break;
@@ -151,7 +209,7 @@ bool AuthenticatedRecordProtector::Seal(
         if (EVP_EncryptFinal_ex(ctx, ciphertext + ciphertext_out, &final_out) != 1) {
             break;
         }
-        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, TagLength, tag) != 1) {
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, TagLength, tag) != 1) {
             break;
         }
         ok = true;
@@ -244,14 +302,26 @@ bool AuthenticatedRecordProtector::Open(
     bool ok = false;
 
     do {
-        if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULLPTR, NULLPTR, NULLPTR) != 1) {
+        if (EVP_DecryptInit_ex(ctx, cipher_, NULLPTR, NULLPTR, NULLPTR) != 1) {
             break;
         }
-        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, NonceLength, NULLPTR) != 1) {
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN, NonceLength, NULLPTR) != 1) {
             break;
         }
         if (EVP_DecryptInit_ex(ctx, NULLPTR, NULLPTR, key_.data(), nonce) != 1) {
             break;
+        }
+        if (ccm_mode_) {
+            // CCM: the expected tag must be set before any data, and the
+            // total message length (AAD + ciphertext) must be declared first.
+            if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, TagLength,
+                                    const_cast<std::uint8_t*>(tag)) != 1) {
+                break;
+            }
+            if (EVP_DecryptUpdate(ctx, NULLPTR, &len, NULLPTR,
+                                  static_cast<int>(aad_len + ciphertext_len)) != 1) {
+                break;
+            }
         }
         if (EVP_DecryptUpdate(ctx, NULLPTR, &len, aad, static_cast<int>(aad_len)) != 1) {
             break;
@@ -261,9 +331,11 @@ bool AuthenticatedRecordProtector::Open(
                               ciphertext, static_cast<int>(ciphertext_len)) != 1) {
             break;
         }
-        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, TagLength,
-                                const_cast<std::uint8_t*>(tag)) != 1) {
-            break;
+        if (!ccm_mode_) {
+            if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, TagLength,
+                                    const_cast<std::uint8_t*>(tag)) != 1) {
+                break;
+            }
         }
         int final_out = 0;
         if (EVP_DecryptFinal_ex(ctx, output + plaintext_out, &final_out) != 1) {
