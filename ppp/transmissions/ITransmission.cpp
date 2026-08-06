@@ -1982,6 +1982,7 @@ namespace ppp {
             std::shared_ptr<ppp::cryptography::AuthenticatedRecordProtector> protector =
                 std::atomic_load(&transmission->record_protector_send_);
             if (protector && protector->IsValid()) {
+                ppp::telemetry::Count("record.seal.used", 1);
                 if (datalen < 1 || NULLPTR == data) {
                     outlen = ~0;
                     return NULLPTR;
@@ -2043,6 +2044,7 @@ namespace ppp {
             std::shared_ptr<ppp::cryptography::AuthenticatedRecordProtector> protector =
                 std::atomic_load(&transmission->record_protector_recv_);
             if (protector && protector->IsValid()) {
+                ppp::telemetry::Count("record.open.used", 1);
                 if (datalen < 1 || NULLPTR == data) {
                     outlen = ~0;
                     return NULLPTR;

@@ -2027,6 +2027,10 @@ namespace ppp {
                 // peer advertised transport-auth v1 capabilities. The call is
                 // idempotent when transport-auth already installed them; failure
                 // is non-fatal and falls back to the legacy CFB data path.
+                ppp::telemetry::Count("server.record_protector.attempt", 1);
+                ppp::telemetry::Log(Level::kInfo, "server",
+                    "record protector install check: peer_supports=%d",
+                    transmission->PeerSupportsTransportAuthV1() ? 1 : 0);
                 if (transmission->PeerSupportsTransportAuthV1() &&
                     !transmission->InstallRecordProtectorsFromHandshake()) {
                     ppp::telemetry::Count("server.record_protector.install_failed", 1);
