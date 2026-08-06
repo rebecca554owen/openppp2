@@ -907,20 +907,17 @@ namespace ppp {
             int payload_len = 0, header_kf = 0, header_len = 0;
             outlen = 0;
 
-            // v2.2.0: GCM is only valid through the AEAD record protector (ARP).
-            // The legacy packet path is length-preserving and cannot carry the
-            // GCM authentication tag, so reject it explicitly instead of
-            // producing undecodable frames.
-            if ((EVP_protocol && EVP_protocol->IsGcmMode()) ||
-                (EVP_transport && EVP_transport->IsGcmMode())) {
-                return ppp::diagnostics::SetLastError(
-                    ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid, NULLPTR);
-            }
+            // Legacy packet path: transport-layer GCM is supported.  The 16-byte
+            // authentication tag is appended to the ciphertext (datalen + 16) and
+            // carried inside the frame; the length-encoded header reflects the
+            // tagged payload size.  The protocol (header) layer must stay non-GCM
+            // because the 2-byte length field cannot carry a tag.
+            const int transport_tag_len = (EVP_transport && EVP_transport->IsGcmMode()) ? 16 : 0;
 
             if (EVP_protocol && EVP_transport) {
                 // Layer 1: transport cipher.
                 auto payload = EVP_transport->Encrypt(allocator, data, datalen, payload_len);
-                if (NULLPTR == payload || payload_len != datalen) {
+                if (NULLPTR == payload || payload_len != datalen + transport_tag_len) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed, NULLPTR);
                 }
 
@@ -976,13 +973,11 @@ namespace ppp {
             int header_kf = 0;
             outlen = 0;
 
-            // v2.2.0: GCM is only valid through the AEAD record protector (ARP).
-            // Reject GCM on the legacy length-preserving path explicitly.
-            if ((EVP_protocol && EVP_protocol->IsGcmMode()) ||
-                (EVP_transport && EVP_transport->IsGcmMode())) {
-                return ppp::diagnostics::SetLastError(
-                    ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid, NULLPTR);
-            }
+            // Legacy packet path: transport-layer GCM frames carry the 16-byte
+            // authentication tag appended to the ciphertext.  The decoded
+            // payload length from the header includes the tag; it is stripped
+            // and verified inside EVP::Decrypt.
+            const int transport_tag_len = (EVP_transport && EVP_transport->IsGcmMode()) ? 16 : 0;
 
             if (datalen <= EVP_HEADER_MSS) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
@@ -1017,7 +1012,7 @@ namespace ppp {
 
             if (EVP_protocol && EVP_transport) {
                 payload = EVP_transport->Decrypt(allocator, payload.get(), payload_len, outlen);
-                if (NULLPTR == payload || payload_len != outlen) {
+                if (NULLPTR == payload || payload_len != outlen + transport_tag_len) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, NULLPTR);
                 }
             }
@@ -1040,6 +1035,11 @@ namespace ppp {
 
             int header_kf = 0;
             outlen = 0;
+
+            // Legacy packet path: transport-layer GCM frames carry the 16-byte
+            // authentication tag appended to the ciphertext (see
+            // Transmission_Packet_Encrypt).  The header length includes the tag.
+            const int transport_tag_len = (EVP_transport && EVP_transport->IsGcmMode()) ? 16 : 0;
 
             auto header = ITransmissionBridge::ReadBytes(transmission, y, EVP_HEADER_MSS);
             if (NULLPTR == header) {
@@ -1075,7 +1075,7 @@ namespace ppp {
 
             if (EVP_protocol && EVP_transport) {
                 payload = EVP_transport->Decrypt(allocator, payload.get(), payload_len, outlen);
-                if (NULLPTR == payload || payload_len != outlen) {
+                if (NULLPTR == payload || payload_len != outlen + transport_tag_len) {
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, NULLPTR);
                 }
             }
@@ -2103,8 +2103,17 @@ namespace ppp {
                 // + sequence), so no legacy base94-style packet header is added.
                 // The receiver reads the record header directly (ReadBinary).
                 outlen = static_cast<int>(output_len);
-                ppp::telemetry::Log(Level::kInfo, "arp",
-                    "seal OK datalen=%d outlen=%d", datalen, outlen);
+                {
+                    char hexbuf[96];
+                    int hexlen = datalen > 32 ? 32 : datalen;
+                    for (int i = 0; i < hexlen; ++i) {
+                        snprintf(hexbuf + i * 2, sizeof(hexbuf) - i * 2, "%02X",
+                            (unsigned char)data[i]);
+                    }
+                    hexbuf[hexlen * 2] = '\0';
+                    ppp::telemetry::Log(Level::kInfo, "arp",
+                        "seal OK datalen=%d outlen=%d hex=%s", datalen, outlen, hexbuf);
+                }
                 return output;
             }
 
