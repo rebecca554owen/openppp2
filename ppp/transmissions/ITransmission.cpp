@@ -2022,6 +2022,14 @@ namespace ppp {
                 return false;
             }
 
+            // v2.2.0 diagnostic: log the handshake ivv feeding HKDF so
+            // both ends can be cross-checked for key agreement.
+            ppp::telemetry::Log(Level::kInfo, "arp",
+                "install record protectors: ivv=%s role=%s carrier=%d",
+                stl::to_string<ppp::string>(handshake_ivv_, 16).c_str(),
+                record_server_role_.load(std::memory_order_acquire) ? "server" : "client",
+                static_cast<int>(GetAuthenticatedCarrierKind()));
+
             // v2.2.0 zero-configuration record key derivation (protocol section 2.3):
             // input = handshake random ivv (16B) || configuration key, then HKDF.
             ppp::cryptography::RecordKeyContext ctx;

@@ -184,12 +184,12 @@ bool AuthenticatedRecordProtector::Open(
     }
     if (input_len < RecordHeaderLength + TagLength + 1) {
         // Too short to hold header + 1 byte ciphertext + tag.
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
         return false;
     }
     if (input_len > RecordHeaderLength + MaxPlaintextLength + TagLength) {
         // Reject oversized records before allocating/processing.
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
         return false;
     }
 
@@ -199,12 +199,12 @@ bool AuthenticatedRecordProtector::Open(
         (static_cast<std::uint32_t>(input[2]) << 8) |
         static_cast<std::uint32_t>(input[3]);
     if (ciphertext_len < 1 || ciphertext_len > MaxPlaintextLength) {
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
         return false;
     }
     if (RecordHeaderLength + static_cast<std::size_t>(ciphertext_len) + TagLength != input_len) {
         // Length field must match the actual record size exactly.
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
         return false;
     }
 
@@ -278,7 +278,7 @@ bool AuthenticatedRecordProtector::Open(
     if (!ok) {
         // Authentication failure: do NOT advance receive_sequence_.
         OPENSSL_cleanse(output, ciphertext_len);
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::EvpDecryptInvalidArguments);
         return false;
     }
 
