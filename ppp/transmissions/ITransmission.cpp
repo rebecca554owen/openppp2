@@ -929,8 +929,12 @@ namespace ppp {
                 }
                 
                 // Layer 3: payload obfuscation using header‑derived key.
+                // Transport-layer GCM appends a 16-byte authentication tag to
+                // the ciphertext; obfuscate the full tagged payload so the
+                // frame length field and the packed buffer both include the
+                // tag and it survives to the peer for verification.
                 payload = Transmission_Payload_Encrypt(APP, allocator, header_kf,
-                    payload.get(), datalen, payload_len, safest);
+                    payload.get(), payload_len, payload_len, safest);
                 if (NULLPTR == payload) {
                     return NULLPTR;
                 }
