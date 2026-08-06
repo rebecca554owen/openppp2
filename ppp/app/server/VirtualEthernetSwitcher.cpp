@@ -2029,9 +2029,11 @@ namespace ppp {
                 // is non-fatal and falls back to the legacy CFB data path.
                 ppp::telemetry::Count("server.record_protector.attempt", 1);
                 ppp::telemetry::Log(Level::kInfo, "server",
-                    "record protector install check: peer_supports=%d",
-                    transmission->PeerSupportsTransportAuthV1() ? 1 : 0);
+                    "record protector install check: peer_supports=%d peer_enables=%d",
+                    transmission->PeerSupportsTransportAuthV1() ? 1 : 0,
+                    transmission->PeerEnablesTransportAuthV1() ? 1 : 0);
                 if (transmission->PeerSupportsTransportAuthV1() &&
+                    transmission->PeerEnablesTransportAuthV1() &&
                     !transmission->InstallRecordProtectorsFromHandshake()) {
                     ppp::telemetry::Count("server.record_protector.install_failed", 1);
                     ppp::telemetry::Log(Level::kInfo, "server",
