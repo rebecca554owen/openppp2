@@ -103,6 +103,58 @@ namespace ppp {
                 AppConfigurationPtr configuration = transmission->configuration_;
                 const auto& allocator = transmission->BufferAllocator;
 
+                // v2.2.0 AEAD record layer: when installed, the wire format is the
+                // bare record (12-byte header + ciphertext + 16-byte tag) and the
+                // legacy base94-style packet header is not used.  Read the record
+                // header first, then the payload, then Open() via DecryptBinary.
+                std::shared_ptr<ppp::cryptography::AuthenticatedRecordProtector> protector =
+                    std::atomic_load(&transmission->record_protector_recv_);
+                if (protector && protector->IsValid()) {
+                    ppp::telemetry::Count("record.read.used", 1);
+                    auto header = ITransmissionBridge::ReadBytes(transmission, y,
+                        ppp::cryptography::AuthenticatedRecordProtector::RecordHeaderLength);
+                    if (NULLPTR == header) {
+                        if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelReadFailed);
+                        }
+                        return NULLPTR;
+                    }
+
+                    const std::uint32_t ciphertext_len =
+                        (static_cast<std::uint32_t>(header.get()[0]) << 24) |
+                        (static_cast<std::uint32_t>(header.get()[1]) << 16) |
+                        (static_cast<std::uint32_t>(header.get()[2]) << 8) |
+                        static_cast<std::uint32_t>(header.get()[3]);
+                    if (ciphertext_len < 1 || ciphertext_len > PPP_BUFFER_SIZE) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                        return NULLPTR;
+                    }
+
+                    const int record_len = static_cast<int>(ciphertext_len) +
+                        ppp::cryptography::AuthenticatedRecordProtector::TagLength;
+                    auto record = ITransmissionBridge::ReadBytes(transmission, y, record_len);
+                    if (NULLPTR == record) {
+                        if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelReadFailed);
+                        }
+                        return NULLPTR;
+                    }
+
+                    std::shared_ptr<Byte> packet = BufferswapAllocator::MakeByteArray(
+                        allocator, 12 + record_len);
+                    if (NULLPTR == packet) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed, NULLPTR);
+                    }
+                    std::memcpy(packet.get(), header.get(), 12);
+                    std::memcpy(packet.get() + 12, record.get(), record_len);
+                    int plaintext_len = 0;
+                    packet = DecryptBinary(transmission, packet.get(), 12 + record_len, plaintext_len);
+                    if (NULLPTR != packet) {
+                        outlen = plaintext_len;
+                    }
+                    return packet;
+                }
+
                 if (EVP_protocol && EVP_transport) {
                     return Transmission_Packet_Read(configuration, allocator,
                         EVP_protocol, EVP_transport, outlen,
@@ -2021,23 +2073,11 @@ namespace ppp {
                     outlen = ~0;
                     return NULLPTR;
                 }
-                // The receive side always reads the legacy packet header
-                // (Transmission_Packet_Read) to recover the payload boundary,
-                // then hands the payload to DecryptBinary.  Wrap the sealed
-                // record with that header so the record length is framed the
-                // same way as the legacy equal-length path.
-                AppConfigurationPtr cfg = transmission->configuration_;
-                const auto& alloc = transmission->BufferAllocator;
-                CiphertextPtr protocol = std::atomic_load(&transmission->protocol_);
-                int header_len = 0, header_kf = 0;
-                std::shared_ptr<Byte> header = Transmission_Header_Encrypt(cfg, alloc,
-                    protocol, static_cast<int>(output_len), header_len, header_kf);
-                if (NULLPTR == header) {
-                    outlen = ~0;
-                    return NULLPTR;
-                }
-                return Transmission_Packet_Pack(alloc, header, header_len,
-                    output, static_cast<int>(output_len), outlen);
+                // The AEAD record carries its own 12-byte header (ciphertext_len
+                // + sequence), so no legacy base94-style packet header is added.
+                // The receiver reads the record header directly (ReadBinary).
+                outlen = static_cast<int>(output_len);
+                return output;
             }
 
             bool safest = !transmission->handshaked_.load(std::memory_order_acquire);
