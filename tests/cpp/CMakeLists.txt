@@ -86,6 +86,10 @@ set(OPENPPP2_TRANSPORT_AUTH_BINDING_SOURCES
     "${OPENPPP2_ROOT}/ppp/cryptography/noise/NoisePsk.cpp"
     "${OPENPPP2_ROOT}/ppp/transmissions/NoisePskAuthenticatedCarrierBinding.cpp")
 
+set(OPENPPP2_RECORD_PROTECTOR_SOURCES
+    "${OPENPPP2_ROOT}/ppp/cryptography/AuthenticatedRecordProtector.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/RecordKeyDerivation.cpp")
+
 function(openppp2_add_cpp_test target)
     cmake_parse_arguments(ARG "" "" "SOURCES" ${ARGN})
     add_executable(${target} ${ARG_SOURCES})
@@ -299,6 +303,7 @@ openppp2_add_cpp_test(session_resume_production_wss_lifecycle_test SOURCES
     "${OPENPPP2_ROOT}/ppp/app/protocol/SessionResumeAuthenticator.cpp"
     "${OPENPPP2_ROOT}/ppp/transmissions/ITransmission.cpp"
     ${OPENPPP2_TRANSPORT_AUTH_BINDING_SOURCES}
+    ${OPENPPP2_RECORD_PROTECTOR_SOURCES}
     "${OPENPPP2_ROOT}/ppp/transmissions/ITransmissionQoS.cpp"
     "${OPENPPP2_ROOT}/ppp/transmissions/IWebsocketTransmission.cpp"
     "${OPENPPP2_ROOT}/ppp/Random.cpp"
@@ -374,6 +379,7 @@ openppp2_add_cpp_test(session_resume_establish_transaction_wss_test SOURCES
     "${OPENPPP2_ROOT}/ppp/app/protocol/SessionResumeAuthenticator.cpp"
     "${OPENPPP2_ROOT}/ppp/transmissions/ITransmission.cpp"
     ${OPENPPP2_TRANSPORT_AUTH_BINDING_SOURCES}
+    ${OPENPPP2_RECORD_PROTECTOR_SOURCES}
     "${OPENPPP2_ROOT}/ppp/transmissions/ITransmissionQoS.cpp"
     "${OPENPPP2_ROOT}/ppp/transmissions/IWebsocketTransmission.cpp"
     "${OPENPPP2_ROOT}/ppp/Random.cpp"
