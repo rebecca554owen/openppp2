@@ -1855,6 +1855,7 @@ namespace ppp {
             } else {
                 ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeClient completed");
                 ppp::telemetry::Count("transmission.handshake.success", 1);
+                record_server_role_.store(true, std::memory_order_release);
             }
 
             return sid;
@@ -1897,6 +1898,7 @@ namespace ppp {
             } else {
                 ppp::telemetry::Log(Level::kDebug, "transmission", "HandshakeServer completed");
                 ppp::telemetry::Count("transmission.handshake.success", 1);
+                record_server_role_.store(false, std::memory_order_release);
             }
 
             return ok;
@@ -1913,16 +1915,36 @@ namespace ppp {
         bool ITransmission::InstallRecordProtectors(const ppp::cryptography::RecordKeyMaterial& material) noexcept {
             const std::uint8_t carrier_kind =
                 GetAuthenticatedCarrierKind() == AuthenticatedCarrierKind::WebSocket ? 1 : 0;
-            auto send = std::make_shared<ppp::cryptography::AuthenticatedRecordProtector>(
-                material.client_to_server_key,
-                material.client_to_server_nonce_prefix,
-                ppp::cryptography::RecordDirection::ClientToServer,
-                carrier_kind);
-            auto recv = std::make_shared<ppp::cryptography::AuthenticatedRecordProtector>(
-                material.server_to_client_key,
-                material.server_to_client_nonce_prefix,
-                ppp::cryptography::RecordDirection::ServerToClient,
-                carrier_kind);
+            // The direction of a record is the flow it protects: client->server
+            // records are sealed by the client and opened by the server, and
+            // vice versa for server->client.  Allocate send/recv accordingly
+            // for this side's role (HandshakeClient = server side).
+            const bool server_side = record_server_role_.load(std::memory_order_acquire);
+            std::shared_ptr<ppp::cryptography::AuthenticatedRecordProtector> send;
+            std::shared_ptr<ppp::cryptography::AuthenticatedRecordProtector> recv;
+            if (server_side) {
+                send = std::make_shared<ppp::cryptography::AuthenticatedRecordProtector>(
+                    material.server_to_client_key,
+                    material.server_to_client_nonce_prefix,
+                    ppp::cryptography::RecordDirection::ServerToClient,
+                    carrier_kind);
+                recv = std::make_shared<ppp::cryptography::AuthenticatedRecordProtector>(
+                    material.client_to_server_key,
+                    material.client_to_server_nonce_prefix,
+                    ppp::cryptography::RecordDirection::ClientToServer,
+                    carrier_kind);
+            } else {
+                send = std::make_shared<ppp::cryptography::AuthenticatedRecordProtector>(
+                    material.client_to_server_key,
+                    material.client_to_server_nonce_prefix,
+                    ppp::cryptography::RecordDirection::ClientToServer,
+                    carrier_kind);
+                recv = std::make_shared<ppp::cryptography::AuthenticatedRecordProtector>(
+                    material.server_to_client_key,
+                    material.server_to_client_nonce_prefix,
+                    ppp::cryptography::RecordDirection::ServerToClient,
+                    carrier_kind);
+            }
             if (!send->IsValid() || !recv->IsValid()) {
                 return false;
             }
