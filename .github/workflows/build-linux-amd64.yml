@@ -6,6 +6,8 @@
 name: Build · Linux amd64
 
 on:
+  push:
+    branches: [dev]
   workflow_dispatch:
 
 concurrency:
