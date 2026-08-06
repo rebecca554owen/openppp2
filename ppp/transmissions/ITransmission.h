@@ -311,6 +311,8 @@ namespace ppp {
             std::atomic_bool                                                                        frame_tn_{false};
             /** @brief Handshake completion state flag storage. */
             std::atomic_bool                                                                        handshaked_{false};
+            /** @brief True when this transmission runs on the server side (HandshakeClient caller). */
+            std::atomic_bool                                                                        record_server_role_{false};
             /** @brief Validated peer transport-auth-v1 capability state. */
             std::atomic_bool                                                                        peer_supports_transport_auth_v1_{false};
             /** @brief Validated peer transport-auth-v1 policy state. */

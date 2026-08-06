@@ -780,3 +780,82 @@ openppp2_add_cpp_test(app_configuration_routing_test SOURCES
     app_configuration_routing_test.cpp)
 set_tests_properties(app_configuration_routing_test PROPERTIES
     WORKING_DIRECTORY "${OPENPPP2_ROOT}")
+openppp2_add_cpp_test(gcm_config_test SOURCES
+    gcm_config_test.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/transport_auth_configuration_test_stubs.cpp"
+    "${OPENPPP2_ROOT}/ppp/configurations/AppConfiguration.cpp"
+    "${OPENPPP2_ROOT}/ppp/configurations/TransportAuthConfiguration.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/ApplicationMode.cpp"
+    "${OPENPPP2_ROOT}/ppp/auxiliary/JsonAuxiliary.cpp"
+    "${OPENPPP2_ROOT}/ppp/auxiliary/StringAuxiliary.cpp"
+    "${OPENPPP2_ROOT}/ppp/auxiliary/UriAuxiliary.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/Ciphertext.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/EVP.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/rc4.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/ssea.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/digest.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/md5.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp"
+    "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp"
+    "${OPENPPP2_ROOT}/common/aesni/aes.cpp"
+    "${OPENPPP2_ROOT}/ppp/io/File.cpp"
+    "${OPENPPP2_ROOT}/ppp/net/IPEndPoint.cpp"
+    "${OPENPPP2_ROOT}/ppp/net/Ipep.cpp"
+    "${OPENPPP2_ROOT}/ppp/net/http/HttpClient.cpp"
+    "${OPENPPP2_ROOT}/ppp/Random.cpp"
+    "${OPENPPP2_ROOT}/ppp/ssl/SSL.cpp"
+    "${OPENPPP2_ROOT}/ppp/stdafx.cpp"
+    "${OPENPPP2_ROOT}/ppp/threading/Thread.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_reader.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_value.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_writer.cpp")
+target_compile_options(gcm_config_test PRIVATE -ffunction-sections -fdata-sections)
+if(APPLE)
+    target_link_options(gcm_config_test PRIVATE -Wl,-dead_strip)
+elseif(UNIX)
+    target_link_options(gcm_config_test PRIVATE -Wl,--gc-sections)
+endif()
+target_link_libraries(gcm_config_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(transmission_length_test SOURCES
+    transmission_length_test.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/transport_auth_configuration_test_stubs.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/EVP.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
+    "${OPENPPP2_ROOT}/ppp/threading/Thread.cpp"
+    "${OPENPPP2_ROOT}/ppp/Random.cpp"
+    "${OPENPPP2_ROOT}/ppp/stdafx.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/Ciphertext.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/rc4.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/ssea.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/digest.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/md5.cpp"
+    "${OPENPPP2_ROOT}/common/aesni/aes.cpp"
+    "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp")
+target_compile_options(transmission_length_test PRIVATE -ffunction-sections -fdata-sections)
+if(APPLE)
+    target_link_options(transmission_length_test PRIVATE -Wl,-dead_strip)
+elseif(UNIX)
+    target_link_options(transmission_length_test PRIVATE -Wl,--gc-sections)
+endif()
+target_link_libraries(transmission_length_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(record_protector_install_test SOURCES
+    record_protector_install_test.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/transport_auth_configuration_test_stubs.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/AuthenticatedRecordProtector.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/RecordKeyDerivation.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
+    "${OPENPPP2_ROOT}/ppp/threading/Thread.cpp"
+    "${OPENPPP2_ROOT}/ppp/Random.cpp"
+    "${OPENPPP2_ROOT}/ppp/stdafx.cpp"
+    "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp")
+target_compile_options(record_protector_install_test PRIVATE -ffunction-sections -fdata-sections)
+if(APPLE)
+    target_link_options(record_protector_install_test PRIVATE -Wl,-dead_strip)
+elseif(UNIX)
+    target_link_options(record_protector_install_test PRIVATE -Wl,--gc-sections)
+endif()
+target_link_libraries(record_protector_install_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
