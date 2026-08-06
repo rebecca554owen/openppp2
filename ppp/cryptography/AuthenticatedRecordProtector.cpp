@@ -7,6 +7,8 @@
 
 #include <cstring>
 
+#include <ppp/diagnostics/TelemetryFwd.h>
+
 #include <openssl/evp.h>
 
 #include <ppp/diagnostics/Error.h>
@@ -25,33 +27,40 @@ AuthenticatedRecordProtector::AuthenticatedRecordProtector(
     , direction_(direction)
     , cipher_name_(cipher_name)
     , carrier_kind_(carrier_kind) {
-    // The record protector only accepts OpenSSL AEAD ciphers: GCM, CCM or
-    // CHACHA20-POLY1305.  A stream cipher (CFB/CTR) or an unknown name is a
-    // configuration error: fail closed so the carrier never falls back to an
-    // unauthenticated data path.
+    // The record protector accepts OpenSSL AEAD ciphers: GCM, CCM or
+    // CHACHA20-POLY1305.  A stream cipher (CFB/CTR) or an unknown name is not
+    // usable as an AEAD: fall back to the historical default AES-256-GCM so
+    // deployments that keep a legacy non-AEAD key.transport (e.g.
+    // simd-aes-256-cfb) keep working without reconfiguration.  The fallback
+    // is logged so operators can migrate to an explicit AEAD name.
     cipher_ = EVP_get_cipherbyname(cipher_name_.data());
+    if (NULLPTR != cipher_) {
+        const int mode = EVP_CIPHER_mode(cipher_);
+        if (mode == EVP_CIPH_CCM_MODE) {
+            ccm_mode_ = true;
+            valid_ = true;
+            return;
+        }
+
+        const char* cipher_real_name = EVP_CIPHER_name(cipher_);
+        if (mode == EVP_CIPH_GCM_MODE ||
+            (cipher_real_name != NULLPTR && NULLPTR != strstr(cipher_real_name, "CHACHA20"))) {
+            valid_ = true;
+            return;
+        }
+    }
+
+    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "arp",
+        "key.transport '%s' is not an OpenSSL AEAD cipher; falling back to aes-256-gcm",
+        cipher_name_.data());
+    cipher_ = EVP_get_cipherbyname("aes-256-gcm");
+    ccm_mode_ = false;
     if (NULLPTR == cipher_) {
         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
         valid_ = false;
         return;
     }
-
-    const int mode = EVP_CIPHER_mode(cipher_);
-    if (mode == EVP_CIPH_CCM_MODE) {
-        ccm_mode_ = true;
-        valid_ = true;
-        return;
-    }
-
-    const char* cipher_real_name = EVP_CIPHER_name(cipher_);
-    if (mode == EVP_CIPH_GCM_MODE ||
-        (cipher_real_name != NULLPTR && NULLPTR != strstr(cipher_real_name, "CHACHA20"))) {
-        valid_ = true;
-        return;
-    }
-
-    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::CryptoAlgorithmUnsupported);
-    valid_ = false;
+    valid_ = true;
 }
 
 bool AuthenticatedRecordProtector::IsSupportedAeadCipher(const ppp::string& cipher_name) noexcept {
