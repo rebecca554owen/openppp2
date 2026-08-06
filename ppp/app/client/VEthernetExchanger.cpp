@@ -2041,9 +2041,11 @@ namespace ppp {
                                 // defect 2): transport-auth is off, but the peer
                                 // advertised transport-auth v1 capabilities;
                                 // install the AEAD record protectors derived from
-                                // handshake material. Failure is non-fatal and
-                                // falls back to the legacy CFB data path.
+                                // handshake material only when the peer actually
+                                // enables transport-auth.  Failure is non-fatal
+                                // and falls back to the legacy CFB data path.
                                 if (transmission->PeerSupportsTransportAuthV1() &&
+                                    transmission->PeerEnablesTransportAuthV1() &&
                                     !transmission->InstallRecordProtectorsFromHandshake()) {
                                     ppp::telemetry::Count("client.record_protector.install_failed", 1);
                                     ppp::telemetry::Log(Level::kInfo, "client_exchanger",
