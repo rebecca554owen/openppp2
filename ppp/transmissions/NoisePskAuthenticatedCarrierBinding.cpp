@@ -88,7 +88,10 @@ bool NoisePskAuthenticatedCarrierBinding::Export(
     std::size_t output_length) noexcept {
     BindingPurpose purpose{};
     std::size_t required_context_length = 0;
-    if (!IsAvailable(context, strand) ||
+    if (!IsValid() ||
+        context == nullptr || strand == nullptr ||
+        context != context_ || strand != strand_ ||
+        context->stopped() ||
         !ResolvePurpose(label, purpose, required_context_length) ||
         exporter_context == nullptr || context_length != required_context_length ||
         output == nullptr || output_length != 32) {
