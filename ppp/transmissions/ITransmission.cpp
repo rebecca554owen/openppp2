@@ -11,6 +11,8 @@
 
 // Cryptographic and I/O utilities.
 #include <ppp/cryptography/ssea.h>
+#include <ppp/cryptography/noise/NoisePsk.h>
+#include <openssl/crypto.h>
 #include <ppp/io/Stream.h>
 #include <ppp/io/MemoryStream.h>
 #include <ppp/net/Socket.h>
@@ -2051,29 +2053,49 @@ namespace ppp {
                 record_server_role_.load(std::memory_order_acquire) ? "server" : "client",
                 static_cast<int>(GetAuthenticatedCarrierKind()));
 
-            // v2.2.0 zero-configuration record key derivation (protocol section 2.3):
-            // input = handshake random ivv (16B) || configuration key, then HKDF.
-            ppp::cryptography::RecordKeyContext ctx;
-            std::array<std::uint8_t, 64> ikm{};
-            std::size_t ikm_len = 0;
+            // v2.2.2 record key derivation: derive a record root from the Noise
+            // exporter (PFS, transcript-bound) instead of the legacy ivv ||
+            // protocol_key IKM; the HKDF info binds the session context.
+            std::array<std::uint8_t, 32> record_root{};
+            std::array<std::uint8_t, 32> binding_context{};
             const std::uint8_t* ivv_bytes = reinterpret_cast<const std::uint8_t*>(&handshake_ivv_);
-            for (std::size_t i = 0; i < sizeof(handshake_ivv_) && ikm_len < ikm.size(); ++i) {
-                ikm[ikm_len++] = ivv_bytes[i];
-            }
-            const ppp::string& pkey = configuration_->key.protocol_key;
-            for (std::size_t i = 0; i < pkey.size() && ikm_len < ikm.size(); ++i) {
-                ikm[ikm_len++] = static_cast<std::uint8_t>(pkey[i]);
-            }
-            ctx.exporter_secret = ikm.data();
-            ctx.exporter_secret_len = ikm_len;
-            ctx.carrier_kind =
-                GetAuthenticatedCarrierKind() == AuthenticatedCarrierKind::WebSocket ? 1 : 0;
+            std::memcpy(binding_context.data(), ivv_bytes, sizeof(handshake_ivv_));
+            binding_context[16] = static_cast<std::uint8_t>(
+                GetAuthenticatedCarrierKind() == AuthenticatedCarrierKind::WebSocket ? 1 : 0);
+            binding_context[17] = record_server_role_.load(std::memory_order_acquire) ? 1 : 0;
+            binding_context[18] = 0;   // transport-auth key id (single active key)
+            binding_context[19] = 0;   // reserved
+            // binding_context[20..31] stay zero (reserved padding).
 
-            ppp::cryptography::RecordKeyMaterial material;
-            if (!ppp::cryptography::DeriveRecordKeyMaterial(ctx, material)) {
+            if (!ExportAuthenticatedSessionKey(
+                    ppp::cryptography::noise::RecordProtectorExporterLabel,
+                    binding_context.data(), binding_context.size(),
+                    record_root.data(), record_root.size())) {
+                OPENSSL_cleanse(binding_context.data(), binding_context.size());
                 return false;
             }
-            return InstallRecordProtectors(material);
+
+            ppp::cryptography::RecordKeyContext ctx;
+            ctx.exporter_secret = record_root.data();
+            ctx.exporter_secret_len = record_root.size();
+            ctx.session_id = ivv_bytes;
+            ctx.session_id_len = sizeof(handshake_ivv_);
+            ctx.carrier_kind = binding_context[16];
+            ctx.transport_auth_key_id = binding_context[18];
+
+            ppp::cryptography::RecordKeyMaterial material;
+            const bool derived = ppp::cryptography::DeriveRecordKeyMaterial(ctx, material);
+            OPENSSL_cleanse(record_root.data(), record_root.size());
+            OPENSSL_cleanse(binding_context.data(), binding_context.size());
+            if (!derived) {
+                return false;
+            }
+            const bool installed = InstallRecordProtectors(material);
+            OPENSSL_cleanse(material.client_to_server_key.data(), material.client_to_server_key.size());
+            OPENSSL_cleanse(material.client_to_server_nonce_prefix.data(), material.client_to_server_nonce_prefix.size());
+            OPENSSL_cleanse(material.server_to_client_key.data(), material.server_to_client_key.size());
+            OPENSSL_cleanse(material.server_to_client_nonce_prefix.data(), material.server_to_client_nonce_prefix.size());
+            return installed;
         }
 
         /**

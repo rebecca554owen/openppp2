@@ -62,7 +62,8 @@ BOOST_AUTO_TEST_CASE(seal_open_roundtrip_restores_plaintext) {
         material.client_to_server_key,
         material.client_to_server_nonce_prefix,
         RecordDirection::ClientToServer,
-        0);
+        0,
+        "aes-256-gcm");
 
     const std::vector<std::uint8_t> plaintext = Plaintext(100);
     std::vector<std::uint8_t> sealed(plaintext.size() + RecordOverhead);
@@ -97,7 +98,8 @@ BOOST_AUTO_TEST_CASE(tampered_or_truncated_records_are_rejected) {
         material.client_to_server_key,
         material.client_to_server_nonce_prefix,
         RecordDirection::ClientToServer,
-        0);
+        0,
+        "aes-256-gcm");
 
     const std::vector<std::uint8_t> plaintext = Plaintext(64, 0x22);
     std::vector<std::uint8_t> sealed(plaintext.size() + RecordOverhead);

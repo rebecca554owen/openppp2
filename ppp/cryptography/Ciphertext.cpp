@@ -1,5 +1,7 @@
 #include <ppp/cryptography/Ciphertext.h>
+#include <ppp/cryptography/AuthenticatedRecordProtector.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/diagnostics/TelemetryFwd.h>
 
 /**
  * @file Ciphertext.cpp
@@ -15,8 +17,19 @@ namespace ppp {
          */
         Ciphertext::Ciphertext(const ppp::string& method, const ppp::string& password) noexcept {
             if (method.size() > 0 && password.size() > 0) {
-                if (EVP::Support(method)) {
-                    evp_ = make_shared_object<EVP>(method, password);
+                ppp::string effective = method;
+                if (AuthenticatedRecordProtector::IsSupportedAeadCipher(method)) {
+                    // v2.2.2: AEAD names on the legacy path reuse a fixed IV
+                    // (nonce reuse, integrity zeroed); route them to AES-256-CFB.
+                    // Authenticated AEAD records are carried only by the record
+                    // protector installed after the transport-auth handshake.
+                    effective = "aes-256-cfb";
+                    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "ciphertext",
+                        "AEAD cipher '%s' is not supported on the legacy path; using aes-256-cfb",
+                        method.data());
+                }
+                if (EVP::Support(effective)) {
+                    evp_ = make_shared_object<EVP>(effective, password);
                 }
                 elif(RC4::Support(method)) {
                     rc4_ = RC4::Create(method, password);
