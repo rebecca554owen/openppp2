@@ -58,7 +58,11 @@ enum class BindingPurpose : std::uint8_t {
     SessionResumeRetainedRootV1 = 1,
     SessionResumeCandidateV1 = 2,
     P2PWrapV1 = 3,
+    RecordProtectorV1 = 4,
 };
+
+/** Exporter label for the v2.2.2 record protector root key derivation. */
+inline constexpr char RecordProtectorExporterLabel[] = "RecordProtectorV1";
 
 /** Builds the version-1 canonical binary prologue. Key identifiers are 1..64 bytes. */
 bool BuildCanonicalPrologue(Carrier carrier,

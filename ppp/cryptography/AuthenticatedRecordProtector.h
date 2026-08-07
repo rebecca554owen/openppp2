@@ -12,6 +12,7 @@
  */
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -114,12 +115,16 @@ public:
     /**
      * @brief Current send sequence (for diagnostics/tests).
      */
-    std::uint64_t SendSequence() const noexcept { return send_sequence_; }
+    std::uint64_t SendSequence() const noexcept {
+        return send_sequence_.load(std::memory_order_relaxed);
+    }
 
     /**
      * @brief Current receive sequence (for diagnostics/tests).
      */
-    std::uint64_t ReceiveSequence() const noexcept { return receive_sequence_; }
+    std::uint64_t ReceiveSequence() const noexcept {
+        return receive_sequence_.load(std::memory_order_relaxed);
+    }
 
 private:
     bool BuildAad(std::uint8_t* aad, std::size_t& aad_len,
@@ -133,8 +138,8 @@ private:
     ppp::string                                 cipher_name_;
     const EVP_CIPHER*                           cipher_ = NULLPTR;
     bool                                        ccm_mode_ = false;
-    std::uint64_t                               send_sequence_ = 0;
-    std::uint64_t                               receive_sequence_ = 0;
+    std::atomic<std::uint64_t>                  send_sequence_{0};
+    std::atomic<std::uint64_t>                  receive_sequence_{0};
     bool                                        valid_ = false;
 };
 

@@ -13,6 +13,11 @@
 
 #include <ppp/diagnostics/Error.h>
 
+// OpenSSL 4.0 renamed the AEAD capability flag (3.x: EVP_CIPH_AEAD_CIPHER).
+#if !defined(EVP_CIPH_AEAD_CIPHER) && defined(EVP_CIPH_FLAG_AEAD_CIPHER)
+#define EVP_CIPH_AEAD_CIPHER EVP_CIPH_FLAG_AEAD_CIPHER
+#endif
+
 namespace ppp {
 namespace cryptography {
 
@@ -34,17 +39,18 @@ AuthenticatedRecordProtector::AuthenticatedRecordProtector(
     // simd-aes-256-cfb) keep working without reconfiguration.  The fallback
     // is logged so operators can migrate to an explicit AEAD name.
     cipher_ = EVP_get_cipherbyname(cipher_name_.data());
-    if (NULLPTR != cipher_) {
-        const int mode = EVP_CIPHER_mode(cipher_);
-        if (mode == EVP_CIPH_CCM_MODE) {
-            ccm_mode_ = true;
-            valid_ = true;
-            return;
+    if (NULLPTR != cipher_ && (EVP_CIPHER_flags(cipher_) & EVP_CIPH_AEAD_CIPHER) != 0) {
+        // v2.2.2: verify the AEAD key length matches the derived 32-byte key.
+        // aes-128/192-* would otherwise silently truncate the key material.
+        if (EVP_CIPHER_key_length(cipher_) != static_cast<int>(KeyLength)) {
+            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "arp",
+                "key.transport '%s' AEAD key length %d != %d; falling back to aes-256-gcm",
+                cipher_name_.data(), EVP_CIPHER_key_length(cipher_),
+                static_cast<int>(KeyLength));
+            cipher_ = EVP_get_cipherbyname("aes-256-gcm");
         }
-
-        const char* cipher_real_name = EVP_CIPHER_name(cipher_);
-        if (mode == EVP_CIPH_GCM_MODE ||
-            (cipher_real_name != NULLPTR && NULLPTR != strstr(cipher_real_name, "CHACHA20"))) {
+        if (NULLPTR != cipher_) {
+            ccm_mode_ = (EVP_CIPHER_mode(cipher_) == EVP_CIPH_CCM_MODE);
             valid_ = true;
             return;
         }
@@ -73,13 +79,10 @@ bool AuthenticatedRecordProtector::IsSupportedAeadCipher(const ppp::string& ciph
         return false;
     }
 
-    const int mode = EVP_CIPHER_mode(cipher);
-    if (mode == EVP_CIPH_GCM_MODE || mode == EVP_CIPH_CCM_MODE) {
-        return true;
-    }
-
-    const char* cipher_real_name = EVP_CIPHER_name(cipher);
-    return cipher_real_name != NULLPTR && NULLPTR != strstr(cipher_real_name, "CHACHA20");
+    // v2.2.2: use the AEAD capability flag instead of a name substring match;
+    // the bare stream cipher "chacha20" must not be mistaken for
+    // "chacha20-poly1305" (GCM/CCM/ChaCha20-Poly1305 all set the flag).
+    return (EVP_CIPHER_flags(cipher) & EVP_CIPH_AEAD_CIPHER) != 0;
 }
 
 AuthenticatedRecordProtector::~AuthenticatedRecordProtector() noexcept {
@@ -141,13 +144,13 @@ bool AuthenticatedRecordProtector::Seal(
         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::EvpEncryptZeroLengthInput);
         return false;
     }
-    if (send_sequence_ == UINT64_MAX) {
+    if (send_sequence_.load(std::memory_order_relaxed) == UINT64_MAX) {
         // Sequence wrap must never happen; close before nonce reuse.
         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
         return false;
     }
 
-    const std::uint64_t sequence = send_sequence_;
+    const std::uint64_t sequence = send_sequence_.load(std::memory_order_relaxed);
 
     // Header: ciphertext_len (4B BE) || sequence (8B BE)
     std::uint8_t* header = output;
@@ -227,11 +230,14 @@ bool AuthenticatedRecordProtector::Seal(
     EVP_CIPHER_CTX_free(ctx);
     if (!ok) {
         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
+        OPENSSL_cleanse(output, RecordHeaderLength + plaintext_len);
         return false;
     }
 
+    OPENSSL_cleanse(nonce, sizeof(nonce));
+    OPENSSL_cleanse(aad, sizeof(aad));
     output_len = RecordHeaderLength + plaintext_len + TagLength;
-    ++send_sequence_;
+    send_sequence_.store(sequence + 1, std::memory_order_relaxed);
     return true;
 }
 
@@ -279,7 +285,8 @@ bool AuthenticatedRecordProtector::Open(
     for (int i = 0; i < 8; ++i) {
         sequence = (sequence << 8) | input[4 + i];
     }
-    if (sequence != receive_sequence_) {
+    const std::uint64_t expected = receive_sequence_.load(std::memory_order_relaxed);
+    if (sequence != expected) {
         // Replay, reorder or jump: protocol error.
         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
         return false;
@@ -357,13 +364,17 @@ bool AuthenticatedRecordProtector::Open(
 
     EVP_CIPHER_CTX_free(ctx);
     if (!ok) {
-        // Authentication failure: do NOT advance receive_sequence_.
+        // Authentication failure: do NOT advance receive_sequence_.  The
+        // dedicated error code lets operators distinguish active tampering
+        // from plain network corruption / frame decode errors.
         OPENSSL_cleanse(output, ciphertext_len);
-        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::EvpDecryptInvalidArguments);
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::EvpDecryptAuthenticationFailed);
         return false;
     }
 
-    ++receive_sequence_;
+    OPENSSL_cleanse(nonce, sizeof(nonce));
+    OPENSSL_cleanse(aad, sizeof(aad));
+    receive_sequence_.store(expected + 1, std::memory_order_relaxed);
     return true;
 }
 

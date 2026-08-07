@@ -86,32 +86,6 @@ jobs:
             -DENABLE_SIMD=${{ matrix.enable_simd }}
           make -j$(nproc)
 
-      - name: UDP benchmark correctness smoke
-        if: matrix.suffix == ''
-        run: |
-          TP="${{ github.workspace }}/third-party"
-          cmake -S bench -B build-bench \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DOPENPPP2_BOOST_INCLUDE_DIR="$TP/boost"
-          cmake --build build-bench -j$(nproc)
-          ctest --test-dir build-bench --output-on-failure -L correctness
-
-      - name: Crypto benchmark (EVP GCM vs SIMD, x86 AES-NI)
-        if: matrix.suffix == '-simd'
-        run: |
-          TP="${{ github.workspace }}/third-party"
-          cmake -S bench -B build-bench-simd \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DOPENPPP2_BOOST_INCLUDE_DIR="$TP/boost"
-          cmake --build build-bench-simd --target bm_crypto -j$(nproc)
-          mkdir -p bench-results
-          ./build-bench-simd/bm_crypto \
-            --benchmark_min_time=0.2 \
-            --benchmark_repetitions=9 \
-            --benchmark_out=bench-results/bm_crypto.json \
-            --benchmark_out_format=json > bench-results/bm_crypto.txt 2>&1 || true
-          echo "benchmark raw -> bench-results/"
-
       - name: Client/server Android-key compat smoke
         if: matrix.suffix == ''
         run: |

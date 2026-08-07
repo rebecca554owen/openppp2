@@ -206,6 +206,8 @@ const char* PurposeLabel(BindingPurpose purpose) noexcept {
         return CandidatePurpose;
     case BindingPurpose::P2PWrapV1:
         return P2PWrapPurpose;
+    case BindingPurpose::RecordProtectorV1:
+        return RecordProtectorExporterLabel;
     default:
         return nullptr;
     }
@@ -360,8 +362,18 @@ bool NoisePskHandshakeResult::DeriveBinding(
         return false;
     }
     const char* label = PurposeLabel(purpose);
-    const std::size_t required_context_length =
-        purpose == BindingPurpose::P2PWrapV1 ? 113u : 16u;
+    std::size_t required_context_length = 16u;
+    switch (purpose) {
+    case BindingPurpose::P2PWrapV1:
+        required_context_length = 113u;
+        break;
+    case BindingPurpose::RecordProtectorV1:
+        // ivv(16) || carrier(1) || role(1) || key_id(4) || pad(10)
+        required_context_length = 32u;
+        break;
+    default:
+        break;
+    }
     if (label == nullptr || context_length != required_context_length) return false;
 
     const std::size_t label_length = std::strlen(label);

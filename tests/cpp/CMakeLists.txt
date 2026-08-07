@@ -854,6 +854,7 @@ openppp2_add_cpp_test(record_protector_install_test SOURCES
     "${OPENPPP2_ROOT}/ppp/cryptography/RecordKeyDerivation.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp"
     "${OPENPPP2_ROOT}/ppp/threading/Thread.cpp"
     "${OPENPPP2_ROOT}/ppp/Random.cpp"
     "${OPENPPP2_ROOT}/ppp/stdafx.cpp"

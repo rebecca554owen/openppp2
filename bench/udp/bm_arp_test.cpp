@@ -92,7 +92,7 @@ int main()
     }
     std::array<uint8_t, 4> np = { 0xAA, 0xBB, 0xCC, 0xDD };
 
-    AuthenticatedRecordProtector p(key, np, RecordDirection::ClientToServer, 0);
+    AuthenticatedRecordProtector p(key, np, RecordDirection::ClientToServer, 0, "aes-256-gcm");
 
     // 1. Seal + Open roundtrip
     std::vector<uint8_t> plain(100);

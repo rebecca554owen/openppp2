@@ -33,6 +33,12 @@ bool ResolvePurpose(const char* label, BindingPurpose& purpose,
         required_context_length = ppp::p2p::P2PExporterContext{}.size();
         return true;
     }
+    if (std::strcmp(label,
+            ppp::cryptography::noise::RecordProtectorExporterLabel) == 0) {
+        purpose = BindingPurpose::RecordProtectorV1;
+        required_context_length = 32u;   // ivv16 || carrier1 || role1 || key_id4 || pad10
+        return true;
+    }
     return false;
 }
 
