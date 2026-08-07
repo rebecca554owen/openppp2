@@ -1243,7 +1243,7 @@ namespace vmux {
     /**
      * @brief Processes in-order/out-of-order packets and advances ACK state.
      */
-    bool vmux_net::packet_input_unorder(const vmux_linklayer_ptr& linklayer, vmux_hdr* h, int length, uint64_t now) noexcept {
+    bool vmux_net::packet_input_unorder(const vmux_linklayer_ptr& linklayer, vmux_hdr* h, int length, uint64_t now, const std::shared_ptr<Byte>& owner) noexcept {
         // Prepare the ack frames.
         if (base_.disposed_.load(std::memory_order_acquire)) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
@@ -1255,7 +1255,7 @@ namespace vmux {
         // Reliability control frames are unordered in both modes: handle them
         // inline before any sequence-space reasoning (they carry seq=0).
         if (is_reliability_control(h->cmd)) {
-            if (!packet_input(h->cmd, (Byte*)h, length, now)) {
+            if (!packet_input(h->cmd, (Byte*)h, length, now, owner)) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 return false;
             }
@@ -1267,7 +1267,7 @@ namespace vmux {
 
         uint32_t seq = ntohl(h->seq);
         if (status_.rx_ack_ == seq) {
-                if (packet_input(h->cmd, (Byte*)h, length, now)) {
+                if (packet_input(h->cmd, (Byte*)h, length, now, owner)) {
                     status_.rx_ack_++;
                 }
                 else {
@@ -1285,7 +1285,7 @@ namespace vmux {
 
                     note_flow_unbuffered(static_cast<size_t>(i.length));
 
-                    if (packet_input(p->cmd, (Byte*)p, i.length, now)) {
+                    if (packet_input(p->cmd, (Byte*)p, i.length, now, i.buffer)) {
                         status_.rx_ack_++;
                     }
                     else {
@@ -1333,14 +1333,21 @@ namespace vmux {
                 return true;
             }
 
-            std::shared_ptr<Byte> buf = make_byte_array(length);
+            std::shared_ptr<Byte> buf;
+            if (NULLPTR != owner) {
+                buf = ppp::wrap_shared_pointer(reinterpret_cast<ppp::Byte*>(h), owner);
+            } else {
+                buf = make_byte_array(length);
+                if (NULLPTR != buf) {
+                    memcpy(buf.get(), h, length);
+                }
+            }
             if (NULLPTR == buf) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetReorderPacketBufferAllocFailed);
                 return false;
             }
 
             rx_packet packet = { buf, length };
-            memcpy(buf.get(), h, length);
 
             bool inserted = rx_queue_.emplace(std::make_pair(seq, packet)).second;
             if (!inserted) {
@@ -1380,10 +1387,10 @@ namespace vmux {
     }
 
     /** @brief Delivers payload data to one logical vmux socket. */
-    void vmux_net::packet_input_read(uint32_t connection_id, Byte* buffer, int buffer_size, uint64_t now) noexcept {
+    void vmux_net::packet_input_read(uint32_t connection_id, Byte* buffer, int buffer_size, uint64_t now, const std::shared_ptr<Byte>& owner) noexcept {
         vmux_skt_ptr skt = get_connection(connection_id);
         if (NULLPTR != skt) {
-            if (skt->input(buffer, buffer_size)) {
+            if (skt->input(owner, buffer, buffer_size)) {
                 skt->active(now);
             }
             else {
@@ -1395,7 +1402,7 @@ namespace vmux {
     /**
      * @brief Dispatches an incoming vmux command frame to its handler.
      */
-    bool vmux_net::packet_input(Byte cmd, Byte* buffer, int buffer_size, uint64_t now) noexcept {
+    bool vmux_net::packet_input(Byte cmd, Byte* buffer, int buffer_size, uint64_t now, const std::shared_ptr<Byte>& owner) noexcept {
         buffer_size -= sizeof(vmux_hdr);
         if (buffer_size < 0) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
@@ -1407,7 +1414,7 @@ namespace vmux {
 
         uint32_t connection_id = ntohl(h->connection_id);
         if (cmd == cmd_push) {
-            packet_input_read(connection_id, buffer, buffer_size, now);
+            packet_input_read(connection_id, buffer, buffer_size, now, owner);
         }
         elif(cmd == cmd_fin) {
             packet_input_read(connection_id, NULLPTR, 0, now);
@@ -1564,7 +1571,7 @@ namespace vmux {
      *          per-flow data commands. cmd_push forwards the payload; cmd_fin
      *          delivers an end-of-stream (NULL payload) to the connection.
      */
-    bool vmux_net::deliver_one(Byte cmd, vmux_hdr* h, int length, uint64_t now) noexcept {
+    bool vmux_net::deliver_one(Byte cmd, vmux_hdr* h, int length, uint64_t now, const std::shared_ptr<Byte>& owner) noexcept {
         int buffer_size = length - (int)sizeof(vmux_hdr);
         if (buffer_size < 0) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
@@ -1574,7 +1581,7 @@ namespace vmux {
         Byte* payload = (Byte*)(h + 1);
         uint32_t connection_id = ntohl(h->connection_id);
         if (cmd == cmd_push) {
-            packet_input_read(connection_id, payload, buffer_size, now);
+            packet_input_read(connection_id, payload, buffer_size, now, owner);
         }
         else { // cmd_fin
             packet_input_read(connection_id, NULLPTR, 0, now);
@@ -1685,7 +1692,7 @@ namespace vmux {
      *          head-of-line block other connections because each connection_id
      *          has its own flow_rx_next_ and reorder buffer.
      */
-    bool vmux_net::packet_input_flow(const vmux_linklayer_ptr& linklayer, vmux_hdr* h, int length, uint64_t now) noexcept {
+    bool vmux_net::packet_input_flow(const vmux_linklayer_ptr& linklayer, vmux_hdr* h, int length, uint64_t now, const std::shared_ptr<Byte>& owner) noexcept {
         if (base_.disposed_.load(std::memory_order_acquire)) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
@@ -1697,7 +1704,7 @@ namespace vmux {
 
         // Control frames are not gated by any per-flow DSN; handle them inline.
         if (is_session_control(cmd) || is_connection_control(cmd) || is_reliability_control(cmd)) {
-            if (!packet_input(cmd, (Byte*)h, length, now)) {
+            if (!packet_input(cmd, (Byte*)h, length, now, owner)) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
                 return false;
             }
@@ -1734,7 +1741,7 @@ namespace vmux {
                 fx.fin_seen_ = true;
             }
 
-            if (!deliver_one(cmd, h, length, now)) {
+            if (!deliver_one(cmd, h, length, now, owner)) {
                 return false;
             }
             fx.flow_rx_next_++;
@@ -1753,7 +1760,7 @@ namespace vmux {
                     if (pcmd == cmd_fin) {
                         fx.fin_seen_ = true;
                     }
-                    if (!deliver_one(pcmd, ph, pk.length, now)) {
+                    if (!deliver_one(pcmd, ph, pk.length, now, pk.buffer)) {
                         return false;
                     }
                     fx.flow_rx_next_++;
@@ -1825,14 +1832,21 @@ namespace vmux {
                 }
             }
 
-            std::shared_ptr<Byte> buf = make_byte_array(length);
+            std::shared_ptr<Byte> buf;
+            if (NULLPTR != owner) {
+                buf = ppp::wrap_shared_pointer(reinterpret_cast<ppp::Byte*>(h), owner);
+            } else {
+                buf = make_byte_array(length);
+                if (NULLPTR != buf) {
+                    memcpy(buf.get(), h, length);
+                }
+            }
             if (NULLPTR == buf) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetReorderPacketBufferAllocFailed);
                 return false;
             }
 
             rx_packet packet = { buf, length };
-            memcpy(buf.get(), h, length);
 
             const size_t entry_cap = std::max<size_t>(
                 1, flow_reorder_cap_bytes_ / sizeof(vmux_hdr));
@@ -2449,8 +2463,8 @@ namespace vmux {
                         ppp::telemetry::Count("mux.fec.recovered", 1);
                         note_ack_pending(want.connection_id, want.sequence, now);
                         const bool delivered = (ordering_mode_ == ordering_flow_v2)
-                            ? packet_input_flow(linklayer, rh, recovered_length, now)
-                            : packet_input_unorder(linklayer, rh, recovered_length, now);
+                            ? packet_input_flow(linklayer, rh, recovered_length, now, recovered)
+                            : packet_input_unorder(linklayer, rh, recovered_length, now, recovered);
                         if (!delivered) {
                             close_exec();
                             return;
@@ -3726,8 +3740,8 @@ namespace vmux {
                     uint64_t now = now_tick();
                     note_inbound_reliability_frame(linklayer, buffer_memory, h, buffer_size, now);
                     bool delivered = (ordering_mode_ == ordering_flow_v2)
-                        ? packet_input_flow(linklayer, h, buffer_size, now)
-                        : packet_input_unorder(linklayer, h, buffer_size, now);
+                        ? packet_input_flow(linklayer, h, buffer_size, now, buffer_memory)
+                        : packet_input_unorder(linklayer, h, buffer_size, now, buffer_memory);
                     if (delivered) {
                         return true;
                     }

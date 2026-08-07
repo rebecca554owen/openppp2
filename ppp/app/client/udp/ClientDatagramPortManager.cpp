@@ -144,7 +144,7 @@ namespace ppp {
                     VEthernetDatagramPortPtr datagram = GetDatagramPort(source);
                     if (NULLPTR != datagram) {
                         if (NULLPTR != packet && packet_length > 0) {
-                            datagram->OnMessage(packet, packet_length, destination);
+                            datagram->OnMessage(nullptr, packet, packet_length, destination);
                         }
                         else {
                             datagram->MarkFinalize();
@@ -152,7 +152,7 @@ namespace ppp {
                         }
                     }
                     elif(NULLPTR != packet && packet_length > 0) {
-                        ports_.datagram_output(source, destination, packet, packet_length, false);
+                        ports_.datagram_output(source, destination, nullptr, packet, packet_length, false);
                     }
 
                     return true;

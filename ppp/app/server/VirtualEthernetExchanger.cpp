@@ -1081,14 +1081,14 @@ namespace ppp {
             }
 
             /** @brief Handles ICMP echo payload forwarded from client. */
-            bool VirtualEthernetExchanger::OnEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
-                SendEchoToDestination(transmission, packet, packet_length);
+            bool VirtualEthernetExchanger::OnEcho(const ITransmissionPtr& transmission, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept {
+                SendEchoToDestination(transmission, owner, packet, packet_length);
                 return true;
             }
 
             /** @brief Handles UDP send request from virtual client endpoint. */
-            bool VirtualEthernetExchanger::OnSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept {
-                SendPacketToDestination(transmission, sourceEP, destinationEP, packet, packet_length, y);
+            bool VirtualEthernetExchanger::OnSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept {
+                SendPacketToDestination(transmission, sourceEP, destinationEP, owner, packet, packet_length, y);
                 return true;
             }
 
@@ -1765,6 +1765,7 @@ namespace ppp {
             bool VirtualEthernetExchanger::SendPacketToDestination(const ITransmissionPtr& transmission,
                 const boost::asio::ip::udp::endpoint&   sourceEP,
                 const boost::asio::ip::udp::endpoint&   destinationEP,
+                const std::shared_ptr<Byte>&            owner,
                 Byte*                                   packet,
                 int                                     packet_length,
                 YieldContext&                           y) noexcept {
@@ -1839,7 +1840,7 @@ namespace ppp {
                         return true;
                     }
 
-                    status = RedirectDnsQuery(transmission, sourceEP, destinationEP, packet, packet_length, false);
+                    status = RedirectDnsQuery(transmission, sourceEP, destinationEP, owner, packet, packet_length, false);
                     if (status > -1) {
                         return status != 0;
                     }
@@ -2013,6 +2014,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                 const ITransmissionPtr&                             transmission,
                 const boost::asio::ip::udp::endpoint&               sourceEP,
                 const boost::asio::ip::udp::endpoint&               destinationEP,
+                const std::shared_ptr<Byte>&                        owner,
                 Byte*                                               packet,
                 int                                                 packet_length,
                 bool                                                static_transit) noexcept {
@@ -2032,13 +2034,15 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     return false;
                 }
 
-                const std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = transmission->BufferAllocator;
-                const auto buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, packet_length);
-                if (NULLPTR == buffer) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
-                    return false;
-                }
-                else {
+                // Zero-copy slice when owner is available; otherwise fall back to alloc+memcpy.
+                std::shared_ptr<Byte> buffer = ppp::wrap_shared_pointer(packet, owner);
+                if (!buffer) {
+                    const std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = transmission->BufferAllocator;
+                    buffer = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, packet_length);
+                    if (NULLPTR == buffer) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                        return false;
+                    }
                     memcpy(buffer.get(), packet, packet_length);
                 }
 
@@ -2089,6 +2093,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                 const ITransmissionPtr&                             transmission,
                 const boost::asio::ip::udp::endpoint&               sourceEP,
                 const boost::asio::ip::udp::endpoint&               destinationEP,
+                const std::shared_ptr<Byte>&                        owner,
                 Byte*                                               packet,
                 int                                                 packet_length,
                 bool                                                static_transit) noexcept {
@@ -2105,7 +2110,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                 boost::asio::ip::udp::endpoint redirect_server = switcher_->GetDnsserverEndPoint();
                 boost::asio::ip::address dnsserverIP = redirect_server.address();
                 if (dnsserverIP.is_unspecified()) {
-                    return INTERNAL_RedirectDnsQuery(transmission, sourceEP, destinationEP, packet, packet_length, static_transit);
+                    return INTERNAL_RedirectDnsQuery(transmission, sourceEP, destinationEP, owner, packet, packet_length, static_transit);
                 }
 
                 boost::asio::ip::udp::endpoint dnsserverEP(dnsserverIP, PPP_DNS_SYS_PORT);
@@ -2113,7 +2118,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                     dnsserverEP,
                     sourceEP,
                     destinationEP,
-                    wrap_shared_pointer(packet), packet_length, static_transit);
+                    ppp::wrap_shared_pointer(packet, owner), packet_length, static_transit);
             }
 
             /** @brief Schedules periodic maintenance for all exchanger-owned runtime objects. */
@@ -2312,7 +2317,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
             }
 
             /** @brief Parses and forwards ICMP packet to echo subsystem after firewall checks. */
-            bool VirtualEthernetExchanger::SendEchoToDestination(const ITransmissionPtr& transmission, Byte* packet, int packet_length) noexcept {
+            bool VirtualEthernetExchanger::SendEchoToDestination(const ITransmissionPtr& transmission, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length) noexcept {
                 if (disposed_) {
                     return false;
                 }
@@ -2330,7 +2335,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                 }
 
                 std::shared_ptr<ppp::threading::BufferswapAllocator> allocator = echo->BufferAllocator;
-                std::shared_ptr<IPFrame> ip = IPFrame::Parse(allocator, packet, packet_length);
+                std::shared_ptr<IPFrame> ip = IPFrame::Parse(allocator, owner, packet, packet_length);
                 if (NULLPTR == ip) {
                     return false;
                 }
@@ -2503,7 +2508,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
             }
 
             /** @brief Forwards FRP UDP payload to corresponding mapping port. */
-            bool VirtualEthernetExchanger::OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept {
+            bool VirtualEthernetExchanger::OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, false, remote_port);
                 if (NULLPTR != mapping_port) {
                     mapping_port->Server_OnFrpSendTo(packet, packet_length, sourceEP);
@@ -2533,10 +2538,10 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
             }
 
             /** @brief Forwards FRP TCP stream payload to corresponding mapping port. */
-            bool VirtualEthernetExchanger::OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length) noexcept {
+            bool VirtualEthernetExchanger::OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const std::shared_ptr<Byte>& owner, const void* packet, int packet_length) noexcept {
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
                 if (NULLPTR != mapping_port) {
-                    mapping_port->Server_OnFrpPush(connection_id, packet, packet_length);
+                    mapping_port->Server_OnFrpPush(connection_id, owner, packet, packet_length);
                 }
 
                 return true;
@@ -2779,7 +2784,7 @@ socket->send_to(boost::asio::buffer(packet.get(), packet_length), redirectEP,
                         return true;
                     }
 
-                    status = RedirectDnsQuery(transmission, sourceEP, destinationEP, messages.get(), packet->Length, true);
+                    status = RedirectDnsQuery(transmission, sourceEP, destinationEP, messages, messages.get(), packet->Length, true);
                     if (status > -1) {
                         return status != 0;
                     }

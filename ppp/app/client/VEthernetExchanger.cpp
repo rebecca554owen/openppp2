@@ -307,8 +307,8 @@ namespace ppp {
                 udp::UdpRelayHostPorts host;
                 host.datagram_output =
                     [self](const boost::asio::ip::udp::endpoint& source, const boost::asio::ip::udp::endpoint& destination,
-                           void* packet, int packet_size, bool caching) noexcept {
-                        return self->switcher_->DatagramOutput(source, destination, packet, packet_size, caching);
+                           const std::shared_ptr<Byte>& owner, void* packet, int packet_size, bool caching) noexcept {
+                        return self->switcher_->DatagramOutput(source, destination, owner, packet, packet_size, caching);
                     };
                 host.get_transmission = [self]() noexcept { return self->transmission_; };
                 host.create_port =
@@ -3535,13 +3535,13 @@ namespace ppp {
             }
 
             /** @brief Handles packet echo callback from server. */
-            bool VEthernetExchanger::OnEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept {
+            bool VEthernetExchanger::OnEcho(const ITransmissionPtr& transmission, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 switcher_->Output(packet, packet_length);
                 return true;
             }
 
             /** @brief Handles UDP callback packet delivered by remote exchanger. */
-            bool VEthernetExchanger::OnSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept {
+            bool VEthernetExchanger::OnSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept {
                 return datagram_manager_->OnSendTo(transmission, sourceEP, destinationEP, packet, packet_length, y);
             }
 
@@ -3818,8 +3818,8 @@ namespace ppp {
             }
 
             /** @brief Processes incoming linklayer packet and refreshes keepalive timer. */
-            bool VEthernetExchanger::PacketInput(const ITransmissionPtr& transmission, Byte* p, int packet_length, YieldContext& y) noexcept {
-                bool successed = VirtualEthernetLinklayer::PacketInput(transmission, p, packet_length, y);
+            bool VEthernetExchanger::PacketInput(const ITransmissionPtr& transmission, const std::shared_ptr<Byte>& owner, Byte* p, int packet_length, YieldContext& y) noexcept {
+                bool successed = VirtualEthernetLinklayer::PacketInput(transmission, owner, p, packet_length, y);
                 if (successed) {
                     if (network_state_ == NetworkState_Established) {
                         keepalive_policy_.OnPacket(Executors::GetTickCount());
@@ -3934,19 +3934,13 @@ namespace ppp {
             }
 
             /** @brief Dispatches FRP UDP payload callback to mapped client port. */
-            bool VEthernetExchanger::OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept {
+            bool VEthernetExchanger::OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept {
 #if defined(_ANDROID)
-                AppConfigurationPtr configuration = GetConfiguration();
-                if (!configuration) {
-                    return false;
-                }
-
-                std::shared_ptr<Byte> packet_managed = ppp::net::asio::IAsynchronousWriteIoQueue::Copy(configuration->GetBufferAllocator(), packet, packet_length);
                 Post(
-                    [this, packet_managed, sourceEP, packet_length, in, remote_port]() noexcept {
+                    [this, owner, packet, packet_length, sourceEP, in, remote_port]() noexcept {
                         VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, false, remote_port);
                         if (NULLPTR != mapping_port) {
-                            mapping_port->Client_OnFrpSendTo(packet_managed.get(), packet_length, sourceEP);
+                            mapping_port->Client_OnFrpSendTo(packet, packet_length, sourceEP);
                         }
                     });
 #else
@@ -3988,10 +3982,10 @@ namespace ppp {
             }
 
             /** @brief Dispatches FRP TCP payload callback to mapped client port. */
-            bool VEthernetExchanger::OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length) noexcept {
+            bool VEthernetExchanger::OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const std::shared_ptr<Byte>& owner, const void* packet, int packet_length) noexcept {
                 VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
                 if (NULLPTR != mapping_port) {
-                    mapping_port->Client_OnFrpPush(connection_id, packet, packet_length);
+                    mapping_port->Client_OnFrpPush(connection_id, owner, packet, packet_length);
                 }
 
                 return true;

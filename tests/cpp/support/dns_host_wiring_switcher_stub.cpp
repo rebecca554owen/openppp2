@@ -283,6 +283,17 @@ bool VEthernetNetworkSwitcher::DatagramOutput(
     return g_inject_ok;
 }
 
+bool VEthernetNetworkSwitcher::DatagramOutput(
+    const boost::asio::ip::udp::endpoint&,
+    const boost::asio::ip::udp::endpoint&,
+    const std::shared_ptr<Byte>&,
+    void*,
+    int,
+    bool) noexcept {
+
+    return g_inject_ok;
+}
+
 bool VEthernetNetworkSwitcher::PreparedAggregator() noexcept {
     if (NULLPTR == aggregator_loader_) {
         return false;

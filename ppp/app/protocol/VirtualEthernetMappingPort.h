@@ -123,7 +123,7 @@ namespace ppp {
                 /** @brief Handles server-side disconnect control packet. @param connection_id Connection identifier. @return True when handled successfully. @note Missing connection ids are treated as no-op failures by implementation. */
                 bool                                                                        Server_OnFrpDisconnect(int connection_id) noexcept;
                 /** @brief Handles server-side payload push. @param connection_id Connection identifier. @param packet Payload pointer. @param packet_length Payload length. @return True on successful dispatch. @note Data is forwarded to local FRP user socket/port. */
-                bool                                                                        Server_OnFrpPush(int connection_id, const void* packet, int packet_length) noexcept;
+                bool                                                                        Server_OnFrpPush(int connection_id, const std::shared_ptr<Byte>& owner, const void* packet, int packet_length) noexcept;
                 /** @brief Handles server-side UDP send-to request. @param packet Datagram payload pointer. @param packet_length Datagram payload length. @param sourceEP Source endpoint metadata. @return True on successful send. @note Used by UDP mapping mode. */
                 bool                                                                        Server_OnFrpSendTo(const void* packet, int packet_length, const boost::asio::ip::udp::endpoint& sourceEP) noexcept;
 
@@ -131,7 +131,7 @@ namespace ppp {
                 /** @brief Handles client-side disconnect control packet. @param connection_id Connection identifier. @return True when handled successfully. @note Closes corresponding local destination session. */
                 bool                                                                        Client_OnFrpDisconnect(int connection_id) noexcept;
                 /** @brief Handles client-side payload push. @param connection_id Connection identifier. @param packet Payload pointer. @param packet_length Payload length. @return True on successful dispatch. @note Data is forwarded to destination server/socket. */
-                bool                                                                        Client_OnFrpPush(int connection_id, const void* packet, int packet_length) noexcept;
+                bool                                                                        Client_OnFrpPush(int connection_id, const std::shared_ptr<Byte>& owner, const void* packet, int packet_length) noexcept;
                 /** @brief Handles client-side connect request. @param connection_id Connection identifier. @return True when local connect sequence starts. @note Mainly used by TCP mapping mode. */
                 bool                                                                        Client_OnFrpConnect(int connection_id) noexcept;
                 /** @brief Handles client-side UDP send-to request. @param packet Datagram payload pointer. @param packet_length Datagram payload length. @param sourceEP Source endpoint metadata. @return True on successful send. @note Used by UDP mapping mode. */
@@ -159,7 +159,7 @@ namespace ppp {
                         /** @brief Sends connect request to FRP client side. @return True on successful request dispatch. @note Used after local user socket accept. */
                         bool                                                                ConnectToFrpClient() noexcept;
                         /** @brief Writes data to local FRP user socket. @param packet Payload pointer. @param packet_size Payload length. @return True on async write queue acceptance. @note Data path: remote FRP client -> local user. */
-                        bool                                                                SendToFrpUser(const void* packet, int packet_size) noexcept;
+                        bool                                                                SendToFrpUser(const std::shared_ptr<Byte>& owner, const void* packet, int packet_size) noexcept;
                         /** @brief Writes data to remote FRP client channel. @param packet Payload pointer. @param packet_size Payload length. @return True on successful transmission write. @note Data path: local user -> remote FRP client. */
                         bool                                                                SendToFrpClient(const void* packet, int packet_size) noexcept;
                         /** @brief Refreshes timeout deadline based on connection stage. @return void. @note Uses connect timeout before active state and inactive timeout afterwards. */
@@ -235,7 +235,7 @@ namespace ppp {
                         /** @brief Disposes this connection. @return void. @note Delegates to `Finalize(false)`. */
                         void                                                                Dispose() noexcept { Finalize(false); }
                         /** @brief Sends payload to local destination server. @param packet Payload pointer. @param packet_size Payload length. @return True on queue acceptance. @note Data path: remote FRP server -> local destination. */
-                        bool                                                                SendToDestinationServer(const void* packet, int packet_size) noexcept;
+                        bool                                                                SendToDestinationServer(const std::shared_ptr<Byte>& owner, const void* packet, int packet_size) noexcept;
 
                     public:
                         /** @brief Handles local destination connect result. @param ok True when connect succeeded. @return True on successful protocol notification. @note Sends FRP connect-ok response. */

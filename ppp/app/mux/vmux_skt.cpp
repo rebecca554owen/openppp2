@@ -446,11 +446,28 @@ namespace vmux {
 
     /**
      * @brief Queue inbound peer payload and flush to local socket.
+     *
+     * Legacy 2-arg overload — delegates to the zero-copy 3-arg variant with a
+     * null owner, preserving the original alloc+memcpy behavior.
+     *
      * @param payload Payload bytes from vmux frame.
      * @param payload_size Payload size in bytes.
      * @return true when payload is accepted for forwarding.
      */
     bool vmux_skt::input(Byte* payload, int payload_size) noexcept {
+        return input(nullptr, payload, payload_size);
+    }
+
+    /**
+     * @brief Zero-copy variant of @ref input.
+     * @param owner Shared pointer that owns the memory region of @p payload.
+     *              When non-null, the payload is referenced via wrap_shared_pointer
+     *              instead of being copied into a freshly allocated buffer.
+     * @param payload Payload bytes from vmux frame.
+     * @param payload_size Payload size in bytes.
+     * @return true when payload is accepted for forwarding.
+     */
+    bool vmux_skt::input(const std::shared_ptr<Byte>& owner, Byte* payload, int payload_size) noexcept {
         if (status_.disposed_) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
@@ -458,11 +475,18 @@ namespace vmux {
 
         std::shared_ptr<Byte> buffer;
         if (payload_size > 0) {
-            buffer = mux_->make_byte_array(payload_size);
-            if (NULLPTR != buffer) {
-                memcpy(buffer.get(), payload, payload_size);
+            if (NULLPTR != owner) {
+                // Zero-copy: alias the owner buffer to reference the payload region.
+                buffer = ppp::wrap_shared_pointer(payload, owner);
             }
             else {
+                buffer = mux_->make_byte_array(payload_size);
+                if (NULLPTR != buffer) {
+                    memcpy(buffer.get(), payload, payload_size);
+                }
+            }
+
+            if (NULLPTR == buffer) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketInputBufferAllocFailed);
                 return false;
             }

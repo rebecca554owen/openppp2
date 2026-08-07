@@ -139,6 +139,15 @@ namespace ppp {
                 static std::shared_ptr<Byte>                            Copy(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const void* data, int datalen) noexcept;
 
                 /**
+                 * @brief Returns a shared_ptr view of @p data backed by @p owner (zero-copy).
+                 *
+                 * When @p owner is non-null the function returns a wrap_shared_pointer slice
+                 * into the owner buffer without copying.  When @p owner is null it falls back
+                 * to the copy-based Copy(allocator, data, datalen) overload.
+                 */
+                static std::shared_ptr<Byte>                            Copy(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const std::shared_ptr<Byte>& owner, const void* data, int datalen) noexcept;
+
+                /**
                  * @brief Returns the number of write contexts currently accepted but not yet completed.
                  * @return  Pending item count (queued + in-flight).
                  */

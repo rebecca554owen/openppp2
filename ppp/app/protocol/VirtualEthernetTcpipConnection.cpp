@@ -310,7 +310,7 @@ namespace ppp {
                     return false;
                 }
 
-                if (!connector->PacketInput(transmission, packet.get(), packet_size, y)) {
+                if (!connector->PacketInput(transmission, packet, packet.get(), packet_size, y)) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return false;
                 }
@@ -448,7 +448,7 @@ namespace ppp {
                     return false;
                 }
 
-                if (!connector->PacketInput(transmission, packet.get(), packet_size, y)) {
+                if (!connector->PacketInput(transmission, packet, packet.get(), packet_size, y)) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                     return false;
                 }

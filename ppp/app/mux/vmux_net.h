@@ -515,21 +515,21 @@ namespace vmux {
         /** @brief Remove and return connection when pointer identity matches. */
         vmux_skt_ptr                                                                release_connection(uint32_t connection_id, vmux_skt* refer_pointer) noexcept;
 
-        /** @brief Insert or process out-of-order inbound packet. */
-        bool                                                                        packet_input_unorder(const vmux_linklayer_ptr& linklayer, vmux_hdr* h, int length, uint64_t now) noexcept;
-        /** @brief Parse and dispatch one inbound vmux command payload. */
-        bool                                                                        packet_input(Byte cmd, Byte* buffer, int buffer_size, uint64_t now) noexcept;
+        /** @brief Insert or process out-of-order inbound packet (zero-copy variant when owner is provided). */
+        bool                                                                        packet_input_unorder(const vmux_linklayer_ptr& linklayer, vmux_hdr* h, int length, uint64_t now, const std::shared_ptr<Byte>& owner = NULLPTR) noexcept;
+        /** @brief Parse and dispatch one inbound vmux command payload (zero-copy variant when owner is provided). */
+        bool                                                                        packet_input(Byte cmd, Byte* buffer, int buffer_size, uint64_t now, const std::shared_ptr<Byte>& owner = NULLPTR) noexcept;
 
         /** @brief Route inbound payload to target logical connection. */
-        void                                                                        packet_input_read(uint32_t connection_id, Byte* buffer, int buffer_size, uint64_t now) noexcept;
+        void                                                                        packet_input_read(uint32_t connection_id, Byte* buffer, int buffer_size, uint64_t now, const std::shared_ptr<Byte>& owner = NULLPTR) noexcept;
 
         /** @brief Validate and apply a debug-only cmd_mux_mode_set control frame. */
         void                                                                        packet_input_mux_mode_set(const Byte* buffer, int buffer_size) noexcept;
 
-        /** @brief Per-flow (flow v2) receive path: independent per-connection DSN delivery. */
-        bool                                                                        packet_input_flow(const vmux_linklayer_ptr& linklayer, vmux_hdr* h, int length, uint64_t now) noexcept;
-        /** @brief Deliver one framed packet (push/fin) to its logical connection. */
-        bool                                                                        deliver_one(Byte cmd, vmux_hdr* h, int length, uint64_t now) noexcept;
+        /** @brief Per-flow (flow v2) receive path: independent per-connection DSN delivery (zero-copy variant when owner is provided). */
+        bool                                                                        packet_input_flow(const vmux_linklayer_ptr& linklayer, vmux_hdr* h, int length, uint64_t now, const std::shared_ptr<Byte>& owner = NULLPTR) noexcept;
+        /** @brief Deliver one framed packet (push/fin) to its logical connection (zero-copy variant when owner is provided). */
+        bool                                                                        deliver_one(Byte cmd, vmux_hdr* h, int length, uint64_t now, const std::shared_ptr<Byte>& owner = NULLPTR) noexcept;
         /** @brief Periodically fail per-flow contexts whose gap timed out. */
         void                                                                        flow_evict_expired(uint64_t now) noexcept;
         /** @brief Fail the session when a compat global reorder gap timed out. */

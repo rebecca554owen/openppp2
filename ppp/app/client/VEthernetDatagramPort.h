@@ -244,7 +244,7 @@ namespace ppp {
                  * @param destinationEP  Original source endpoint on the remote side (becomes local dest).
                  * @note Default implementation routes the datagram through the switcher's DatagramOutput.
                  */
-                virtual void                                            OnMessage(void*, int, const boost::asio::ip::udp::endpoint&) noexcept;
+                virtual void                                            OnMessage(const std::shared_ptr<Byte>& owner, void* packet, int packet_length, const boost::asio::ip::udp::endpoint& destinationEP) noexcept;
 
             private:
                 /**

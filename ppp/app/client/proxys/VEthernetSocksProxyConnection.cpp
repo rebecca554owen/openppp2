@@ -696,7 +696,7 @@ namespace ppp {
                             bool disposing = false;
                             if (ec == boost::system::errc::success) {
                                 if (sz > 0) {
-                                    std::shared_ptr<Byte> packet = ppp::net::asio::IAsynchronousWriteIoQueue::Copy(allocator, udp_buffer.get(), (int)sz);
+                                    std::shared_ptr<Byte> packet = ppp::net::asio::IAsynchronousWriteIoQueue::Copy(allocator, udp_buffer, udp_buffer.get(), (int)sz);
                                     if (NULLPTR == packet) {
                                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                                     }

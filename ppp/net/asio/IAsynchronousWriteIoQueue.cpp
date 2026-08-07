@@ -107,6 +107,21 @@ namespace ppp {
                 return chunk;
             }
 
+            std::shared_ptr<Byte> IAsynchronousWriteIoQueue::Copy(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, const std::shared_ptr<Byte>& owner, const void* data, int datalen) noexcept {
+                if (NULLPTR == data || 1 > datalen) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AsyncWriteQueueCopyInvalidArguments);
+                    return NULLPTR;
+                }
+
+                // Zero-copy path: slice the owner buffer.
+                if (NULLPTR != owner) {
+                    return ppp::wrap_shared_pointer(reinterpret_cast<ppp::Byte*>(const_cast<void*>(data)), owner);
+                }
+
+                // Fallback: copy-based path.
+                return Copy(allocator, data, datalen);
+            }
+
             /** @brief Coroutine-based write wrapper that dispatches through callback path. */
             bool IAsynchronousWriteIoQueue::WriteBytes(YieldContext& y, const std::shared_ptr<Byte>& packet, int packet_length) noexcept {
                 if (disposed_.load(std::memory_order_acquire)) {

@@ -337,7 +337,7 @@ namespace ppp {
                  * @param y             Coroutine yield context.
                  * @return True on success.
                  */
-                virtual bool                                                                OnEcho(const ITransmissionPtr& transmission, Byte* packet, int packet_length, YieldContext& y) noexcept override;
+                virtual bool                                                                OnEcho(const ITransmissionPtr& transmission, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept override;
 
                 /**
                  * @brief Handles a UDP sendto command from the client.
@@ -353,7 +353,7 @@ namespace ppp {
                  * @param y             Coroutine yield context.
                  * @return True on success.
                  */
-                virtual bool                                                                OnSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept override;
+                virtual bool                                                                OnSendTo(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept override;
 
                 /**
                  * @brief Handles a static-echo channel allocation request from the client.
@@ -451,6 +451,7 @@ namespace ppp {
                     const ITransmissionPtr&                                                 transmission, 
                     const boost::asio::ip::udp::endpoint&                                   sourceEP,
                     const boost::asio::ip::udp::endpoint&                                   destinationEP,
+                    const std::shared_ptr<Byte>&                                            owner,
                     Byte*                                                                   packet, 
                     int                                                                     packet_length,
                     bool                                                                    static_transit) noexcept;
@@ -491,6 +492,7 @@ namespace ppp {
                     const ITransmissionPtr&                                                 transmission, 
                     const boost::asio::ip::udp::endpoint&                                   sourceEP, 
                     const boost::asio::ip::udp::endpoint&                                   destinationEP, 
+                    const std::shared_ptr<Byte>&                                            owner,
                     Byte*                                                                   packet, 
                     int                                                                     packet_length,
                     bool                                                                    static_transit) noexcept;
@@ -548,7 +550,7 @@ namespace ppp {
                  * @param packet_length Packet length in bytes.
                  * @return True if the packet is dispatched.
                  */
-                bool                                                                        SendEchoToDestination(const ITransmissionPtr& transmission, Byte* packet, int packet_length) noexcept;
+                bool                                                                        SendEchoToDestination(const ITransmissionPtr& transmission, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length) noexcept;
 
                 /**
                  * @brief Forwards a UDP payload to its destination via the per-source datagram port.
@@ -561,7 +563,7 @@ namespace ppp {
                  * @param y             Coroutine yield context.
                  * @return True on successful forwarding.
                  */
-                bool                                                                        SendPacketToDestination(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, Byte* packet, int packet_length, YieldContext& y) noexcept;
+                bool                                                                        SendPacketToDestination(const ITransmissionPtr& transmission, const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept;
     
             private:    
                 /**
@@ -656,7 +658,7 @@ namespace ppp {
                  * @param y             Coroutine yield context.
                  * @return True on success.
                  */
-                virtual bool                                                                OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, Byte* packet, int packet_length, YieldContext& y) noexcept override;
+                virtual bool                                                                OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept override;
 
                 /**
                  * @brief Handles an FRP TCP connect-acknowledgment from the client.
@@ -693,7 +695,7 @@ namespace ppp {
                  * @param packet_length Payload length in bytes.
                  * @return True on success.
                  */
-                virtual bool                                                                OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const void* packet, int packet_length) noexcept override;
+                virtual bool                                                                OnFrpPush(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, const std::shared_ptr<Byte>& owner, const void* packet, int packet_length) noexcept override;
     
             private:    
                 SynchronizedObject                                                          syncobj_;                   ///< Guards datagrams_, timeouts_, and mappings_.

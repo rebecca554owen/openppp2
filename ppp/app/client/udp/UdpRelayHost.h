@@ -63,6 +63,7 @@ namespace ppp {
                     /** @brief Reinject an inbound datagram to the TUN. Matches switcher::DatagramOutput. */
                     ppp::function<bool(const boost::asio::ip::udp::endpoint& source,
                                        const boost::asio::ip::udp::endpoint& destination,
+                                       const std::shared_ptr<Byte>& owner,
                                        void* packet, int packet_size, bool caching)> datagram_output;
 
                     /** @brief Rewrite a fake-ip address to its real one. Matches switcher::RewriteFakeIpAddress. */

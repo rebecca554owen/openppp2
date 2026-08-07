@@ -22,6 +22,7 @@
 #endif
 
                 virtual bool DatagramOutput(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, void* packet, int packet_size, bool caching = true) noexcept;
+                virtual bool DatagramOutput(const boost::asio::ip::udp::endpoint& sourceEP, const boost::asio::ip::udp::endpoint& destinationEP, const std::shared_ptr<Byte>& owner, void* packet, int packet_size, bool caching = true) noexcept;
                 boost::asio::ip::address RewriteFakeIpAddress(const boost::asio::ip::address& addr) const noexcept;
                 bool ResolveDestination(
                     const ppp::net::IPEndPoint& endpoint,
