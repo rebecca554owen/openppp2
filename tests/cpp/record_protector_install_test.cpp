@@ -163,4 +163,47 @@ BOOST_AUTO_TEST_CASE(hkdf_derivation_is_deterministic_and_directional) {
     const RecordKeyMaterial changed = Derive(FixedIkm(0x32));
     BOOST_TEST(!BytesEqual(first.client_to_server_key, changed.client_to_server_key));
     BOOST_TEST(!BytesEqual(first.server_to_client_key, changed.server_to_client_key));
+
+    // v2.2.2: peers must derive identical material from identical contexts
+    // (the Noise record root already binds the handshake transcript, and the
+    // binding context is peer-symmetric -- no role byte).  Simulate both ends.
+    RecordKeyContext peer_a;
+    RecordKeyContext peer_b;
+    const std::array<std::uint8_t, 32> root = FixedIkm(0x41);
+    const std::array<std::uint8_t, 16> session = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+    };
+    peer_a.exporter_secret = root.data();
+    peer_a.exporter_secret_len = root.size();
+    peer_a.session_id = session.data();
+    peer_a.session_id_len = session.size();
+    peer_a.carrier_kind = 1;
+    peer_a.transport_auth_key_id = 7;
+    peer_b = peer_a;
+    RecordKeyMaterial material_a;
+    RecordKeyMaterial material_b;
+    BOOST_REQUIRE(DeriveRecordKeyMaterial(peer_a, material_a));
+    BOOST_REQUIRE(DeriveRecordKeyMaterial(peer_b, material_b));
+    BOOST_TEST(BytesEqual(material_a.client_to_server_key,
+        material_b.client_to_server_key));
+    BOOST_TEST(BytesEqual(material_a.server_to_client_key,
+        material_b.server_to_client_key));
+    BOOST_TEST(BytesEqual(material_a.client_to_server_nonce_prefix,
+        material_b.client_to_server_nonce_prefix));
+
+    // Session binding in the HKDF info: a different session id must change
+    // every derived value even with the same record root.
+    RecordKeyContext other_session = peer_a;
+    const std::array<std::uint8_t, 16> other_id = {
+        0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8,
+        0xF7, 0xF6, 0xF5, 0xF4, 0xF3, 0xF2, 0xF1, 0xF0,
+    };
+    other_session.session_id = other_id.data();
+    RecordKeyMaterial material_c;
+    BOOST_REQUIRE(DeriveRecordKeyMaterial(other_session, material_c));
+    BOOST_TEST(!BytesEqual(material_a.client_to_server_key,
+        material_c.client_to_server_key));
+    BOOST_TEST(!BytesEqual(material_a.server_to_client_nonce_prefix,
+        material_c.server_to_client_nonce_prefix));
 }
