@@ -243,9 +243,12 @@ namespace ppp {
 
             probe_timer_ = std::make_shared<boost::asio::steady_timer>(io_ctx_);
             probe_timer_->expires_after(std::chrono::milliseconds(config_.probe_timeout_ms));
-            probe_timer_->async_wait([self = shared_from_this()](const boost::system::error_code& ec) {
-                if (!ec && !self->closed_.load(std::memory_order_acquire)) {
-                    self->OnProbeTimeout();
+            // use weak_ptr to avoid timer reference cycle
+            probe_timer_->async_wait([weak = std::weak_ptr<P2PChannel>(shared_from_this())](const boost::system::error_code& ec) {
+                if (auto self = weak.lock()) {
+                    if (!ec && !self->closed_.load(std::memory_order_acquire)) {
+                        self->OnProbeTimeout();
+                    }
                 }
             });
         }
@@ -381,9 +384,12 @@ namespace ppp {
 
             if (probe_timer_) {
                 probe_timer_->expires_after(std::chrono::milliseconds(config_.probe_timeout_ms));
-                probe_timer_->async_wait([self = shared_from_this()](const boost::system::error_code& ec) {
-                    if (!ec && !self->closed_.load(std::memory_order_acquire)) {
-                        self->OnProbeTimeout();
+                // use weak_ptr to avoid timer reference cycle
+                probe_timer_->async_wait([weak = std::weak_ptr<P2PChannel>(shared_from_this())](const boost::system::error_code& ec) {
+                    if (auto self = weak.lock()) {
+                        if (!ec && !self->closed_.load(std::memory_order_acquire)) {
+                            self->OnProbeTimeout();
+                        }
                     }
                 });
             }
@@ -405,9 +411,12 @@ namespace ppp {
             last_heartbeat_recv_ms_ = ppp::GetTickCount();
             heartbeat_timer_ = std::make_shared<boost::asio::steady_timer>(io_ctx_);
             heartbeat_timer_->expires_after(std::chrono::milliseconds(config_.heartbeat_interval_ms));
-            heartbeat_timer_->async_wait([self = shared_from_this()](const boost::system::error_code& ec) {
-                if (!ec && !self->closed_.load(std::memory_order_acquire)) {
-                    self->OnHeartbeatTimer();
+            // use weak_ptr to avoid timer reference cycle
+            heartbeat_timer_->async_wait([weak = std::weak_ptr<P2PChannel>(shared_from_this())](const boost::system::error_code& ec) {
+                if (auto self = weak.lock()) {
+                    if (!ec && !self->closed_.load(std::memory_order_acquire)) {
+                        self->OnHeartbeatTimer();
+                    }
                 }
             });
         }
@@ -725,9 +734,12 @@ namespace ppp {
 
                 suspect_timer_ = std::make_shared<boost::asio::steady_timer>(io_ctx_);
                 suspect_timer_->expires_after(std::chrono::milliseconds(config_.suspect_timeout_ms));
-                suspect_timer_->async_wait([self = shared_from_this()](const boost::system::error_code& ec) {
-                    if (!ec && !self->closed_.load(std::memory_order_acquire)) {
-                        self->OnSuspectTimeout();
+                // use weak_ptr to avoid timer reference cycle
+                suspect_timer_->async_wait([weak = std::weak_ptr<P2PChannel>(shared_from_this())](const boost::system::error_code& ec) {
+                    if (auto self = weak.lock()) {
+                        if (!ec && !self->closed_.load(std::memory_order_acquire)) {
+                            self->OnSuspectTimeout();
+                        }
                     }
                 });
 
@@ -739,9 +751,11 @@ namespace ppp {
 
             if (heartbeat_timer_) {
                 heartbeat_timer_->expires_after(std::chrono::milliseconds(config_.heartbeat_interval_ms));
-                heartbeat_timer_->async_wait([self = shared_from_this()](const boost::system::error_code& ec) {
-                    if (!ec && !self->closed_.load(std::memory_order_acquire)) {
-                        self->OnHeartbeatTimer();
+                heartbeat_timer_->async_wait([weak = std::weak_ptr<P2PChannel>(shared_from_this())](const boost::system::error_code& ec) {
+                    if (auto self = weak.lock()) {
+                        if (!ec && !self->closed_.load(std::memory_order_acquire)) {
+                            self->OnHeartbeatTimer();
+                        }
                     }
                 });
             }

@@ -270,6 +270,12 @@ namespace ppp {
         }
 
         /**
+         * @brief Releases the RC4 context.
+         */
+        RC4::~RC4() noexcept {
+        }
+
+        /**
          * @brief Encrypts input data into an allocated output buffer.
          * @param allocator Buffer allocator.
          * @param data Input data pointer.
@@ -307,13 +313,18 @@ namespace ppp {
 
             memcpy(plaintext.get(), data, datalen);
 
-            // Uses the variant with (low + keylen) % sboxlen – another intentional modification.
-            if (!rc4_crypt_sbox_c((unsigned char*)_password.data(), _password.size(),
-                (unsigned char*)_sbox.get(), RC4_MAXBIT, (unsigned char*)plaintext.get(), datalen, _subtract, _E)) {
-                if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4CryptSboxCFailedWithoutSpecificError);
+            {
+                // Serialize stateful RC4: run the cipher directly on the live
+                // S-box under the lock so the keystream continues across
+                // packets, matching the pre-existing wire behavior.
+                std::lock_guard<std::mutex> scope(_syncobj);
+                if (!rc4_crypt_sbox_c((unsigned char*)_password.data(), _password.size(),
+                    (unsigned char*)_sbox.get(), RC4_MAXBIT, (unsigned char*)plaintext.get(), datalen, _subtract, _E)) {
+                    if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::Rc4CryptSboxCFailedWithoutSpecificError);
+                    }
+                    return NULLPTR;
                 }
-                return NULLPTR;
             }
 
             outlen = datalen;

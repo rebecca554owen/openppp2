@@ -70,6 +70,14 @@ namespace ppp {
                     {
                         std::lock_guard<std::mutex> scope(write_mutex_);
 
+                        constexpr size_t MAX_QUEUE_SIZE = 1024;
+                        if (write_queue_.size() >= MAX_QUEUE_SIZE) {
+                            if (cb) {
+                                cb(false);
+                            }
+                            return;
+                        }
+
                         AsynchronousWriteContext message;
                         message.buffer = payload;
                         message.length = length;

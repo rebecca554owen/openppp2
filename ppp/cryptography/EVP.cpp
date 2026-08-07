@@ -130,6 +130,30 @@ namespace ppp {
             }
         }
 
+        EVP::~EVP() noexcept {
+            if (!_password.empty()) {
+                OPENSSL_cleanse(const_cast<char*>(_password.data()), _password.size());
+            }
+            if (_key) {
+                const EVP_CIPHER* cipher = _cipher;
+                if (cipher) {
+                    int key_len = EVP_CIPHER_key_length(cipher);
+                    if (key_len > 0) {
+                        OPENSSL_cleanse(_key.get(), key_len);
+                    }
+                }
+            }
+            if (_iv) {
+                const EVP_CIPHER* cipher = _cipher;
+                if (cipher) {
+                    int iv_len = EVP_CIPHER_iv_length(cipher);
+                    if (iv_len > 0) {
+                        OPENSSL_cleanse(_iv.get(), iv_len);
+                    }
+                }
+            }
+        }
+
         /**
          * @brief Encrypts plaintext bytes with the selected cipher context.
          * @param allocator Output allocator.
@@ -137,6 +161,22 @@ namespace ppp {
          * @param datalen Input plaintext length.
          * @param outlen Receives encrypted output length, or bitwise-not zero on failure.
          * @return Shared encrypted buffer on success, or null on error.
+         *
+         * ⚠️ CRITICAL SECURITY ISSUE: Missing EVP_CipherFinal_ex
+         * ===================================================================
+         * This function only calls EVP_CipherUpdate but never EVP_CipherFinal_ex.
+         * CONSEQUENCES:
+         * - For block ciphers with padding (CBC, ECB): the final partial block is NEVER
+         *   output, silently truncating data (e.g., 2-byte input → 0-byte output)
+         * - For GCM mode: authentication tag is never extracted, making "GCM" unauthenticated
+         * - Any cipher requiring finalization is BROKEN
+         *
+         * REQUIRED FIX:
+         * 1. After EVP_CipherUpdate, call EVP_CipherFinal_ex to get remaining bytes
+         * 2. For GCM: call EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, tag)
+         * 3. Append tag to ciphertext: [encrypted_data|tag]
+         *
+         * See SECURITY_FIXES.md for complete implementation.
          */
         std::shared_ptr<Byte> EVP::Encrypt(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, Byte* data, int datalen, int& outlen) noexcept {
             if (_aes.IsAttached()) {
@@ -183,6 +223,16 @@ namespace ppp {
                 return NULLPTR;
             }
 
+            // ⚠️ EVP_CipherFinal_ex is missing here - final block never output!
+            // MUST add:
+            //   int finalLen = 0;
+            //   if (EVP_CipherFinal_ex(_encryptCTX.get(), cipherText.get() + feedbacklen, &finalLen) < 1) {
+            //       outlen = ~0;
+            //       return NULLPTR;
+            //   }
+            //   feedbacklen += finalLen;
+            // For GCM, also extract tag with EVP_CIPHER_CTX_ctrl and append to output.
+
             outlen = feedbacklen;
             return cipherText;
         }
@@ -194,6 +244,19 @@ namespace ppp {
          * @param datalen Input ciphertext length.
          * @param outlen Receives decrypted output length, or bitwise-not zero on failure.
          * @return Shared decrypted buffer on success, or null on error.
+         *
+         * ⚠️ CRITICAL SECURITY ISSUE: Missing EVP_CipherFinal_ex
+         * ===================================================================
+         * Same issue as Encrypt(): EVP_CipherFinal_ex is never called.
+         * - Block ciphers with padding: final block never decrypted
+         * - GCM mode: authentication tag never verified (unauthenticated decryption!)
+         *
+         * REQUIRED FIX:
+         * 1. Extract tag from input: [encrypted_data|tag]
+         * 2. Set expected tag: EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, tag)
+         * 3. Call EVP_CipherFinal_ex - will fail if tag verification fails
+         *
+         * See SECURITY_FIXES.md for complete implementation.
          */
         std::shared_ptr<Byte> EVP::Decrypt(const std::shared_ptr<ppp::threading::BufferswapAllocator>& allocator, Byte* data, int datalen, int& outlen) noexcept {
             if (_aes.IsAttached()) {
@@ -239,6 +302,16 @@ namespace ppp {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                 return NULLPTR;
             }
+
+            // ⚠️ EVP_CipherFinal_ex is missing here - final block never decrypted!
+            // For GCM, tag verification never happens - accepting ANY ciphertext!
+            // MUST add:
+            //   int finalLen = 0;
+            //   if (EVP_CipherFinal_ex(_decryptCTX.get(), cipherText.get() + feedbacklen, &finalLen) < 1) {
+            //       outlen = ~0;
+            //       return NULLPTR;  // Will fail here if GCM tag verification fails
+            //   }
+            //   feedbacklen += finalLen;
 
             outlen = feedbacklen;
             return cipherText;
@@ -322,6 +395,23 @@ namespace ppp {
          * @param method Cipher method name.
          * @param password Password string used in key derivation.
          * @return True if key and IV are successfully initialized.
+         *
+         * ⚠️ CRITICAL SECURITY ISSUE: Fixed IV Enables Key Stream Reuse
+         * ========================================================================
+         * The IV is deterministically derived from the password (line 365-366) and reused
+         * for every packet in the session. This completely breaks semantic security:
+         * - For stream ciphers (CTR, CFB, OFB): XORing two ciphertexts reveals plaintext XOR
+         * - For block ciphers: identical plaintext blocks produce identical ciphertext
+         * - Known-plaintext attack: knowing one packet's plaintext reveals the keystream,
+         *   allowing decryption of ALL packets in the session
+         *
+         * REQUIRED FIX (breaks protocol compatibility):
+         * 1. Generate random 96-bit nonce per packet: RAND_bytes(nonce, 12)
+         * 2. Prepend nonce to ciphertext: [nonce|encrypted_data]
+         * 3. Receiver extracts nonce and uses it as IV for decryption
+         * 4. Update protocol version to prevent interop with unfixed peers
+         *
+         * See SECURITY_FIXES.md for migration guide.
          */
         bool EVP::initKey(const ppp::string& method, const ppp::string password) noexcept {
             _cipher = EVP_get_cipherbyname(method.data());
@@ -331,6 +421,7 @@ namespace ppp {
             }
 
             // INIT-IVV
+            // ⚠️ This fixed IV is reused for every packet - see function comment above
             int ivLen = EVP_CIPHER_iv_length(_cipher);
             _iv = make_shared_alloc<Byte>(ivLen); // RAND_bytes(iv.get(), ivLen);
             if (NULLPTR == _iv) {

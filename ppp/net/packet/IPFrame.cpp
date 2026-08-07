@@ -268,6 +268,11 @@ namespace ppp {
 
                 int szz = messages->Length;
                 max = (max >> 3) << 3;
+                if (max <= 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpFrameSubpackagesInvalidMaxFragmentSize);
+                    return 0;
+                }
+
                 if (szz <= max) {
                     out.emplace_back(packet);
                     return 1;

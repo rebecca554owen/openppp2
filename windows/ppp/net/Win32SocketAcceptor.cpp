@@ -308,13 +308,12 @@ namespace ppp
                         }
                         elif(events.lNetworkEvents & FD_CLOSE)
                         {
-                            if (events.iErrorCode[FD_ACCEPT_BIT] == 0) /* event is operation_canceled. */
-                            {
-                                return;
-                            }
-
+                            /* The listening socket is gone: stop the accept loop.
+                               Normal teardown arrives as operation_canceled via
+                               Dispose()->Finalize(); this branch covers the remote
+                               close case and must not keep spinning on FD_CLOSE. */
                             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAcceptFailed);
-                        }
+                            return;                        }
                     }
                     else
                     {

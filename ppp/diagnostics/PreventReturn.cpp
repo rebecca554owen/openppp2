@@ -129,18 +129,35 @@ namespace ppp
 
             /**
              * @brief Builds platform-specific PID file location.
+             * Use secure directory instead of predictable /tmp path to prevent DoS via pre-creation.
              */
 #if defined(_MACOS)
-            ppp::string path = ppp::io::File::GetFullPath(("/tmp/" + ppp::string(name) + ".pid").data());
+            const char* tmpdir = std::getenv("TMPDIR");
+            ppp::string base_dir = NULLPTR != tmpdir ? tmpdir : "/tmp";
 #else
-            ppp::string path = ppp::io::File::GetFullPath(("/var/run/" + ppp::string(name) + ".pid").data());
+            ppp::string base_dir = "/var/run";
 #endif
+            ppp::string path = ppp::io::File::GetFullPath((base_dir + "/" + ppp::string(name) + ".pid").data());
 
-            int pid_file = open(path.data(), O_CREAT | O_RDWR, 0666);
+            /* O_EXCL prevents TOCTOU - fails if file already exists when combined with O_CREAT */
+            int pid_file = open(path.data(), O_CREAT | O_EXCL | O_RDWR, 0600);
             if (pid_file == -1)
             {
-                SetLastErrorCode(ErrorCode::AppLockAcquireFailed);
-                return { -1, path, false };
+                if (errno == EEXIST)
+                {
+                    /* File exists - try to open and lock it to check if process is still running */
+                    pid_file = open(path.data(), O_RDWR, 0600);
+                    if (pid_file == -1)
+                    {
+                        SetLastErrorCode(ErrorCode::AppLockAcquireFailed);
+                        return { -1, path, false };
+                    }
+                }
+                else
+                {
+                    SetLastErrorCode(ErrorCode::AppLockAcquireFailed);
+                    return { -1, path, false };
+                }
             }
 
             /**

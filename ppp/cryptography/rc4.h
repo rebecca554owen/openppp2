@@ -96,6 +96,7 @@ namespace ppp {
              * @param E Non-zero for encryption mode behavior.
              */
             RC4(const ppp::string& method, const ppp::string& password, int algorithm, int ascending, int subtract, int E) noexcept;
+            ~RC4() noexcept;
 
         public:
             /**
@@ -138,6 +139,7 @@ namespace ppp {
             ppp::string                                                         _method;
             ppp::string                                                         _password;
             std::shared_ptr<Byte>                                               _sbox;
+            std::mutex                                                          _syncobj;
         };
 
 #define PPP_CRYPTOGRAPHY_RC4_DERIVE(DERIVE_CLASS_NAME, DIGEST_ALGORITHM)        \

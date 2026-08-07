@@ -46,6 +46,10 @@ SCENARIOS = {
     "carrier-loss": ("balance", 8),
     "carrier-removal": ("balance", 8),
     "turbo-churn": ("flow", 8),
+    "reliability-loss-0.5": ("balance", 8),
+    "reliability-loss-2": ("balance", 8),
+    "reliability-loss-5": ("balance", 8),
+    "fec-loss-2": ("balance", 8),
 }
 
 
@@ -106,7 +110,7 @@ def validate(path, result):
     flows = result["config"]["flows"]
     if isinstance(flows, bool) or not isinstance(flows, int) or flows < 1:
         fail(path, "config.flows must be a positive integer")
-    if result["config"]["netem_profile"] not in {"none", "carrier-delay", "carrier-loss"}:
+    if result["config"]["netem_profile"] not in {"none", "carrier-delay", "carrier-loss", "carrier-loss-0.5", "carrier-loss-5"}:
         fail(path, "unknown config.netem_profile")
     require_string(path, result["config"]["fingerprint"])
     if not result["config"]["fingerprint"]:

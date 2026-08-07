@@ -319,11 +319,9 @@ namespace ppp {
                 }
 
                 if (this->_AddressFamily == AddressFamily::InterNetworkV6) {
-                    UInt64* qx = (UInt64*)x;
-                    UInt64* qy = (UInt64*)y;
-                    return qx[0] == qy[0] && qx[1] == qy[1];
+                    return std::memcmp(x, y, 16) == 0;
                 }
-                return *(UInt32*)x == *(UInt32*)y;
+                return std::memcmp(x, y, 4) == 0;
             }
 
             /**

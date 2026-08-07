@@ -454,7 +454,7 @@ namespace ppp {
                 }
 
                 /**
-                 * @brief Frame length upper-bound check (P0-4A): reject in-memory base94 frames
+                 * @brief Frame length upper-bound check: reject in-memory base94 frames
                  *        exceeding the encoded ceiling.
                  *
                  * @details The send side caps plaintext/base94 TCP chunks (see
@@ -574,7 +574,7 @@ namespace ppp {
                     return NULLPTR;
                 }
 
-                /** @brief Frame length upper-bound check (P0-4A): reject base94 frames that exceed the encoded ceiling. */
+                /** @brief Frame length upper-bound check: reject base94 frames that exceed the encoded ceiling. */
                 if (payload_length > EVP_BASE94_MAX_FRAME) {
                     ppp::telemetry::Log(Level::kInfo,
                         "transmission",
@@ -910,7 +910,7 @@ namespace ppp {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, NULLPTR);
             }
 
-            /** @brief Frame length upper-bound check (P0-4A): reject decoded payloads exceeding PPP_BUFFER_SIZE. */
+            /** @brief Frame length upper-bound check: reject decoded payloads exceeding PPP_BUFFER_SIZE. */
             if (payload_len > PPP_BUFFER_SIZE) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
             }
@@ -971,7 +971,7 @@ namespace ppp {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed, NULLPTR);
             }
 
-            /** @brief Frame length upper-bound check (P0-4A): reject decoded payloads exceeding PPP_BUFFER_SIZE. */
+            /** @brief Frame length upper-bound check: reject decoded payloads exceeding PPP_BUFFER_SIZE. */
             if (payload_len > PPP_BUFFER_SIZE) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid, NULLPTR);
             }

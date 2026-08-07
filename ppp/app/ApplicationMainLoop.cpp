@@ -785,14 +785,14 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
         return false;
     }
 
-    NetworkState network_state = exchanger->GetNetworkState();
-    if (network_state == NetworkState::NetworkState_Established) {
-        if (GLOBAL_.link_restart > 0) {
-            if (exchanger->GetReconnectionCount() >= GLOBAL_.link_restart) {
-                return ShutdownApplication(true);
-            }
+    if (GLOBAL_.link_restart > 0) {
+        if (exchanger->GetReconnectionCount() >= GLOBAL_.link_restart) {
+            return ShutdownApplication(true);
         }
-    } else {
+    }
+
+    NetworkState network_state = exchanger->GetNetworkState();
+    if (network_state != NetworkState::NetworkState_Established) {
         return false;
     }
 

@@ -176,7 +176,7 @@ namespace ppp {
             }
             else {
                 tv.tv_sec = microSeconds / 1000000;
-                tv.tv_usec = microSeconds;
+                tv.tv_usec = microSeconds % 1000000;
             }
 
             int hr = -1;
@@ -1367,16 +1367,20 @@ namespace ppp {
             ::memset(&remote_endpoint, 0, sizeof(remote_endpoint));
 
             remote_endpoint.sin_family = AF_INET;
-            remote_endpoint.sin_port = htons(1); 
+            remote_endpoint.sin_port = htons(1);
             remote_endpoint.sin_addr.s_addr = destination;
 
-            Socket::SetNonblocking(sock_fd, true);
-            ::connect(sock_fd, reinterpret_cast<struct sockaddr*>(&remote_endpoint), sizeof(remote_endpoint));
+            int err = ::connect(sock_fd, reinterpret_cast<struct sockaddr*>(&remote_endpoint), sizeof(remote_endpoint));
+            if (err < 0 && errno != EINPROGRESS) {
+                Socket::Closesocket(sock_fd);
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketAddressInvalid);
+                return IPEndPoint::AnyAddress;
+            }
 
             struct sockaddr_in local_endpoint;
             socklen_t local_endpoint_size = sizeof(local_endpoint);
 
-            int err = ::getsockname(sock_fd, reinterpret_cast<struct sockaddr*>(&local_endpoint), &local_endpoint_size);
+            err = ::getsockname(sock_fd, reinterpret_cast<struct sockaddr*>(&local_endpoint), &local_endpoint_size);
             Socket::Closesocket(sock_fd);
 
             if (err < 0) {

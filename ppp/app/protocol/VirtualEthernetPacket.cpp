@@ -232,7 +232,8 @@ namespace ppp
 
                 // Derive actual header length from stored obfuscated value.
                 int header_length = (ppp::Byte)STATIC_header_length(configuration, h->header_length, kf);
-                if (header_length < sizeof(PACKET_HEADER)) {
+                // add upper bound check to prevent buffer overflow
+                if (header_length < sizeof(PACKET_HEADER) || header_length > packet_length) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                     return false;
                 }
@@ -274,18 +275,38 @@ namespace ppp
                         memcpy(reinterpret_cast<ppp::Byte*>(&h->checksum), header_body.get(), header_length_new);
                     } else {
                         // Otherwise rebuild the entire packet with new header layout.
+                        // validate header_length is within bounds before using it
+                        if (header_length > packet_length) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                            return false;
+                        }
+
                         ppp::io::MemoryStream ms;
-                        ms.Write(h, 0, offsetof(PACKET_HEADER, checksum));
-                        ms.Write(header_body.get(), 0, header_length_new);
-                        ms.Write((Byte*)h + header_length, 0, packet_length - header_length);
+                        int write_result = ms.Write(h, 0, offsetof(PACKET_HEADER, checksum));
+                        if (write_result <= 0) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                            return false;
+                        }
+
+                        write_result = ms.Write(header_body.get(), 0, header_length_new);
+                        if (write_result <= 0) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                            return false;
+                        }
+
+                        write_result = ms.Write((Byte*)h + header_length, 0, packet_length - header_length);
+                        if (write_result <= 0) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                            return false;
+                        }
 
                         std::shared_ptr<ppp::Byte> buf = ms.GetBuffer();
                         packet_length = ms.GetPosition();
 
                         h = (PACKET_HEADER*)buf.get();
 
-                        // Recompute obfuscated header length for consistency.
-                        h->header_length = (ppp::Byte)STATIC_header_length(configuration, sizeof(PACKET_HEADER), kf);
+                        // recompute obfuscated header length after rebuild
+                        h->header_length = (ppp::Byte)STATIC_header_length(configuration, header_length_new, kf);
 
                         // Continue unpack with reconstructed packet.
                         return STATIC_Unpack(allocator, transport_ciphertext, buf, h, proto, session_id, packet_length, out);
