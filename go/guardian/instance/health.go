@@ -18,14 +18,22 @@ func (m *Manager) StartHealthCheck(name string) {
 	m.mu.RLock()
 	inst, ok := m.instances[name]
 	m.mu.RUnlock()
-	if !ok || !inst.cfg.HealthCheck.Enabled {
+	if !ok {
 		return
 	}
+
+	inst.mu.RLock()
+	if !inst.cfg.HealthCheck.Enabled {
+		inst.mu.RUnlock()
+		return
+	}
+	healthCfg := inst.cfg.HealthCheck
+	inst.mu.RUnlock()
 
 	m.StopHealthCheck(name)
 
 	hc := &HealthChecker{
-		cfg:    inst.cfg.HealthCheck,
+		cfg:    healthCfg,
 		stopCh: make(chan struct{}),
 		doneCh: make(chan struct{}),
 	}

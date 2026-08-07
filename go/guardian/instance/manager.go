@@ -359,28 +359,51 @@ func (m *Manager) startInstance(inst *instance, isRestart bool) error {
 		return nil
 	}
 	inst.manualStop = false
+	inst.mu.RLock()
 	binary := inst.cfg.Binary
+	args := append([]string(nil), inst.cfg.Args...)
+	workDir := inst.cfg.WorkDir
+	env := make(map[string]string, len(inst.cfg.Env))
+	for k, v := range inst.cfg.Env {
+		env[k] = v
+	}
+	tuiEnabled := inst.cfg.TUIEnabled
+	cfgName := inst.cfg.Name
+	inst.mu.RUnlock()
+
 	if !strings.Contains(binary, "/") && !strings.Contains(binary, "\\") {
 		if abs, err := filepath.Abs(binary); err == nil {
 			binary = abs
 		}
 	}
-	cmd := exec.Command(binary, inst.cfg.Args...)
-	cmd.Dir = inst.cfg.WorkDir
-	cmd.Env = mergeEnv(inst.cfg.Env)
-	cmd.SysProcAttr = procAttrForPTY(0)
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = workDir
+	cmd.Env = mergeEnv(env)
 
 	var ptyMaster *os.File
-	master, slave, err := openPty()
-	if err != nil {
-		inst.mu.Unlock()
-		return err
+	var ptySlave *os.File
+	if tuiEnabled {
+		cmd.SysProcAttr = procAttrForPTY(0)
+		master, slave, err := openPty()
+		if err != nil {
+			inst.mu.Unlock()
+			return err
+		}
+		cmd.Stdin = slave
+		cmd.Stdout = slave
+		cmd.Stderr = slave
+		ptyMaster = master
+		ptySlave = slave
+	} else {
+		cmd.Stdin = nil
+		cmd.Stdout = nil
+		cmd.Stderr = nil
 	}
-	cmd.Stdin = slave
-	cmd.Stdout = slave
-	cmd.Stderr = slave
-	ptyMaster = master
-	defer func() { slave.Close() }()
+	defer func() {
+		if ptySlave != nil {
+			ptySlave.Close()
+		}
+	}()
 
 	if err := cmd.Start(); err != nil {
 		inst.mu.Unlock()
@@ -400,19 +423,19 @@ func (m *Manager) startInstance(inst *instance, isRestart bool) error {
 
 	// Inject startup log entry so user sees at least one line
 	mode := "PTY"
-	if inst.cfg.TUIEnabled {
+	if tuiEnabled {
 		mode = "TUI"
 	}
 	startupEntry := LogEntry{
 		At: now, Stream: "guardian",
-		Text: fmt.Sprintf("Instance '%s' started (PID: %d, mode: %s)", inst.cfg.Name, inst.pid, mode),
+		Text: fmt.Sprintf("Instance '%s' started (PID: %d, mode: %s)", cfgName, inst.pid, mode),
 	}
 	inst.logMu.Lock()
 	inst.logs.add(startupEntry)
 	inst.logMu.Unlock()
 
-	m.StartHealthCheck(inst.cfg.Name)
-	m.publishEvent(Event{Type: eventType(isRestart, "restarted", "started"), Name: inst.cfg.Name, At: now})
+	m.StartHealthCheck(cfgName)
+	m.publishEvent(Event{Type: eventType(isRestart, "restarted", "started"), Name: cfgName, At: now})
 	if ptyMaster != nil {
 		go m.capturePty(inst, ptyMaster)
 		go m.waitForExit(inst)
@@ -428,9 +451,12 @@ func (m *Manager) stopInstance(inst *instance) error {
 	}
 	inst.manualStop = true
 	cmd := inst.cmd
+	inst.mu.Unlock()
+
+	inst.mu.RLock()
 	stopSignal := inst.cfg.StopSignal
 	waitMs := inst.cfg.StopWaitMs
-	inst.mu.Unlock()
+	inst.mu.RUnlock()
 
 	sig := signalFromName(stopSignal)
 	if sig != 0 {
@@ -497,29 +523,34 @@ func (m *Manager) waitForExit(inst *instance) {
 	retries := inst.restartCount
 	maxRetries := inst.cfg.AutoRestart.MaxRetries
 	retryDelay := inst.cfg.AutoRestart.RetryDelayMs
+	cfgName := inst.cfg.Name
 	inst.mu.Unlock()
 	stopHealthChecker(hc)
 
-	m.publishEvent(Event{Type: "stopped", Name: inst.cfg.Name, At: now, Message: exit.Error})
+	m.publishEvent(Event{Type: "stopped", Name: cfgName, At: now, Message: exit.Error})
 	if err != nil {
-		log.Printf("instance %s exited: %v", inst.cfg.Name, err)
+		log.Printf("instance %s exited: %v", cfgName, err)
 	}
 
 	if allowRestart {
 		if maxRetries > 0 && retries > maxRetries {
-			m.publishEvent(Event{Type: "restart_exhausted", Name: inst.cfg.Name, At: time.Now()})
+			m.publishEvent(Event{Type: "restart_exhausted", Name: cfgName, At: time.Now()})
 			return
 		}
 		if retryDelay > 0 {
 			time.Sleep(time.Duration(retryDelay) * time.Millisecond)
 		}
 		if startErr := m.startInstance(inst, true); startErr != nil {
-			m.publishEvent(Event{Type: "restart_failed", Name: inst.cfg.Name, At: time.Now(), Message: startErr.Error()})
+			m.publishEvent(Event{Type: "restart_failed", Name: cfgName, At: time.Now(), Message: startErr.Error()})
 		}
 	}
 }
 
 func (m *Manager) captureLogs(inst *instance, stream string, reader io.Reader) {
+	inst.mu.RLock()
+	cfgName := inst.cfg.Name
+	inst.mu.RUnlock()
+
 	scanner := bufio.NewScanner(reader)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
@@ -536,12 +567,17 @@ func (m *Manager) captureLogs(inst *instance, stream string, reader io.Reader) {
 		inst.logMu.Unlock()
 	}
 	if err := scanner.Err(); err != nil {
-		log.Printf("instance %s %s log read error: %v", inst.cfg.Name, stream, err)
+		log.Printf("instance %s %s log read error: %v", cfgName, stream, err)
 	}
 }
 
 func (m *Manager) capturePipeLog(inst *instance, stream string, reader io.ReadCloser) {
 	defer reader.Close()
+
+	inst.mu.RLock()
+	cfgName := inst.cfg.Name
+	inst.mu.RUnlock()
+
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 128*1024), 2*1024*1024)
 	for scanner.Scan() {
@@ -561,14 +597,18 @@ func (m *Manager) capturePipeLog(inst *instance, stream string, reader io.ReadCl
 		inst.logMu.Unlock()
 	}
 	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
-		log.Printf("instance %s %s read error: %v", inst.cfg.Name, stream, err)
+		log.Printf("instance %s %s read error: %v", cfgName, stream, err)
 	}
 }
 
 func (m *Manager) capturePty(inst *instance, reader io.ReadCloser) {
+	inst.mu.RLock()
+	cfgName := inst.cfg.Name
+	inst.mu.RUnlock()
+
 	defer func() {
 		if err := reader.Close(); err != nil {
-			log.Printf("instance %s pty close error: %v", inst.cfg.Name, err)
+			log.Printf("instance %s pty close error: %v", cfgName, err)
 		}
 	}()
 
@@ -666,7 +706,7 @@ func (m *Manager) capturePty(inst *instance, reader io.ReadCloser) {
 		inst.logMu.Unlock()
 	}
 	if err := scanner.Err(); err != nil && !errors.Is(err, os.ErrClosed) && !errors.Is(err, io.EOF) {
-		log.Printf("instance %s pty read error: %v", inst.cfg.Name, err)
+		log.Printf("instance %s pty read error: %v", cfgName, err)
 	}
 }
 

@@ -29,8 +29,9 @@ func (*File) GetFullPath(path string) string {
 }
 
 func (*File) DeleteFile(file_path string) bool {
+	/* Fix inverted return semantics - should return true on success */
 	err := os.Remove(file_path)
-	return err != nil
+	return err == nil
 }
 
 func (my *File) WriteAllText(file_path string, file_content string) bool {
@@ -49,7 +50,8 @@ func (my *File) WriteAllBytes(file_path string, file_content []byte) bool {
 
 	defer file.Close()
 	_, err = file.Write(file_content)
-	return err != nil
+	/* Fix inverted return semantics - should return true on success */
+	return err == nil
 }
 
 func (*File) ReadAllText(file_path string) string {

@@ -38,6 +38,9 @@ type healthCheckReq struct {
 }
 
 func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
+	/* Limit request body size to prevent memory exhaustion */
+	const MAX_BODY_SIZE = 2 * 1024 * 1024
+	r.Body = http.MaxBytesReader(w, r.Body, MAX_BODY_SIZE)
 	var req instanceCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		Error(w, http.StatusBadRequest, err.Error())

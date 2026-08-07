@@ -3,6 +3,7 @@ package io
 import (
 	"errors"
 	"log"
+	"time"
 	"net/http"
 	"net/url"
 	"ppp/auxiliary"
@@ -13,6 +14,7 @@ import (
 )
 
 type WebSocket struct {
+	sync.Mutex  /* Protect disposed field from concurrent access */
 	connection *websocket.Conn
 	ppp        *WebSocketServer
 	disposed   bool
@@ -37,7 +39,7 @@ var upgrader_ = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // 允许所有的请求来源
+		return true // allow all request origins
 	},
 }
 
@@ -124,7 +126,10 @@ func (my *WebSocketServer) Close() bool {
 }
 
 func (my *WebSocketServer) release(key *websocket.Conn) bool {
+	my.Lock()
 	connections := my.connections
+	my.Unlock()
+
 	if connections == nil {
 		return false
 	}
@@ -229,14 +234,19 @@ func (my *WebSocketServer) onRequest(w http.ResponseWriter, r *http.Request) err
 }
 
 func (my *_WebConnectionTable) add(s *WebSocketServer, connection *websocket.Conn) *WebSocket {
+	s.Lock()
+	defer s.Unlock()
+
+	/* Check if connections map was cleared by Close() */
 	m := my.m
+	if m == nil {
+		return nil
+	}
+
 	wc := WebSocket{
 		ppp:        s,
 		connection: connection,
 	}
-
-	s.Lock()
-	defer s.Unlock()
 
 	m[connection] = &wc
 	return &wc
@@ -258,7 +268,11 @@ func (my *_WebConnectionTable) del(s *WebSocketServer, key *websocket.Conn) *Web
 }
 
 func (my *WebSocket) acceptor_load() func(*WebSocket) bool {
-	if my.disposed {
+	my.Lock()
+	disposed := my.disposed
+	my.Unlock()
+
+	if disposed {
 		return nil
 	}
 
@@ -285,12 +299,15 @@ func (my *WebSocket) run() bool {
 }
 
 func (my *WebSocket) Close() bool {
-	connection := my.connection
+	my.Lock()
 	if my.disposed {
+		my.Unlock()
 		return false
 	}
-
 	my.disposed = true
+	connection := my.connection
+	my.Unlock()
+
 	if connection == nil {
 		return false
 	}
@@ -305,14 +322,22 @@ func (my *WebSocket) Close() bool {
 }
 
 func (my *WebSocket) Read() []byte {
+	my.Lock()
+	disposed := my.disposed
 	connection := my.connection
-	if my.disposed {
+	my.Unlock()
+
+	if disposed {
 		return nil
 	}
 
 	if connection == nil {
 		return nil
 	}
+
+	// Set read deadline and max message size to prevent DoS
+	connection.SetReadDeadline(time.Now().Add(5 * time.Second))
+	connection.SetReadLimit(4 * 1024 * 1024) // 4MB limit
 
 	messageType, p, err := connection.ReadMessage()
 	if err != nil {
@@ -334,8 +359,12 @@ func (my *WebSocket) Write(buffer []byte, offset int, length int) bool {
 		return false
 	}
 
+	my.Lock()
+	disposed := my.disposed
 	connection := my.connection
-	if my.disposed {
+	my.Unlock()
+
+	if disposed {
 		return false
 	}
 

@@ -93,13 +93,16 @@ pub fn probe_nodes(
         let queue = Arc::clone(&queue);
         let results = Arc::clone(&results);
         workers.push(thread::spawn(move || loop {
-            let next = queue.lock().expect("probe queue lock poisoned").pop_front();
+            let next = match queue.lock() {
+                Ok(mut guard) => guard.pop_front(),
+                Err(_) => break, // poisoned: another thread panicked; stop this worker
+            };
             let Some((id, endpoint)) = next else { break };
             let latency = probe_endpoint(&endpoint, timeout);
-            results
-                .lock()
-                .expect("probe result lock poisoned")
-                .insert(id, latency);
+            match results.lock() {
+                Ok(mut guard) => guard.insert(id, latency),
+                Err(_) => break, // poisoned: stop this worker
+            }
         }));
     }
     for worker in workers {
