@@ -2062,10 +2062,10 @@ namespace ppp {
             std::memcpy(binding_context.data(), ivv_bytes, sizeof(handshake_ivv_));
             binding_context[16] = static_cast<std::uint8_t>(
                 GetAuthenticatedCarrierKind() == AuthenticatedCarrierKind::WebSocket ? 1 : 0);
-            binding_context[17] = record_server_role_.load(std::memory_order_acquire) ? 1 : 0;
-            binding_context[18] = 0;   // transport-auth key id (single active key)
-            binding_context[19] = 0;   // reserved
-            // binding_context[20..31] stay zero (reserved padding).
+            // The rest of the context is fixed so both peers derive the same
+            // record root: direction separation comes from the HKDF labels in
+            // RecordKeyDerivation, never from a role byte here.
+            // binding_context[17..31] stay zero (reserved).
 
             if (!ExportAuthenticatedSessionKey(
                     ppp::cryptography::noise::RecordProtectorExporterLabel,
