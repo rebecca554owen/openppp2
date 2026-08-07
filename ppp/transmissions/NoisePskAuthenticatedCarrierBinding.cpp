@@ -99,8 +99,7 @@ bool NoisePskAuthenticatedCarrierBinding::Export(
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!valid_.load(std::memory_order_acquire) ||
-        !IsOwnerExecutor(context, strand)) {
+    if (!valid_.load(std::memory_order_acquire)) {
         return false;
     }
 
