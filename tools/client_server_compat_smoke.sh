@@ -56,6 +56,13 @@ def free_ports(count):
 server_port, http_port, socks_port, local_port, remote_port = free_ports(5)
 server["tcp"]["listen"]["port"] = server_port
 server["udp"]["listen"]["port"] = server_port
+
+# transport-auth 示例 key 随仓库入库；把 secret-file 指向 OUT_DIR 下由
+# bash 段 install 的 root:root 600 副本（ppp 以 root 运行，uid 校验要求）。
+secret_path = str(out / "transport.key")
+for cfg in (server, client):
+    for key in cfg.get("transport-auth", {}).get("keys", []):
+        key["secret-file"] = secret_path
 client["tcp"]["listen"]["port"] = 0
 client["udp"]["listen"]["port"] = 0
 client["client"]["server"] = f"ppp://127.0.0.1:{server_port}/"
@@ -86,6 +93,11 @@ for key, value in {
     print(f"{key}={shlex.quote(str(value))}")
 PY
 . "${OUT_DIR}/vars.sh"
+
+# transport-auth 示例 key（root:root 600，满足 LoadTransportAuthSecretFile 的
+# uid/权限/尺寸硬校验）；失败即退出，避免 ppp 以 help+85 静默失败。
+install -m 600 -o root -g "$(id -g root)" \
+    "${ROOT}/tools/compat/secrets/transport.key" "${OUT_DIR}/transport.key"
 
 echo "mode=${COMPAT_MODE} out=${OUT_DIR}"
 echo "server=${SERVER_PORT} echo-local=${LOCAL_PORT} mapped-remote=${REMOTE_PORT}"

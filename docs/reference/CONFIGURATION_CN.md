@@ -503,6 +503,78 @@ key.kf / key.kh / key.kl / key.kx / key.sb —— 非法值时重置为框架内
 原始证据，并满足 [`VMUX_VALIDATION_CN.md`](VMUX_VALIDATION_CN.md)
 规定的双平台 benchmark、兼容、有界内存与 sanitizer 门槛。
 
+### 7.7 `transport-auth` 块——数据面认证（推荐默认开启）
+
+`transport-auth`（TA）提供数据面握手认证。TA 握手完成后，数据面由
+`AuthenticatedRecordProtector`（内部固定 OpenSSL `EVP_aes_256_gcm()`）接管，
+成为真正的认证加密（AEAD）记录层。**推荐默认开启**，配合 transport 层
+`aes-256-gcm` 获得纯 OpenSSL EVP 认证加密路径。
+
+#### 如何生成 key
+
+```bash
+# 生成 64 字节小写 hex（TransportAuthSecret::Size=32 → hex 64 字符），双端放相同内容
+python3 -c "import secrets; print(secrets.token_hex(32))" > transport.key
+chmod 600 transport.key
+```
+
+或用内置命令直接生成文件（自动 64 字节无换行 + 0600 权限，满足全部硬校验）：
+
+```bash
+./bin/ppp --transport-auth-key=./secrets/transport.key
+```
+
+secret-file 硬校验（`TransportAuthConfiguration.cpp`，不满足拒绝启动）：
+
+- 文件必须恰好 **64 字节**（无换行符），内容为小写 hex
+- 属主必须为当前运行 uid；group/other 任何权限位都必须为 0（即 `600`）
+- 不能复用 `protocol-key`/`transport-key`（16 字符且非 hex）
+- 示例（随仓库入库，照抄即可用）：`tools/compat/secrets/transport.key`
+
+#### 如何启用（双端都要）
+
+```json
+{
+    "transport-auth": {
+        "handshake-timeout-ms": 5000,
+        "keys": [
+            { "id": "primary", "state": "active", "secret-file": "./secrets/transport.key" }
+        ]
+    },
+    "server": { "transport-auth": { "enabled": true } },
+    "client": { "transport-auth": { "enabled": true } }
+}
+```
+
+- 顶层 `transport-auth.keys` 双端都要，内容一致；`state` 支持 `active`/`verify-only`/`revoked`
+- `server.transport-auth.enabled` + `client.transport-auth.enabled` 必须同时为 `true` 才激活
+- docker 容器需挂载 secret 文件，容器内路径与 `secret-file` 一致
+
+#### 推荐配置：aes-256-gcm（纯 EVP AEAD）
+
+```json
+"key": {
+    "kf": 154543927,
+    "protocol": "aes-128-cfb",
+    "protocol-key": "N6HMzdUs7IUnYHwq",
+    "transport": "aes-256-gcm",
+    "transport-key": "HWFweXu2g5RVMEpy",
+    "simd-auto": false,
+    "masked": false,
+    "plaintext": false,
+    "delta-encode": false,
+    "shuffle-data": false
+}
+```
+
+- `transport` 层用 `aes-256-gcm`：GCM 名强制走 OpenSSL EVP AEAD 认证路径（SIMD 无
+  认证 tag，GCM 永不转 simd）
+- `protocol` 层必须保持非 GCM（如 `aes-128-cfb`）：帧头 2 字节长度字段装不下
+  GCM 16B tag，protocol 层 GCM 会导致握手帧解码失败（190 ProtocolDecodeFailed）
+- `simd-auto: false`：裸名（不带 `simd-` 前缀）不在自研 SIMD 表内，关闭自动提升
+  即保证纯 OpenSSL EVP 路径。默认 `true` 会把裸 CFB 名透明提升回 `simd-` 变体
+- 命令行开关无单独 TA 参数，全部由 JSON 控制
+
 ---
 
 ## 8. IPv6 Server 行为

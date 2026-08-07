@@ -4,6 +4,16 @@
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
+#else
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+#include <openssl/rand.h>
 
 namespace ppp::app {
 
@@ -231,12 +241,74 @@ void PppApplication::ClearTickAlwaysTimeout() noexcept {
     }
 }
 
+        /**
+         * @brief Writes a fresh transport-auth secret to the given path.
+         *
+         * Generates 32 random bytes (TransportAuthSecret::Size) and stores them
+         * as canonical lowercase hex -- exactly 64 bytes, owner-only 0600 -- so
+         * the file satisfies every hard check in LoadTransportAuthSecretFile
+         * and can be shared verbatim between both peers.
+         */
+        static bool WriteTransportAuthKeyFile(const ppp::string& path) noexcept {
+            if (path.empty()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
+                return false;
+            }
+
+            unsigned char secret[ppp::configurations::TransportAuthSecret::Size]{};
+            if (RAND_bytes(secret, sizeof(secret)) != 1) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::EvpInitKeyDerivationFailed);
+                return false;
+            }
+
+            static constexpr char Hex[] = "0123456789abcdef";
+            char encoded[ppp::configurations::TransportAuthSecret::Size * 2 + 1];
+            for (int i = 0; i < ppp::configurations::TransportAuthSecret::Size; ++i) {
+                encoded[i * 2] = Hex[secret[i] >> 4];
+                encoded[i * 2 + 1] = Hex[secret[i] & 0x0f];
+            }
+            encoded[ppp::configurations::TransportAuthSecret::Size * 2] = '\0';
+
+#if defined(_WIN32)
+            int fd = ::_open(path.c_str(), _O_CREAT | _O_WRONLY | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
+#else
+            int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+#endif
+            if (fd < 0) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileWriteFailed);
+                return false;
+            }
+
+            const ssize_t count = ::write(fd, encoded, ppp::configurations::TransportAuthSecret::Size * 2);
+            ::close(fd);
+            if (count != ppp::configurations::TransportAuthSecret::Size * 2) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileWriteFailed);
+                return false;
+            }
+            return true;
+        }
+
 int RunPreparedApplication(const std::shared_ptr<PppApplication>& app, int prepared_status, int argc, const char* argv[]) noexcept {
     if (ppp::HasCommandArgument("--pull-iplist", argc, argv)) {
         app->PullIPList(ppp::GetCommandArgument("--pull-iplist", argc, argv), false);
         int rc = ppp::diagnostics::GetLastErrorCode() == ppp::diagnostics::ErrorCode::Success ? 0 : -1;
         Executors::Exit();
         return rc;
+    }
+
+    if (ppp::HasCommandArgument("--transport-auth-key", argc, argv)) {
+        const ppp::string path = ppp::GetCommandArgument("--transport-auth-key", argc, argv);
+        const bool ok = WriteTransportAuthKeyFile(path);
+        if (ok) {
+            ppp::ConsoleWrite("transport-auth key written: ");
+            ppp::ConsoleWrite(path.data());
+            ppp::ConsoleWrite("\n");
+        }
+        else {
+            ppp::ConsoleWrite("transport-auth key generation failed\n");
+        }
+        Executors::Exit();
+        return ok ? 0 : -1;
     }
 
 #if defined(_WIN32)
