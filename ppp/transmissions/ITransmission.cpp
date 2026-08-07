@@ -1982,6 +1982,10 @@ namespace ppp {
          * @return True when both protectors are installed and valid.
          */
         bool ITransmission::InstallRecordProtectors(const ppp::cryptography::RecordKeyMaterial& material) noexcept {
+            // The record AEAD is selected by key.transport and must be an
+            // OpenSSL AEAD (GCM / CCM / CHACHA20-POLY1305); anything else
+            // makes the protector constructor fail closed.
+            const ppp::string& record_cipher_name = configuration_->key.transport;
             const std::uint8_t carrier_kind =
                 GetAuthenticatedCarrierKind() == AuthenticatedCarrierKind::WebSocket ? 1 : 0;
             // The direction of a record is the flow it protects: client->server
@@ -1996,23 +2000,23 @@ namespace ppp {
                     material.server_to_client_key,
                     material.server_to_client_nonce_prefix,
                     ppp::cryptography::RecordDirection::ServerToClient,
-                    carrier_kind);
+                    carrier_kind, record_cipher_name);
                 recv = std::make_shared<ppp::cryptography::AuthenticatedRecordProtector>(
                     material.client_to_server_key,
                     material.client_to_server_nonce_prefix,
                     ppp::cryptography::RecordDirection::ClientToServer,
-                    carrier_kind);
+                    carrier_kind, record_cipher_name);
             } else {
                 send = std::make_shared<ppp::cryptography::AuthenticatedRecordProtector>(
                     material.client_to_server_key,
                     material.client_to_server_nonce_prefix,
                     ppp::cryptography::RecordDirection::ClientToServer,
-                    carrier_kind);
+                    carrier_kind, record_cipher_name);
                 recv = std::make_shared<ppp::cryptography::AuthenticatedRecordProtector>(
                     material.server_to_client_key,
                     material.server_to_client_nonce_prefix,
                     ppp::cryptography::RecordDirection::ServerToClient,
-                    carrier_kind);
+                    carrier_kind, record_cipher_name);
             }
             if (!send->IsValid() || !recv->IsValid()) {
                 return false;
