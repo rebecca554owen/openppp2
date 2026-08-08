@@ -103,6 +103,73 @@ namespace ppp {
                 AppConfigurationPtr configuration = transmission->configuration_;
                 const auto& allocator = transmission->BufferAllocator;
 
+                // v2.2.0 AEAD record layer: when installed, the wire format is the
+                // bare record (12-byte header + ciphertext + 16-byte tag) and the
+                // legacy base94-style packet header is not used.  Read the record
+                // header first, then the payload, then Open() via DecryptBinary.
+                std::shared_ptr<ppp::cryptography::AuthenticatedRecordProtector> protector =
+                    std::atomic_load(&transmission->record_protector_recv_);
+                if (protector && protector->IsValid()) {
+                    ppp::telemetry::Count("record.read.used", 1);
+                    ppp::telemetry::Log(Level::kInfo, "arp",
+                        "record read entry protector=1");
+                    auto header = ITransmissionBridge::ReadBytes(transmission, y,
+                        ppp::cryptography::AuthenticatedRecordProtector::RecordHeaderLength);
+                    if (NULLPTR == header) {
+                        ppp::telemetry::Log(Level::kInfo, "arp",
+                            "record header read FAILED err=%d",
+                            (int)ppp::diagnostics::GetLastErrorCode());
+                        if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelReadFailed);
+                        }
+                        outlen = 0;
+                        return NULLPTR;
+                    }
+
+                    const std::uint32_t ciphertext_len =
+                        (static_cast<std::uint32_t>(header.get()[0]) << 24) |
+                        (static_cast<std::uint32_t>(header.get()[1]) << 16) |
+                        (static_cast<std::uint32_t>(header.get()[2]) << 8) |
+                        static_cast<std::uint32_t>(header.get()[3]);
+                    if (ciphertext_len < 1 || ciphertext_len > PPP_BUFFER_SIZE) {
+                        ppp::telemetry::Log(Level::kInfo, "arp",
+                            "record len INVALID clen=%u", ciphertext_len);
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                        return NULLPTR;
+                    }
+                    ppp::telemetry::Log(Level::kInfo, "arp",
+                        "record header OK clen=%u", ciphertext_len);
+
+                    const int record_len = static_cast<int>(ciphertext_len) +
+                        ppp::cryptography::AuthenticatedRecordProtector::TagLength;
+                    auto record = ITransmissionBridge::ReadBytes(transmission, y, record_len);
+                    if (NULLPTR == record) {
+                        if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelReadFailed);
+                        }
+                        outlen = 0;
+                        return NULLPTR;
+                    }
+
+                    std::shared_ptr<Byte> packet = BufferswapAllocator::MakeByteArray(
+                        allocator, 12 + record_len);
+                    if (NULLPTR == packet) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed, NULLPTR);
+                    }
+                    std::memcpy(packet.get(), header.get(), 12);
+                    std::memcpy(packet.get() + 12, record.get(), record_len);
+                    int plaintext_len = 0;
+                    packet = DecryptBinary(transmission, packet.get(), 12 + record_len, plaintext_len);
+                    ppp::telemetry::Log(Level::kInfo, "arp",
+                        "record open %s clen=%u plen=%d err=%d",
+                        NULLPTR != packet ? "OK" : "FAILED", ciphertext_len,
+                        plaintext_len, (int)ppp::diagnostics::GetLastErrorCode());
+                    if (NULLPTR != packet) {
+                        outlen = plaintext_len;
+                    }
+                    return packet;
+                }
+
                 if (EVP_protocol && EVP_transport) {
                     return Transmission_Packet_Read(configuration, allocator,
                         EVP_protocol, EVP_transport, outlen,
@@ -1535,6 +1602,124 @@ namespace ppp {
                     IAsynchronousWriteIoQueue::Dispose();
                 });
         }
+        bool ITransmission::InstallRecordProtectors(const ppp::cryptography::RecordKeyMaterial& material) noexcept {
+            // The record AEAD is selected by key.transport and must be an
+            // OpenSSL AEAD (GCM / CCM / CHACHA20-POLY1305); anything else
+            // makes the protector constructor fail closed.
+            const ppp::string& record_cipher_name = configuration_->key.transport;
+            const std::uint8_t carrier_kind =
+                GetAuthenticatedCarrierKind() == AuthenticatedCarrierKind::WebSocket ? 1 : 0;
+            // The direction of a record is the flow it protects: client->server
+            // records are sealed by the client and opened by the server, and
+            // vice versa for server->client.  Allocate send/recv accordingly
+            // for this side's role (HandshakeClient = server side).
+            const bool server_side = record_server_role_.load(std::memory_order_acquire);
+            std::shared_ptr<ppp::cryptography::AuthenticatedRecordProtector> send;
+            std::shared_ptr<ppp::cryptography::AuthenticatedRecordProtector> recv;
+            if (server_side) {
+                send = std::make_shared<ppp::cryptography::AuthenticatedRecordProtector>(
+                    material.server_to_client_key,
+                    material.server_to_client_nonce_prefix,
+                    ppp::cryptography::RecordDirection::ServerToClient,
+                    carrier_kind, record_cipher_name);
+                recv = std::make_shared<ppp::cryptography::AuthenticatedRecordProtector>(
+                    material.client_to_server_key,
+                    material.client_to_server_nonce_prefix,
+                    ppp::cryptography::RecordDirection::ClientToServer,
+                    carrier_kind, record_cipher_name);
+            } else {
+                send = std::make_shared<ppp::cryptography::AuthenticatedRecordProtector>(
+                    material.client_to_server_key,
+                    material.client_to_server_nonce_prefix,
+                    ppp::cryptography::RecordDirection::ClientToServer,
+                    carrier_kind, record_cipher_name);
+                recv = std::make_shared<ppp::cryptography::AuthenticatedRecordProtector>(
+                    material.server_to_client_key,
+                    material.server_to_client_nonce_prefix,
+                    ppp::cryptography::RecordDirection::ServerToClient,
+                    carrier_kind, record_cipher_name);
+            }
+            if (!send->IsValid() || !recv->IsValid()) {
+                return false;
+            }
+
+            std::atomic_store(&record_protector_send_, std::move(send));
+            std::atomic_store(&record_protector_recv_, std::move(recv));
+            return true;
+        }
+
+        /**
+         * @brief Derives v2.2.0 record keys from the authenticated carrier exporter
+         *        and installs both direction protectors.
+         * @return True when both protectors were installed.
+         */
+        bool ITransmission::InstallRecordProtectorsFromHandshake() noexcept {
+            if (!IsHandshakeComplete()) {
+                return false;
+            }
+            if (IsRecordProtectionActive()) {
+                return true;   // idempotent
+            }
+            if (handshake_ivv_ == 0) {
+                return false;
+            }
+
+            // v2.2.0 diagnostic: log the handshake ivv feeding HKDF so
+            // both ends can be cross-checked for key agreement.
+            ppp::telemetry::Log(Level::kInfo, "arp",
+                "install record protectors: ivv=%s role=%s carrier=%d",
+                stl::to_string<ppp::string>(handshake_ivv_, 16).c_str(),
+                record_server_role_.load(std::memory_order_acquire) ? "server" : "client",
+                static_cast<int>(GetAuthenticatedCarrierKind()));
+
+            // v2.2.2 record key derivation: derive a record root from the Noise
+            // exporter (PFS, transcript-bound) instead of the legacy ivv ||
+            // protocol_key IKM; the HKDF info binds the session context.
+            std::array<std::uint8_t, 32> record_root{};
+            std::array<std::uint8_t, 32> binding_context{};
+            const std::uint8_t* ivv_bytes = reinterpret_cast<const std::uint8_t*>(&handshake_ivv_);
+            std::memcpy(binding_context.data(), ivv_bytes, sizeof(handshake_ivv_));
+            binding_context[16] = static_cast<std::uint8_t>(
+                GetAuthenticatedCarrierKind() == AuthenticatedCarrierKind::WebSocket ? 1 : 0);
+            // The rest of the context is fixed so both peers derive the same
+            // record root: direction separation comes from the HKDF labels in
+            // RecordKeyDerivation, never from a role byte here.
+            // binding_context[17..31] stay zero (reserved).
+
+            if (!ExportAuthenticatedSessionKey(
+                    ppp::cryptography::noise::RecordProtectorExporterLabel,
+                    binding_context.data(), binding_context.size(),
+                    record_root.data(), record_root.size())) {
+                OPENSSL_cleanse(binding_context.data(), binding_context.size());
+                return false;
+            }
+
+            ppp::cryptography::RecordKeyContext ctx;
+            ctx.exporter_secret = record_root.data();
+            ctx.exporter_secret_len = record_root.size();
+            ctx.session_id = ivv_bytes;
+            ctx.session_id_len = sizeof(handshake_ivv_);
+            ctx.carrier_kind = binding_context[16];
+            ctx.transport_auth_key_id = binding_context[18];
+
+            ppp::cryptography::RecordKeyMaterial material;
+            const bool derived = ppp::cryptography::DeriveRecordKeyMaterial(ctx, material);
+            OPENSSL_cleanse(record_root.data(), record_root.size());
+            OPENSSL_cleanse(binding_context.data(), binding_context.size());
+            if (!derived) {
+                return false;
+            }
+            const bool installed = InstallRecordProtectors(material);
+            OPENSSL_cleanse(material.client_to_server_key.data(), material.client_to_server_key.size());
+            OPENSSL_cleanse(material.client_to_server_nonce_prefix.data(), material.client_to_server_nonce_prefix.size());
+            OPENSSL_cleanse(material.server_to_client_key.data(), material.server_to_client_key.size());
+            OPENSSL_cleanse(material.server_to_client_nonce_prefix.data(), material.server_to_client_nonce_prefix.size());
+            return installed;
+        }
+
+        /**
+         * @brief Encrypts payload via packet encryption path selected by cipher state.
+         */
 
         /**
          * @brief Runs client-side handshake state machine and negotiates mux mode.
@@ -1889,6 +2074,38 @@ namespace ppp {
          * @brief Encrypts payload via packet encryption path selected by cipher state.
          */
         std::shared_ptr<Byte> ITransmissionBridge::EncryptBinary(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept {
+            // v2.2.0 AEAD record layer: when installed, Seal() replaces the
+            // legacy double-CFB data path entirely.
+            std::shared_ptr<ppp::cryptography::AuthenticatedRecordProtector> protector =
+                std::atomic_load(&transmission->record_protector_send_);
+            if (protector && protector->IsValid()) {
+                ppp::telemetry::Count("record.seal.used", 1);
+                if (datalen < 1 || NULLPTR == data) {
+                    outlen = ~0;
+                    return NULLPTR;
+                }
+                std::shared_ptr<Byte> output = ppp::threading::BufferswapAllocator::MakeByteArray(
+                    transmission->BufferAllocator, datalen + 28);
+                if (NULLPTR == output) {
+                    outlen = ~0;
+                    return NULLPTR;
+                }
+                std::size_t output_len = 0;
+                if (!protector->Seal(data, static_cast<std::size_t>(datalen),
+                                     output.get(), output_len)) {
+                    ppp::telemetry::Log(Level::kInfo, "arp",
+                        "seal FAILED datalen=%d err=%d", datalen,
+                        (int)ppp::diagnostics::GetLastErrorCode());
+                    outlen = ~0;
+                    return NULLPTR;
+                }
+                // The AEAD record carries its own 12-byte header (ciphertext_len
+                // + sequence), so no legacy base94-style packet header is added.
+                // The receiver reads the record header directly (ReadBinary).
+                outlen = static_cast<int>(output_len);
+                return output;
+            }
+
             bool safest = !transmission->handshaked_.load(std::memory_order_acquire);
             AppConfigurationPtr cfg = transmission->configuration_;
             const auto& alloc = transmission->BufferAllocator;
@@ -1909,6 +2126,33 @@ namespace ppp {
          * @brief Decrypts payload via packet decryption path selected by cipher state.
          */
         std::shared_ptr<Byte> ITransmissionBridge::DecryptBinary(ITransmission* transmission, Byte* data, int datalen, int& outlen) noexcept {
+            // v2.2.0 AEAD record layer: when installed, Open() authenticates and
+            // reverses the record.  Authentication failures return null so the
+            // caller closes the carrier.
+            std::shared_ptr<ppp::cryptography::AuthenticatedRecordProtector> protector =
+                std::atomic_load(&transmission->record_protector_recv_);
+            if (protector && protector->IsValid()) {
+                ppp::telemetry::Count("record.open.used", 1);
+                if (datalen < 1 || NULLPTR == data) {
+                    outlen = ~0;
+                    return NULLPTR;
+                }
+                std::shared_ptr<Byte> output = ppp::threading::BufferswapAllocator::MakeByteArray(
+                    transmission->BufferAllocator, datalen);
+                if (NULLPTR == output) {
+                    outlen = ~0;
+                    return NULLPTR;
+                }
+                std::size_t output_len = 0;
+                if (!protector->Open(data, static_cast<std::size_t>(datalen),
+                                     output.get(), output_len)) {
+                    outlen = ~0;
+                    return NULLPTR;
+                }
+                outlen = static_cast<int>(output_len);
+                return output;
+            }
+
             bool safest = !transmission->handshaked_.load(std::memory_order_acquire);
             AppConfigurationPtr cfg = transmission->configuration_;
             const auto& alloc = transmission->BufferAllocator;
