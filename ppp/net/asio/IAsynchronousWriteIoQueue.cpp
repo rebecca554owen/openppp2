@@ -246,6 +246,7 @@ namespace ppp {
                 // drive the drain loop instead of recursing to avoid unbounded stack growth
                 AsynchronousWriteIoContextPtr current = context;
                 bool current_callback_on_failure = callback_on_start_failure;
+                bool initial_start_failed = false;
 
                 while (NULLPTR != current) {
                     auto self = shared_from_this();
@@ -307,7 +308,7 @@ namespace ppp {
                     }
 
                     if (DoWriteBytes(packet, 0, packet_length, evtf)) {
-                        return true;
+                        return !initial_start_failed;
                     }
 
                     AsynchronousWriteBytesCallback callback;
@@ -318,9 +319,12 @@ namespace ppp {
                         SynchronizedObjectScope scope(syncobj_);
                         // A synchronous completion or Finalize already owns all terminal state.
                         if (!current->Claim(callback, claimed_length)) {
-                            return true;
+                            return !initial_start_failed;
                         }
 
+                        if (!current_callback_on_failure) {
+                            initial_start_failed = true;
+                        }
                         if (current == in_flight_) {
                             in_flight_.reset();
                         }

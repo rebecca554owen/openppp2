@@ -72,8 +72,12 @@ namespace ppp {
 
                         constexpr size_t MAX_QUEUE_SIZE = 1024;
                         if (write_queue_.size() >= MAX_QUEUE_SIZE) {
+                            // Queue saturation is backpressure: deliver the
+                            // failure callback OUTSIDE the lock so a re-entrant
+                            // callback cannot deadlock on write_mutex_.
                             if (cb) {
-                                cb(false);
+                                ppp::threading::Executors::Post(context, strand,
+                                    [cb]() noexcept { cb(false); });
                             }
                             return;
                         }

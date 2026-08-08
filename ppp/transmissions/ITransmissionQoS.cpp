@@ -163,9 +163,10 @@ namespace ppp {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     return false;
                 }
+
+                traffic_ += bytes_transferred;
             }
 
-            traffic_ += bytes_transferred;
             return true;
         }
 
