@@ -203,8 +203,7 @@ namespace ppp {
         }
 
         bool ISslWebsocketTransmission::HasAuthenticatedSessionExporter() const noexcept {
-            if (IsServerLoopbackIngress() ||
-                exporter_disabled_.load(std::memory_order_acquire) || !IsHandshakeComplete()) {
+            if (exporter_disabled_.load(std::memory_order_acquire) || !IsHandshakeComplete()) {
                 return false;
             }
 
@@ -218,8 +217,7 @@ namespace ppp {
             std::size_t context_length,
             std::uint8_t* output,
             std::size_t output_length) noexcept {
-            if (IsServerLoopbackIngress() ||
-                exporter_disabled_.load(std::memory_order_acquire) || !IsHandshakeComplete()) {
+            if (exporter_disabled_.load(std::memory_order_acquire) || !IsHandshakeComplete()) {
                 return false;
             }
 
