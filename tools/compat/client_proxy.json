@@ -8,12 +8,9 @@
     "kx": 128,
     "kl": 10,
     "kh": 12,
-    "protocol": "aes-128-cfb",
-    "protocol-key": "N6HMzdUs7IUnYHwq",
-    "transport": "aes-256-cfb",
+    "transport": "aes-256-gcm",
     "transport-key": "HWFweXu2g5RVMEpy",
     "masked": false,
-    "plaintext": false,
     "delta-encode": false,
     "shuffle-data": false,
     "simd-auto": true
@@ -54,6 +51,16 @@
         "protocol": "tcp",
         "remote-ip": "::",
         "remote-port": 19000
+      }
+    ]
+  },
+  "transport-auth": {
+    "handshake-timeout-ms": 5000,
+    "keys": [
+      {
+        "id": "primary",
+        "secret-file": "./secrets/transport.key",
+        "state": "active"
       }
     ]
   }
