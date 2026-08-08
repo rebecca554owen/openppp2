@@ -46,13 +46,12 @@ bool DeriveOne(const RecordKeyContext& context,
         session_id = zero_session;
         session_id_len = sizeof(zero_session);
     }
-    const std::uint32_t key_id = context.transport_auth_key_id;
-    const std::uint8_t key_id_be[4] = {
-        static_cast<std::uint8_t>((key_id >> 24) & 0xFF),
-        static_cast<std::uint8_t>((key_id >> 16) & 0xFF),
-        static_cast<std::uint8_t>((key_id >> 8) & 0xFF),
-        static_cast<std::uint8_t>(key_id & 0xFF),
-    };
+    const char* key_id = context.key_id;
+    std::size_t key_id_len = context.key_id_len;
+    if (key_id == NULLPTR || key_id_len == 0) {
+        key_id = "";
+        key_id_len = 0;
+    }
 
     // Build the HKDF info as ONE contiguous buffer and add it with a single
     // EVP_PKEY_CTX_add1_hkdf_info call.  Multiple add1 calls rely on the
@@ -62,7 +61,7 @@ bool DeriveOne(const RecordKeyContext& context,
     std::array<std::uint8_t, 160> info{};
     std::size_t info_len = 0;
     const std::size_t label_len = std::strlen(label);
-    if (info.size() - info_len < label_len + session_id_len + 1 + sizeof(key_id_be)) {
+    if (info.size() - info_len < label_len + session_id_len + 1 + key_id_len) {
         EVP_PKEY_CTX_free(hkdf);
         return false;
     }
@@ -71,8 +70,10 @@ bool DeriveOne(const RecordKeyContext& context,
     std::memcpy(info.data() + info_len, session_id, session_id_len);
     info_len += session_id_len;
     info[info_len++] = context.carrier_kind;
-    std::memcpy(info.data() + info_len, key_id_be, sizeof(key_id_be));
-    info_len += sizeof(key_id_be);
+    if (key_id_len > 0) {
+        std::memcpy(info.data() + info_len, key_id, key_id_len);
+        info_len += key_id_len;
+    }
 
     const bool ok =
         EVP_PKEY_derive_init(hkdf) > 0 &&

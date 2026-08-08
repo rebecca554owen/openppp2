@@ -41,7 +41,8 @@ struct RecordKeyContext
     const std::uint8_t* session_id = NULLPTR;       ///< Canonical session id.
     std::size_t         session_id_len = 0;
     std::uint8_t        carrier_kind = 0;           ///< TCP=0, WS=1, WSS=2.
-    std::uint32_t       transport_auth_key_id = 0;  ///< transport-auth key id.
+    const char*         key_id = NULLPTR;           ///< Negotiated transport-auth key id (canonical string).
+    std::size_t         key_id_len = 0;
 };
 
 /**

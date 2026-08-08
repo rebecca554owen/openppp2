@@ -1700,7 +1700,12 @@ namespace ppp {
             ctx.session_id = ivv_bytes;
             ctx.session_id_len = sizeof(handshake_ivv_);
             ctx.carrier_kind = binding_context[16];
-            ctx.transport_auth_key_id = binding_context[18];
+            // v2.2.0: the negotiated transport-auth key id (canonical string
+            // bytes) is bound into the HKDF info, so record keys are scoped to
+            // the specific key selected during the handshake and key rotation
+            // immediately changes the derived keys.
+            ctx.key_id = transport_auth_key_id_.data();
+            ctx.key_id_len = transport_auth_key_id_.size();
 
             ppp::cryptography::RecordKeyMaterial material;
             const bool derived = ppp::cryptography::DeriveRecordKeyMaterial(ctx, material);

@@ -173,6 +173,17 @@ namespace ppp {
              */
             bool                                                                                    InstallRecordProtectorsFromHandshake() noexcept;
             /**
+             * @brief Records the negotiated transport-auth key id (canonical string).
+             *        Bound into the record-key HKDF info for domain separation.
+             */
+            void                                                                                    SetTransportAuthKeyId(const std::string& key_id) noexcept {
+                transport_auth_key_id_.assign(key_id.data(), key_id.size());
+            }
+            /** @brief The negotiated transport-auth key id (empty until set). */
+            const std::string&                                                                      GetTransportAuthKeyId() const noexcept {
+                return transport_auth_key_id_;
+            }
+            /**
              * @brief Whether the v2.2.0 AEAD record layer is active.
              */
             bool                                                                                    IsRecordProtectionActive() const noexcept {
@@ -349,6 +360,8 @@ namespace ppp {
             std::shared_ptr<ppp::cryptography::AuthenticatedRecordProtector>                        record_protector_recv_;
             /** @brief Handshake random material (ivv) used for v2.2.0 record key derivation. */
             Int128                                                                                  handshake_ivv_{0};
+            /** @brief Negotiated transport-auth key id bound into record-key HKDF info. */
+            std::string                                                                             transport_auth_key_id_;
             /** @brief Shared immutable transmission configuration. */
             AppConfigurationPtr                                                                     configuration_;     // Configuration (never null after construction).
         };

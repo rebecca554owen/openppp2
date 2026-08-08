@@ -688,6 +688,9 @@ namespace ppp {
                         std::move(result))) {
                     return fail(ppp::diagnostics::ErrorCode::SessionAuthFailed);
                 }
+                // v2.2.0: bind the negotiated key id into record-key
+                // derivation before installing the protectors.
+                transmission->SetTransportAuthKeyId(initiator.GetKeyId());
                 // v2.2.0: transport-auth is mandatory; the AEAD record
                 // protectors must be installed after the acknowledged
                 // handshake or the session is refused.

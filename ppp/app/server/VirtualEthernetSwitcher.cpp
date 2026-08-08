@@ -1957,9 +1957,11 @@ namespace ppp {
                 if (authenticated) {
                     authenticated = send_control(response);
                 }
-                // v2.2.0: transport-auth is mandatory; install the AEAD record
-                // protectors after the acknowledged handshake or refuse.
+                // v2.2.0: bind the negotiated key id into record-key
+                // derivation, then install the AEAD record protectors after
+                // the acknowledged handshake or refuse.
                 if (authenticated) {
+                    transmission->SetTransportAuthKeyId(responder.GetKeyId());
                     authenticated = transmission->InstallRecordProtectorsFromHandshake();
                 }
 

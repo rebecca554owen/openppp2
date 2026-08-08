@@ -179,7 +179,9 @@ BOOST_AUTO_TEST_CASE(hkdf_derivation_is_deterministic_and_directional) {
     peer_a.session_id = session.data();
     peer_a.session_id_len = session.size();
     peer_a.carrier_kind = 1;
-    peer_a.transport_auth_key_id = 7;
+    const char peer_key_id[] = "key-7";
+    peer_a.key_id = peer_key_id;
+    peer_a.key_id_len = sizeof(peer_key_id) - 1;
     peer_b = peer_a;
     RecordKeyMaterial material_a;
     RecordKeyMaterial material_b;

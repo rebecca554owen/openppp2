@@ -59,6 +59,9 @@ public:
         ppp::cryptography::noise::NoisePskHandshakeResult& output) noexcept;
     void Abort() noexcept;
 
+    /** @brief The key id used for this negotiation (valid once complete). */
+    const std::string& GetKeyId() const noexcept { return key_id_; }
+
 private:
     bool Fail() noexcept;
 
@@ -104,6 +107,9 @@ public:
     bool TakeNoiseResult(
         ppp::cryptography::noise::NoisePskHandshakeResult& output) noexcept;
     void Abort() noexcept;
+
+    /** @brief The key id used for this negotiation (valid once complete). */
+    const std::string& GetKeyId() const noexcept { return key_id_; }
 
 private:
     bool Fail(TransportAuthControl* reject, const std::string* token) noexcept;
