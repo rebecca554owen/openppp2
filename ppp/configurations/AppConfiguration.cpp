@@ -943,7 +943,8 @@ namespace ppp {
             config.server.ipv6.mode = NormalizeIPv6Mode(config.server.ipv6.mode);
             bool ipv6_server_enabled = config.server.ipv6.mode == AppConfiguration::IPv6Mode_Nat66 ||
                 config.server.ipv6.mode == AppConfiguration::IPv6Mode_Gua;
-            if (ipv6_server_enabled && !SupportsServerIPv6DataPlane()) {
+            if (ipv6_server_enabled && config.client.server.empty() &&
+                !SupportsServerIPv6DataPlane()) {
                 if (config.server.ipv6.mode == AppConfiguration::IPv6Mode_Nat66) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6Nat66Unavailable);
                 }
