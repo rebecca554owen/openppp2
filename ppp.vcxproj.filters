@@ -285,6 +285,12 @@
     <ClCompile Include="ppp\cryptography\EVP.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\cryptography\AuthenticatedRecordProtector.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\cryptography\RecordKeyDerivation.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\cryptography\noise\NoisePsk.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -1461,6 +1467,12 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\cryptography\EVP.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\cryptography\AuthenticatedRecordProtector.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\cryptography\RecordKeyDerivation.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\cryptography\noise\NoisePsk.h">

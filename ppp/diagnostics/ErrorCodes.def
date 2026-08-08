@@ -413,6 +413,7 @@ X(VEthernetManagedEndpointInputUrlEmpty, "VirtualEthernetManagedServer endpoint 
 X(EvpEncryptInvalidArguments, "EVP encrypt received invalid arguments", ErrorSeverity::kError)
 X(EvpEncryptZeroLengthInput, "EVP encrypt rejected zero-length input", ErrorSeverity::kError)
 X(EvpDecryptInvalidArguments, "EVP decrypt received invalid arguments", ErrorSeverity::kError)
+X(EvpDecryptAuthenticationFailed, "EVP decrypt authentication failed (AEAD tag mismatch)", ErrorSeverity::kError)
 X(EvpDecryptZeroLengthInput, "EVP decrypt rejected zero-length input", ErrorSeverity::kError)
 X(EvpSupportMethodEmpty, "EVP support check received empty method name", ErrorSeverity::kError)
 X(EvpInitKeyDerivationFailed, "EVP key derivation failed", ErrorSeverity::kError)

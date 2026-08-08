@@ -217,6 +217,26 @@ std::shared_ptr<boost::asio::io_context> Executors::GetCurrent(bool) noexcept { 
 uint64_t Executors::GetTickCount() noexcept { return 0; }
 }
 ]=])
+openppp2_add_cpp_test(record_protector_install_test SOURCES
+    record_protector_install_test.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/transport_auth_configuration_test_stubs.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/AuthenticatedRecordProtector.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/RecordKeyDerivation.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp"
+    "${OPENPPP2_ROOT}/ppp/threading/Thread.cpp"
+    "${OPENPPP2_ROOT}/ppp/Random.cpp"
+    "${OPENPPP2_ROOT}/ppp/stdafx.cpp"
+    "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp")
+target_compile_options(record_protector_install_test PRIVATE -ffunction-sections -fdata-sections)
+if(APPLE)
+    target_link_options(record_protector_install_test PRIVATE -Wl,-dead_strip)
+elseif(UNIX)
+    target_link_options(record_protector_install_test PRIVATE -Wl,--gc-sections)
+endif()
+target_link_libraries(record_protector_install_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+
 openppp2_add_cpp_test(transport_auth_configuration_test SOURCES
     transport_auth_configuration_test.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/transport_auth_configuration_test_stubs.cpp"
