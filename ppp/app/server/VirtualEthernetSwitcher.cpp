@@ -1784,11 +1784,22 @@ namespace ppp {
                     transmission->GetAuthenticatedCarrierKind();
                 const bool plain_carrier = kind == AuthenticatedCarrierKind::Tcp ||
                     kind == AuthenticatedCarrierKind::WebSocket;
-                if (!plain_carrier || transmission->IsServerLoopbackIngress() ||
-                    !configuration_->server.transport_auth.enabled ||
-                    !transmission->PeerSupportsTransportAuthV1() ||
+                if (!plain_carrier || transmission->IsServerLoopbackIngress()) {
+                    return true;   // TLS-WS uses the TLS exporter; loopback is test-only.
+                }
+                // v2.2.0: transport-auth is mandatory on plain carriers.  A peer
+                // that does not support or enable it cannot interoperate with
+                // the mandatory AEAD record layer and is refused.
+                if (!transmission->PeerSupportsTransportAuthV1() ||
                     !transmission->PeerEnablesTransportAuthV1()) {
-                    return true;
+                    ppp::telemetry::Count("server.transport_auth.required_reject", 1);
+                    ppp::telemetry::Log(Level::kInfo, "server",
+                        "transport-auth required: peer_supports=%d peer_enables=%d; rejecting session",
+                        transmission->PeerSupportsTransportAuthV1() ? 1 : 0,
+                        transmission->PeerEnablesTransportAuthV1() ? 1 : 0);
+                    ppp::diagnostics::SetLastErrorCode(
+                        ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                    return false;
                 }
 
                 ppp::app::protocol::SessionResumeId binary_session_id{};
@@ -1945,6 +1956,11 @@ namespace ppp {
                 }
                 if (authenticated) {
                     authenticated = send_control(response);
+                }
+                // v2.2.0: transport-auth is mandatory; install the AEAD record
+                // protectors after the acknowledged handshake or refuse.
+                if (authenticated) {
+                    authenticated = transmission->InstallRecordProtectorsFromHandshake();
                 }
 
                 if (!authenticated && advertisement_received && !reject_sent) {

@@ -688,6 +688,12 @@ namespace ppp {
                         std::move(result))) {
                     return fail(ppp::diagnostics::ErrorCode::SessionAuthFailed);
                 }
+                // v2.2.0: transport-auth is mandatory; the AEAD record
+                // protectors must be installed after the acknowledged
+                // handshake or the session is refused.
+                if (!transmission->InstallRecordProtectorsFromHandshake()) {
+                    return fail(ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                }
                 return true;
             }
 
@@ -2021,15 +2027,18 @@ namespace ppp {
                             SessionResumeNegotiationResult negotiation =
                                 SessionResumeNegotiationResult::Fresh;
                             established = transmission->HandshakeServer(y, GetId(), true);
-                            if (established && ShouldRunClientTransportAuth(
-                                    transmission->GetAuthenticatedCarrierKind(),
-                                    configuration->client.transport_auth.enabled,
-                                    transmission->PeerSupportsTransportAuthV1(),
-                                    transmission->PeerEnablesTransportAuthV1())) {
-                                arm_handshake_timer(
-                                    configuration->transport_auth.handshake_timeout_ms);
-                                established = AuthenticatePlainTransport(transmission, y);
-                                transport_auth_failed = !established;
+                            if (established) {
+                                // v2.2.0: transport-auth is mandatory on plain
+                                // carriers; the Noise PSK handshake always runs
+                                // and refuses the session on any failure.
+                                const auto kind = transmission->GetAuthenticatedCarrierKind();
+                                if (kind == ppp::transmissions::AuthenticatedCarrierKind::Tcp ||
+                                    kind == ppp::transmissions::AuthenticatedCarrierKind::WebSocket) {
+                                    arm_handshake_timer(
+                                        configuration->transport_auth.handshake_timeout_ms);
+                                    established = AuthenticatePlainTransport(transmission, y);
+                                    transport_auth_failed = !established;
+                                }
                             }
                             if (established) {
                                 const bool recovery_carrier_eligible =
