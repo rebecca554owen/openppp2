@@ -8,6 +8,8 @@
 #include <ppp/stdafx.h>
 #include <ppp/Int128.h>
 #include <ppp/cryptography/Ciphertext.h>
+#include <ppp/cryptography/AuthenticatedRecordProtector.h>
+#include <ppp/cryptography/RecordKeyDerivation.h>
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/threading/Timer.h>
 #include <ppp/threading/BufferswapAllocator.h>
@@ -157,6 +159,26 @@ namespace ppp {
             const StrandPtr&                                                                        GetStrand() const noexcept { return strand_; }
             /** @brief Reports whether the authenticated OpenPPP2 handshake completed. */
             virtual bool                                                                            IsHandshakeComplete() const noexcept { return handshaked_.load(std::memory_order_acquire); }
+            /**
+             * @brief Installs the v2.2.0 AEAD record protectors for both directions.
+             * @param material Derived record key material (HKDF, see RecordKeyDerivation).
+             * @return True when both protectors were installed.
+             */
+            bool                                                                                    InstallRecordProtectors(const ppp::cryptography::RecordKeyMaterial& material) noexcept;
+            /**
+             * @brief Derives v2.2.0 record keys from the handshake random material
+             *        (zero-configuration, protocol section 2.3) and installs both direction
+             *        protectors (call after handshake).
+             * @return True when both protectors were installed.
+             */
+            bool                                                                                    InstallRecordProtectorsFromHandshake() noexcept;
+            /**
+             * @brief Whether the v2.2.0 AEAD record layer is active.
+             */
+            bool                                                                                    IsRecordProtectionActive() const noexcept {
+                return nullptr != record_protector_send_ || nullptr != record_protector_recv_;
+            }
+            /** @brief Reports whether the peer advertised transport-auth-v1 support. */
             /** @brief Reports whether the peer advertised transport-auth-v1 support. */
             bool                                                                                    PeerSupportsTransportAuthV1() const noexcept { return peer_supports_transport_auth_v1_.load(std::memory_order_acquire); }
             /** @brief Reports whether the peer also enabled its transport-auth-v1 policy. */
@@ -290,6 +312,8 @@ namespace ppp {
             std::atomic_bool                                                                        frame_tn_{false};
             /** @brief Handshake completion state flag storage. */
             std::atomic_bool                                                                        handshaked_{false};
+            /** @brief True when this transmission runs on the server side (HandshakeClient caller). */
+            std::atomic_bool                                                                        record_server_role_{false};
             /** @brief Validated peer transport-auth-v1 capability state. */
             std::atomic_bool                                                                        peer_supports_transport_auth_v1_{false};
             /** @brief Validated peer transport-auth-v1 policy state. */
@@ -319,6 +343,12 @@ namespace ppp {
             CiphertextPtr                                                                           protocol_;          // Protocol‑layer cipher (optional).
             /** @brief Optional transport-layer cipher instance. */
             CiphertextPtr                                                                           transport_;         // Transport‑layer cipher (optional).
+            /** @brief v2.2.0 AEAD record protector for the send direction. */
+            std::shared_ptr<ppp::cryptography::AuthenticatedRecordProtector>                        record_protector_send_;
+            /** @brief v2.2.0 AEAD record protector for the receive direction. */
+            std::shared_ptr<ppp::cryptography::AuthenticatedRecordProtector>                        record_protector_recv_;
+            /** @brief Handshake random material (ivv) used for v2.2.0 record key derivation. */
+            Int128                                                                                  handshake_ivv_{0};
             /** @brief Shared immutable transmission configuration. */
             AppConfigurationPtr                                                                     configuration_;     // Configuration (never null after construction).
         };
