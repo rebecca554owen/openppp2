@@ -115,7 +115,6 @@ void PppApplication::PrintHelpInformation() noexcept {
     ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--tun-vnet=[yes|no]", col_description_width, "Enable subnet forwarding", col_default_width, "yes");
     ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--tun-host=[yes|no]", col_description_width, "Prefer host network", col_default_width, "yes");
     ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--tun-static=[yes|no]", col_description_width, "Enable static tunnel", col_default_width, "no");
-    ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--tun-ucp=[yes|no]", col_description_width, "Enable UCP reliable-UDP carrier (client)", col_default_width, "no");
     ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--tun-mux=<connections>", col_description_width, "MUX connection count (0=disabled)", col_default_width, "0");
     ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--tun-mux-acceleration=<mode>", col_description_width, "MUX acceleration mode (0-3)", col_default_width, "0 (standard)");
     ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--mux-mode=<compat|flow|balance|stripe>", col_description_width, "MUX scheduler mode", col_default_width, "compat");
