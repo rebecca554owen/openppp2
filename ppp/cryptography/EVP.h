@@ -28,6 +28,7 @@ namespace ppp {
              * @param password Password used for key/IV derivation.
              */
             EVP(const ppp::string& method, const ppp::string& password) noexcept;
+            ~EVP() noexcept;
 
         public:
             /**
@@ -62,6 +63,8 @@ namespace ppp {
             static void                                         SetSimdAuto(bool enabled) noexcept;
             /** @brief Whether this instance is using the AES-NI hardware path. */
             bool                                                IsHardwareAccelerated() const noexcept;
+            /** @brief Whether this instance is using an AEAD (GCM) cipher mode. */
+            bool                                                IsGcmMode() const noexcept;
 
         private:
             /**
