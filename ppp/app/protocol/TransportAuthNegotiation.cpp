@@ -249,7 +249,10 @@ bool TransportAuthInitiator::ConsumeSelection(
     const bool decoded = HexDecode(selection.message, message);
     const bool read = decoded && handshake_->ReadMessage2(message.data(), message.size());
     OPENSSL_cleanse(message.data(), message.size());
-    if (!read || !handshake_->TakeResult(result_)) return Fail();
+    if (!read || !handshake_->TakeResult(
+            result_,
+            reinterpret_cast<const std::uint8_t*>(key_id_.data()), key_id_.size()))
+        return Fail();
 
     noise::ClientSuccessProof confirmation{};
     if (!result_.GenerateClientSuccessConfirmationProof(confirmation) ||
@@ -355,7 +358,9 @@ bool TransportAuthResponder::ConsumeAdvertisement(
 
     std::vector<std::uint8_t> message2;
     if (!handshake_->WriteMessage2(message2) ||
-        !handshake_->TakeResult(result_) ||
+        !handshake_->TakeResult(
+            result_,
+            reinterpret_cast<const std::uint8_t*>(key_id_.data()), key_id_.size()) ||
         !HexEncode(message2.data(), message2.size(), output.message)) {
         return Fail(&output, &context_.token);
     }
