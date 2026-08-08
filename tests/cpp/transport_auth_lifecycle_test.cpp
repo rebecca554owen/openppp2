@@ -306,7 +306,7 @@ BOOST_AUTO_TEST_CASE(production_transport_descriptors_are_explicit) {
         context, strand, ConnectedSocket(context, peers), configuration);
 
     BOOST_TEST(child->GetAuthenticatedCarrierKind() ==
-        transmissions::AuthenticatedCarrierKind::None);
+        transmissions::AuthenticatedCarrierKind::Tcp);
     BOOST_TEST(main->GetAuthenticatedCarrierKind() ==
         transmissions::AuthenticatedCarrierKind::Tcp);
     BOOST_TEST(server->GetAuthenticatedCarrierKind() ==

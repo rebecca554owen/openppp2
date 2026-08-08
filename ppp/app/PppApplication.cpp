@@ -279,8 +279,13 @@ void PppApplication::ClearTickAlwaysTimeout() noexcept {
                 return false;
             }
 
+#if defined(_WIN32)
+            const int count = ::_write(fd, encoded, ppp::configurations::TransportAuthSecret::Size * 2);
+            ::_close(fd);
+#else
             const ssize_t count = ::write(fd, encoded, ppp::configurations::TransportAuthSecret::Size * 2);
             ::close(fd);
+#endif
             if (count != ppp::configurations::TransportAuthSecret::Size * 2) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileWriteFailed);
                 return false;
