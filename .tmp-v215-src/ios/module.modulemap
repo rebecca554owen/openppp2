@@ -1,4 +1,0 @@
-module OpenPPP2 {
-    umbrella header "OpenPPP2PacketTunnelBridge.h"
-    export *
-}
