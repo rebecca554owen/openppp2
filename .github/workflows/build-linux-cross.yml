@@ -67,7 +67,7 @@ jobs:
         run: |
           PLATFORM_SAFE="${{ matrix.platform }}"
           PLATFORM_SAFE="${PLATFORM_SAFE//\//-}"
-          ARTIFACT="openppp2-${PLATFORM_SAFE}-cross.zip"
+          ARTIFACT="openppp2-${PLATFORM_SAFE}.zip"
           echo "ARTIFACT=$ARTIFACT" >> $GITHUB_ENV
           cd bin && zip -r "$ARTIFACT" ppp
 
