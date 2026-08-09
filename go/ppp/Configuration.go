@@ -151,7 +151,13 @@ func LoadManagedServerConfiguration(path string) *ManagedServerConfiguration {
 	} else if _, err := cfg.ManagedMode(); err != nil {
 		LOG_ERROR.Println(err)
 		return nil
-	} else {
-		return cfg
 	}
+
+	// reject empty key config to prevent authentication bypass
+	if cfg.Key == "" {
+		LOG_ERROR.Println("SECURITY: managed server 'key' is empty - authentication would be bypassed. Refusing to start.")
+		return nil
+	}
+
+	return cfg
 }
