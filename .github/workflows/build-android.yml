@@ -438,6 +438,6 @@ jobs:
         if: steps.signing.outputs.signed == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: openppp2-android-signed-apk
+          name: openppp2-android.apk
           path: android/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error

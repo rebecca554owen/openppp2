@@ -1,5 +1,5 @@
-# 全局构建参数：基础镜像（已发布的 openppp2 镜像，依赖已内置）
-ARG BASE_IMAGE=ghcr.io/rebecca554owen/openppp2:latest
+# 全局构建参数：基础镜像（ubuntu 24.04 + 运行时依赖，已发布到 ghcr）
+ARG BASE_IMAGE=ghcr.io/rebecca554owen/openppp2:base
 
 # 多阶段构建 - 下载阶段（仅构建期：从 openppp2 release 拉取新版本二进制）
 FROM ubuntu:22.04 AS downloader
