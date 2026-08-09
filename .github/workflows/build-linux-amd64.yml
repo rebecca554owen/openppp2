@@ -47,7 +47,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/third-party
-          key: linux-amd64-third-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+          key: linux-amd64-third-v2-${{ runner.os }}-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
 
       - name: Build Boost
         if: steps.cache-third.outputs.cache-hit != 'true'
