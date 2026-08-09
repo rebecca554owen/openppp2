@@ -1,4 +1,7 @@
-# 多阶段构建 - 下载阶段
+# 全局构建参数：基础镜像（已发布的 openppp2 镜像，依赖已内置）
+ARG BASE_IMAGE=ghcr.io/rebecca554owen/openppp2:latest
+
+# 多阶段构建 - 下载阶段（仅构建期：从 openppp2 release 拉取新版本二进制）
 FROM ubuntu:22.04 AS downloader
 
 # 构建参数
@@ -9,7 +12,7 @@ ARG TARGETARCH
 # 设置工作目录
 WORKDIR /tmp
 
-# 安装下载工具
+# 安装下载工具（仅构建期使用，不进入最终镜像）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     file \
@@ -149,44 +152,15 @@ RUN set -ex && \
     fi && \
     rm -f release.json
 
-# 多阶段构建 - 运行阶段
-FROM ubuntu:22.04
+# 运行阶段：直接复用已发布的 openppp2 镜像（运行时依赖已内置），仅替换二进制
+FROM ${BASE_IMAGE}
 
-# 设置工作目录
-WORKDIR /opt
-
-# 环境变量
-ENV ENABLE_IO=false
-ENV ENABLE_SIMD=false
-ENV ENABLE_TC=false
-ENV ENABLE_BYPASS=false
-ENV BYPASS_COUNTRY=CN
-ENV BYPASS_IPLIST_PATH=/opt/ip.txt
-ENV BYPASS_REFRESH=true
-ENV BYPASS_PULL_ON_START=true
-
-# 安装运行时依赖
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    dnsutils \
-    iptables \
-    iproute2 \
-    iputils-ping \
-    libatomic1 \
-    liburing2 \
-    libbpf0 \
-    libunwind8 \
-    lsof \
-    net-tools && \
-    rm -rf /var/lib/apt/lists/*
-
-# 从下载阶段复制二进制文件
+# 从下载阶段复制新版本二进制（覆盖旧版，/opt/ 布局不变）
 COPY --from=downloader /opt/ /opt/
 
-# 复制启动脚本并设置执行权限
-COPY openppp/entrypoint.sh /opt/entrypoint.sh
+# 复制启动脚本并设置执行权限（若主仓库 entrypoint.sh 有更新）
+COPY entrypoint.sh /opt/entrypoint.sh
 RUN chmod +x /opt/entrypoint.sh
 
-# 设置入口点
+# 入口点保持基础镜像设置
 ENTRYPOINT ["/opt/entrypoint.sh"]
