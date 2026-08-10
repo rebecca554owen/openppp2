@@ -18,20 +18,21 @@ concurrency:
 
 env:
   BOOST_VERSION: "1.86.0"
-  OPENSSL_VERSION: "3.0.13"
+  OPENSSL_VERSION: "4.0.1"
   JEMALLOC_VERSION: "5.3.0"
+  RUNNER_IMAGE: "ubuntu-22.04"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
     name: Linux amd64 ${{ matrix.suffix }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(github.event_name == 'pull_request' && '{"include":[{"suffix":"","enable_sysnat":"OFF","enable_io_uring":"OFF","enable_simd":"OFF"},{"suffix":"-tc-io-uring-simd","enable_sysnat":"ON","enable_io_uring":"ON","enable_simd":"ON"}]}' || '{"include":[{"suffix":"","enable_sysnat":"OFF","enable_io_uring":"OFF","enable_simd":"OFF"},{"suffix":"-io-uring","enable_sysnat":"OFF","enable_io_uring":"ON","enable_simd":"OFF"},{"suffix":"-simd","enable_sysnat":"OFF","enable_io_uring":"OFF","enable_simd":"ON"},{"suffix":"-tc","enable_sysnat":"ON","enable_io_uring":"OFF","enable_simd":"OFF"},{"suffix":"-tc-io-uring","enable_sysnat":"ON","enable_io_uring":"ON","enable_simd":"OFF"},{"suffix":"-tc-simd","enable_sysnat":"ON","enable_io_uring":"OFF","enable_simd":"ON"},{"suffix":"-io-uring-simd","enable_sysnat":"OFF","enable_io_uring":"ON","enable_simd":"ON"},{"suffix":"-tc-io-uring-simd","enable_sysnat":"ON","enable_io_uring":"ON","enable_simd":"ON"}]}') }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install system dependencies
         run: |
@@ -44,10 +45,10 @@ jobs:
 
       - name: Cache third-party libraries
         id: cache-third
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/third-party
-          key: linux-amd64-third-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+          key: ${{ env.RUNNER_IMAGE }}-third-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
 
       - name: Build Boost
         if: steps.cache-third.outputs.cache-hit != 'true'
@@ -141,7 +142,7 @@ jobs:
           cd ..
           mv "$ARTIFACT" bin/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openppp2-linux-amd64${{ matrix.suffix }}
           path: bin/openppp2-linux-amd64${{ matrix.suffix }}.zip
@@ -153,7 +154,7 @@ jobs:
   build-debian10:
     name: Linux amd64 Debian 10
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     container: debian:buster
 
     steps:
@@ -166,7 +167,7 @@ jobs:
           apt-get update -y
           apt-get install -y --no-install-recommends git ca-certificates
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install system dependencies
         run: |
@@ -177,7 +178,7 @@ jobs:
 
       - name: Cache third-party libraries
         id: cache-third
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/third-party
           key: linux-amd64-debian10-third-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
@@ -249,7 +250,7 @@ jobs:
           cd ..
           mv "$ARTIFACT" bin/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openppp2-linux-amd64-debian10
           path: bin/openppp2-linux-amd64-debian10.zip
@@ -263,10 +264,10 @@ jobs:
   build-asan:
     name: Linux amd64 ASan
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install system dependencies
         run: |
@@ -279,10 +280,10 @@ jobs:
 
       - name: Cache third-party libraries (ASan, no jemalloc)
         id: cache-third-asan
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/third-party
-          key: linux-amd64-asan-third-v1-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}
+          key: ${{ env.RUNNER_IMAGE }}-asan-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}
 
       - name: Build Boost
         if: steps.cache-third-asan.outputs.cache-hit != 'true'
@@ -339,7 +340,7 @@ jobs:
           cd ..
           mv "$ARTIFACT" bin/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openppp2-linux-amd64-asan
           path: bin/openppp2-linux-amd64-asan.zip

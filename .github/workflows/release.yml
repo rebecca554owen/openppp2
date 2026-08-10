@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
@@ -101,9 +101,15 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
+          # zip/tar.gz artifacts are already named openppp2-{os}-{arch}[-variant].zip;
+          # the APK artifact is uploaded with name=openppp2-android.apk but the
+          # underlying file is app-release.apk, so rename by artifact dir name.
           find artifacts -type f -size +0c \
-            \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.apk' \) \
+            \( -name '*.zip' -o -name '*.tar.gz' \) \
             -exec cp {} release-assets/ \;
+          find artifacts -type f -size +0c -name '*.apk' | while read -r f; do
+            cp "$f" "release-assets/$(basename "$(dirname "$f")")"
+          done
 
           if ! find release-assets -maxdepth 1 -type f -print -quit | grep -q .; then
             echo "No non-empty release assets found"
