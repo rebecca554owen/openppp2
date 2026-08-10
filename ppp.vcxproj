@@ -506,8 +506,10 @@
     <ClCompile Include="ppp\configurations\AppConfiguration.cpp" />
     <ClCompile Include="ppp\configurations\TransportAuthConfiguration.cpp" />
     <ClCompile Include="ppp\coroutines\YieldContext.cpp" />
+    <ClCompile Include="ppp\cryptography\AuthenticatedRecordProtector.cpp" />
     <ClCompile Include="ppp\cryptography\Ciphertext.cpp" />
     <ClCompile Include="ppp\cryptography\EVP.cpp" />
+    <ClCompile Include="ppp\cryptography\RecordKeyDerivation.cpp" />
     <ClCompile Include="ppp\cryptography\noise\NoisePsk.cpp" />
     <ClCompile Include="ppp\cryptography\md5.cpp" />
     <ClCompile Include="ppp\cryptography\rc4.cpp" />

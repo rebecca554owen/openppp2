@@ -65,9 +65,12 @@ function(ppp_add_bench target)
     target_compile_definitions(${target} PRIVATE FUNCTION __SIMD__)
     target_compile_options(${target} PRIVATE
         -O3 -DNDEBUG
-        -maes -msse2 -mpclmul
         -Wno-format -Wno-deprecated-declarations
         -Wno-tautological-constant-out-of-range-compare)
+    # AES-NI intrinsics are x86-only; -maes hard-fails on ARM/macOS.
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|i[3-6]86|amd64)$")
+        target_compile_options(${target} PRIVATE -maes -msse2 -mpclmul)
+    endif()
 
     if(ENABLE_ASAN)
         target_compile_options(${target} PRIVATE -fsanitize=address -fno-omit-frame-pointer)
@@ -88,6 +91,37 @@ endfunction()
 ppp_add_bench(bm_crypto SOURCES udp/bm_crypto.cpp
     support/bench_stubs.cpp support/bench_alloc_stub.cpp
     ${PPP_CRYPTO_SRCS} ${PPP_AESNI_IMPL_SRCS})
+
+# v2.2.0 AEAD record protector functional tests (Seal/Open/tamper/replay/truncation).
+add_executable(bm_arp_test udp/bm_arp_test.cpp
+    support/bench_stubs.cpp support/bench_alloc_stub.cpp
+    "${OPENPPP2_ROOT}/ppp/cryptography/AuthenticatedRecordProtector.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/RecordKeyDerivation.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
+target_compile_features(bm_arp_test PRIVATE cxx_std_17)
+target_include_directories(bm_arp_test PRIVATE ${OPENPPP2_BENCH_INCLUDES})
+target_compile_options(bm_arp_test PRIVATE
+    -O2 -DNDEBUG -Wno-deprecated-declarations
+    -Wno-tautological-constant-out-of-range-compare)
+target_link_libraries(bm_arp_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+add_test(NAME arp_functional COMMAND bm_arp_test)
+
+# v2.2.0 AES-256-GCM NIST CAVS-style vector validation.
+add_executable(bm_nist_test udp/bm_nist_test.cpp
+    support/bench_stubs.cpp support/bench_alloc_stub.cpp
+    "${OPENPPP2_ROOT}/ppp/cryptography/EVP.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/Ciphertext.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/rc4.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/digest.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/md5.cpp"
+    "${OPENPPP2_ROOT}/common/aesni/aes.cpp")
+target_compile_features(bm_nist_test PRIVATE cxx_std_17)
+target_include_directories(bm_nist_test PRIVATE ${OPENPPP2_BENCH_INCLUDES})
+target_compile_options(bm_nist_test PRIVATE
+    -O2 -DNDEBUG -Wno-deprecated-declarations
+    -Wno-tautological-constant-out-of-range-compare)
+target_link_libraries(bm_nist_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+add_test(NAME nist_gcm_vectors COMMAND bm_nist_test)
 
 ppp_add_bench(bm_crypto_chain SOURCES udp/bm_crypto_chain.cpp
     support/bench_stubs.cpp support/bench_alloc_stub.cpp
@@ -110,7 +144,10 @@ ppp_add_bench(bm_packet_codec SOURCES udp/bm_packet_codec.cpp
 ppp_add_bench(bm_allocator SOURCES udp/bm_allocator.cpp
     support/bench_stubs.cpp support/bench_pool_stub.cpp support/buddy_impl.cpp
     ${PPP_POOL_SRCS})
-target_link_libraries(bm_allocator PRIVATE rt)
+# librt (shm_open etc.) is Linux-only; macOS provides it in libSystem.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(bm_allocator PRIVATE rt)
+endif()
 
 ppp_add_bench(compat_check SOURCES udp/compat_check.cpp
     support/bench_stubs.cpp support/bench_alloc_stub.cpp
@@ -123,7 +160,9 @@ ppp_add_bench(evp_simd_test SOURCES udp/evp_simd_test.cpp
 ppp_add_bench(allocator_stress SOURCES udp/allocator_stress.cpp
     support/bench_stubs.cpp support/bench_pool_stub.cpp support/buddy_impl.cpp
     ${PPP_POOL_SRCS})
-target_link_libraries(allocator_stress PRIVATE rt)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(allocator_stress PRIVATE rt)
+endif()
 
 # ---- P0 micro-benchmarks (Phase 2) -------------------------------------------
 

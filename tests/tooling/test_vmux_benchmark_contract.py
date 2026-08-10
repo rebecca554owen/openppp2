@@ -230,12 +230,16 @@ class VmuxBenchmarkContractTests(unittest.TestCase):
             rel_output = output.relative_to(ROOT).as_posix()
             rel_telemetry = telemetry.relative_to(ROOT).as_posix()
             rel_manifest = manifest.relative_to(ROOT).as_posix()
+            fake_hook = "#!/bin/sh\nexit 0\n"
             command = (
                 f"printf %s {shlex.quote(fake_iperf)} > {shlex.quote(rel_bin + '/iperf3')} && "
                 f"chmod +x {shlex.quote(rel_bin + '/iperf3')} && "
+                f"printf %s {shlex.quote(fake_hook)} > {shlex.quote(rel_bin + '/prepare-hook')} && "
+                f"chmod +x {shlex.quote(rel_bin + '/prepare-hook')} && "
                 f"PATH=\"{rel_bin}:$PATH\" benchmarks/vmux/run.sh --execute "
                 f"--scenario flow-one-flow --duration 1 --server 127.0.0.1 "
-                f"--telemetry {shlex.quote(rel_telemetry)} --prepare-hook /bin/true "
+                f"--telemetry {shlex.quote(rel_telemetry)} "
+                f"--prepare-hook {shlex.quote(rel_bin + '/prepare-hook')} "
                 f"--endpoint-manifest {shlex.quote(rel_manifest)} "
                 f"--output {shlex.quote(rel_output)}"
             )
