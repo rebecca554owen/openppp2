@@ -962,7 +962,7 @@ namespace ppp {
 
                 // generate random payload (printable ASCII) to avoid predictable patterns
                 Byte packet[MAX_RANDOM_BUFFER_SIZE];
-                int packet_size = RandomNext(1, MAX_RANDOM_BUFFER_SIZE);
+                int packet_size = RandomNext(17, MAX_RANDOM_BUFFER_SIZE);
                 for (int i = 0; i < packet_size; ++i) {
                     packet[i] = static_cast<Byte>(RandomNext(0x20, 0x7E)); // printable range
                 }

@@ -288,21 +288,34 @@ BOOST_AUTO_TEST_CASE(exporter_is_gated_by_application_handshake_and_dispose) {
         "openppp2-test", id.data(), id.size(), output.data(), output.size()));
 }
 
-BOOST_AUTO_TEST_CASE(loopback_ingress_disables_wss_tls_exporter) {
+BOOST_AUTO_TEST_CASE(loopback_ingress_does_not_disable_wss_tls_exporter) {
     const ppp::Int128 session_id = static_cast<ppp::Int128>(0xabcdef);
     const protocol::SessionResumeId id = MakeSessionId();
     ProductionWssPair pair(session_id);
     BOOST_REQUIRE(pair.Handshake());
     BOOST_TEST(pair.Server()->HasAuthenticatedSessionExporter());
 
+    // v2.2.0: loopback ingress is treated exactly like LAN, so marking the
+    // server loopback ingress must not disable the WSS TLS exporter.
+    protocol::SessionResumeSecret before{};
+    protocol::SessionResumeSecret after{};
+    BOOST_REQUIRE(pair.DeriveOnBoth(before, after,
+        RetainedRootDeriver(id)));
+
     pair.Server()->MarkServerLoopbackIngress();
     BOOST_TEST(pair.Server()->IsServerLoopbackIngress());
-    BOOST_TEST(!pair.Server()->HasAuthenticatedSessionExporter());
+    BOOST_TEST(pair.Server()->HasAuthenticatedSessionExporter());
 
-    std::array<std::uint8_t, 32> output{};
-    BOOST_TEST(!pair.Server()->ExportAuthenticatedSessionKey(
-        protocol::SessionResumeRootExporterLabel,
-        id.data(), id.size(), output.data(), output.size()));
+    // Retained-root derivation is one-shot (output.IsSet() guards reuse), so
+    // fresh outputs are required for the post-marking derivation.
+    protocol::SessionResumeSecret after_loopback_client{};
+    protocol::SessionResumeSecret after_loopback_server{};
+    BOOST_REQUIRE(pair.DeriveOnBoth(after_loopback_client,
+        after_loopback_server, RetainedRootDeriver(id)));
+    BOOST_TEST(std::memcmp(before.data(), after_loopback_client.data(),
+        protocol::SessionResumeSecretSize) == 0);
+    BOOST_TEST(std::memcmp(after.data(), after_loopback_server.data(),
+        protocol::SessionResumeSecretSize) == 0);
     pair.Dispose();
 }
 

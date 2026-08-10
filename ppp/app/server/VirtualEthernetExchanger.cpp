@@ -137,9 +137,10 @@ namespace {
     static bool IsConfiguredRecoveryCarrier(
         const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
         const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept {
+        // v2.2.0: loopback ingress is authenticated and exporter-capable
+        // exactly like LAN; recovery eligibility no longer exempts it.
         if (!configuration || !configuration->server.session_resume.enabled ||
-            !transmission || transmission->IsServerLoopbackIngress() ||
-            !transmission->IsAuthenticatedCarrierBindingActive() ||
+            !transmission || !transmission->IsAuthenticatedCarrierBindingActive() ||
             !transmission->HasAuthenticatedSessionExporter()) {
             return false;
         }
@@ -158,8 +159,10 @@ namespace {
     static bool IsRecoveryCapableCarrier(
         const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
         const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept {
+        // v2.2.0: loopback ingress is authenticated and exporter-capable
+        // exactly like LAN; recovery capability no longer exempts it.
         if (!configuration || !configuration->server.session_resume.enabled ||
-            !transmission || transmission->IsServerLoopbackIngress()) {
+            !transmission) {
             return false;
         }
 
