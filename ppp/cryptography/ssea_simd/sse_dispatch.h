@@ -17,7 +17,21 @@
 #if defined(_MSC_VER)
 #include <intrin.h>
 #else
-#include <cpuid.h>
+/* <cpuid.h> collides with OpenSSL's crypto/cpuid.h on old GCC (e.g. Debian 10's
+ * GCC 8): both define __get_cpuid_max()/__get_cpuid(). Implement the one macro
+ * we need with inline asm so the GCC header can be skipped entirely. */
+#define SSEA_HAVE_INLINE_CPUID 1
+#if defined(__x86_64__)
+#define SSEA_CPUID_ASM(op, a, b, c, d)                                     \
+    __asm__ __volatile__("cpuid"                                          \
+                         : "=a"(a), "=b"(b), "=c"(c), "=d"(d)             \
+                         : "a"(op), "c"(0))
+#else
+#define SSEA_CPUID_ASM(op, a, b, c, d)                                     \
+    __asm__ __volatile__("pushl %%ebx; cpuid; movl %%ebx, %1; popl %%ebx"  \
+                         : "=a"(a), "=r"(b), "=c"(c), "=d"(d)             \
+                         : "a"(op), "c"(0))
+#endif
 #include <immintrin.h>
 #endif
 #endif
@@ -106,6 +120,13 @@ namespace ssea
         regs[1] = info[1];
         regs[2] = info[2];
         regs[3] = info[3];
+#elif defined(SSEA_HAVE_INLINE_CPUID)
+        uint32_t a, b, c, d;
+        SSEA_CPUID_ASM(static_cast<uint32_t>(leaf), a, b, c, d);
+        regs[0] = static_cast<int>(a);
+        regs[1] = static_cast<int>(b);
+        regs[2] = static_cast<int>(c);
+        regs[3] = static_cast<int>(d);
 #else
         __cpuid_count(leaf, subleaf, regs[0], regs[1], regs[2], regs[3]);
 #endif
@@ -225,7 +246,6 @@ namespace ssea
             }
             return SimdLevel::SSE2;
 #else
-            (void)regs;
             return SimdLevel::Scalar;
 #endif
         }();
