@@ -1,6 +1,7 @@
 #include <ppp/configurations/TransportAuthConfiguration.h>
 
 #include <openssl/crypto.h>
+#include <openssl/rand.h>
 
 #include <algorithm>
 #include <atomic>
@@ -10,9 +11,11 @@
 #include <set>
 #include <utility>
 
-#if !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/stat.h>
+#if defined(_WIN32)
+#include <io.h>
+#else
 #include <unistd.h>
 #endif
 
@@ -266,6 +269,76 @@ namespace ppp {
             }
             OPENSSL_cleanse(encoded, sizeof(encoded));
             return valid;
+        }
+
+        bool GenerateTransportAuthSecretFile(
+            const std::string& path,
+            std::string* error) noexcept {
+            if (nullptr != error) {
+                error->clear();
+            }
+            if (path.empty()) {
+                SetError(error, "transport-auth secret-file path must not be empty");
+                return false;
+            }
+
+            unsigned char secret[TransportAuthSecret::Size]{};
+            if (RAND_bytes(secret, sizeof(secret)) != 1) {
+                SetError(error, "cannot generate transport-auth secret bytes");
+                return false;
+            }
+
+            static constexpr char Hex[] = "0123456789abcdef";
+            char encoded[TransportAuthSecret::Size * 2 + 1]{};
+            for (std::size_t i = 0; i < TransportAuthSecret::Size; ++i) {
+                encoded[i * 2] = Hex[secret[i] >> 4];
+                encoded[i * 2 + 1] = Hex[secret[i] & 0x0f];
+            }
+            encoded[TransportAuthSecret::Size * 2] = '\0';
+
+#if defined(_WIN32)
+            int fd = ::_open(path.c_str(), _O_CREAT | _O_WRONLY | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
+#else
+            int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+#endif
+            if (fd < 0) {
+                SetError(error, "cannot create transport-auth secret-file");
+                return false;
+            }
+
+#if !defined(_WIN32)
+            // open(2) mode applies to newly created files only; enforce
+            // owner-only even when overwriting an existing file.
+            (void)::fchmod(fd, 0600);
+#endif
+
+#if defined(_WIN32)
+            const int count = ::_write(fd, encoded, TransportAuthSecret::Size * 2);
+            ::_close(fd);
+#else
+            const ssize_t count = ::write(fd, encoded, TransportAuthSecret::Size * 2);
+            ::close(fd);
+#endif
+            if (count != static_cast<decltype(count)>(TransportAuthSecret::Size * 2)) {
+                SetError(error, "cannot write complete transport-auth secret-file");
+                return false;
+            }
+
+#if !defined(_WIN32)
+            // Read the file back through the exact loader the runtime uses so
+            // that a truncated, mis-permissioned or non-canonical file is
+            // rejected here (and removed) instead of failing the first
+            // handshake. On Windows the loader is unsupported by design; the
+            // write path above is the full contract there.
+            TransportAuthSecret readback;
+            std::string verify_error;
+            if (!LoadTransportAuthSecretFile(path, readback, &verify_error)) {
+                (void)::unlink(path.c_str());
+                SetError(error, "transport-auth secret-file read-back verification failed");
+                return false;
+            }
+#endif
+            return true;
         }
 
         TransportAuthKeyringSnapshot::TransportAuthKeyringSnapshot() noexcept
