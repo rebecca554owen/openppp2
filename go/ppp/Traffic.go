@@ -94,16 +94,17 @@ func (my *ManagedServer) server_on_traffic_sync_dirty_to_redis(ws *io.WebSocket,
 		// Get user base information from the local cache using the GUID primary key.
 		my.Lock()
 		user, ok := my.users[guid]
-		my.Unlock()
-
-		// Try to load user base information from redis or mysql using the GUID primary key.
 		if !ok {
+			my.Unlock()
+			// Try to load user base information from redis or mysql using the GUID primary key.
 			status, user, _, _ = my.server_load_user_by_guid(guid)
 			if status != 0 {
 				continue
 			}
+			my.Lock()
 		}
 
+		/* Hold lock during read-modify to prevent concurrent updates from being lost */
 		// Check whether the changes of user basic information rx and tx need to be synchronized to redis and mysql databases in advanced.
 		old_rx := user.IncomingTraffic
 		old_tx := user.OutgoingTraffic
@@ -112,9 +113,12 @@ func (my *ManagedServer) server_on_traffic_sync_dirty_to_redis(ws *io.WebSocket,
 		new_tx := max(0, old_tx+int64(v.TX))
 
 		if new_rx != old_rx || new_tx != old_tx {
+			user.IncomingTraffic = new_rx
+			user.OutgoingTraffic = new_tx
 			sync_to_local_tasks = append(sync_to_local_tasks, v)
 			sync_to_redis_members = append(sync_to_redis_members, guid)
 		}
+		my.Unlock()
 	}
 
 	// Success is returned directly if no member data is generated that needs to be synchronized to set dirty tags to redis.
@@ -138,23 +142,22 @@ func (my *ManagedServer) server_on_traffic_sync_dirty_to_local(server *tb_server
 		return nil
 	}
 
-	my.Lock()
-	defer my.Unlock()
-
 	// Synchronize all task data changes to the local memory.
 	var list _vpn_user_json_token_array
 	for _, v := range tasks {
+		// Lock user first to maintain consistent lock ordering (user -> my)
+		my.Lock()
 		user, ok := my.users[v.Guid]
 		if !ok {
+			my.Unlock()
 			continue
-		} else {
-			my.dirty[v.Guid] = true
 		}
+		my.dirty[v.Guid] = true
+		my.Unlock()
 
 		user.Lock()
 		user.IncomingTraffic = max(0, user.IncomingTraffic-int64(v.RX))
 		user.OutgoingTraffic = max(0, user.OutgoingTraffic-int64(v.TX))
-		user.Unlock()
 
 		token := &_vpn_user{
 			Guid:            user.Guid,
@@ -163,6 +166,8 @@ func (my *ManagedServer) server_on_traffic_sync_dirty_to_local(server *tb_server
 			ExpiredTime:     user.ExpiredTime,
 			BandwidthQoS:    my.server_calc_qos_by_server_and_user(server, user),
 		}
+		user.Unlock()
+
 		list.List = append(list.List, token)
 	}
 	return &list
