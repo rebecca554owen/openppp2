@@ -230,9 +230,12 @@ namespace ppp {
             auto transferred_ptr = std::make_shared<std::size_t>(0);
             YieldContext* y_ptr = &y;
 
+            // UAF fix (round 2): capture the packet owner (shared_ptr) in the post
+            // lambda. The bare `buffer` alias would dangle if the coroutine frame is
+            // destroyed while the post is still pending (heap corruption on darwin arm64).
             boost::asio::post(socket->get_executor(),
-                [self, socket, buffer, y_ptr, ec_ptr, transferred_ptr]() noexcept {
-                    boost::asio::async_read(*socket, buffer,
+                [self, socket, packet, length, y_ptr, ec_ptr, transferred_ptr]() noexcept {
+                    boost::asio::async_read(*socket, boost::asio::buffer(packet.get(), length),
                         [self, y_ptr, ec_ptr, transferred_ptr](const boost::system::error_code& ec, std::size_t sz) noexcept {
                             *ec_ptr = ec;
                             *transferred_ptr = sz;
