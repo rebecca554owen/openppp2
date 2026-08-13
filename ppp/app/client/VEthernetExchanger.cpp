@@ -1817,7 +1817,8 @@ namespace ppp {
                         std::shared_ptr<std::atomic_int> handshake_state =
                             make_shared_object<std::atomic_int>(HandshakePending);
                         std::shared_ptr<boost::asio::steady_timer> handshake_timer =
-                            make_shared_object<boost::asio::steady_timer>(*strand);
+                            strand ? make_shared_object<boost::asio::steady_timer>(*strand)
+                                   : make_shared_object<boost::asio::steady_timer>(*context);
                         if (NULLPTR == handshake_state || NULLPTR == handshake_timer) {
                             noerror = false;
                             transmission->Dispose();
@@ -2086,7 +2087,8 @@ namespace ppp {
                         std::shared_ptr<std::atomic_int> handshake_state =
                             make_shared_object<std::atomic_int>(HandshakePending);
                         std::shared_ptr<boost::asio::steady_timer> handshake_timer =
-                            make_shared_object<boost::asio::steady_timer>(*strand);
+                            strand ? make_shared_object<boost::asio::steady_timer>(*strand)
+                                   : make_shared_object<boost::asio::steady_timer>(*context);
                         bool established = false;
                         bool transport_auth_failed = false;
                         if (NULLPTR == handshake_state || NULLPTR == handshake_timer) {
