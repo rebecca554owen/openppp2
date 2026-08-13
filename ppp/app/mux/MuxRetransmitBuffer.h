@@ -199,6 +199,28 @@ public:
         }
     }
 
+    /**
+     * Evict the oldest retained frame (insertion order). Used to keep the
+     * buffer within its byte cap under slow ACKs without killing the session.
+     * @return bytes freed, 0 when the buffer was already empty.
+     */
+    std::size_t EvictOldest() {
+        if (order_.empty()) {
+            return 0;
+        }
+        const std::uint64_t key = order_.front();
+        auto it = entries_.find(key);
+        if (it == entries_.end()) {
+            order_.pop_front();
+            return 0;
+        }
+        const std::size_t freed = static_cast<std::size_t>(it->second.length);
+        bytes_ -= freed;
+        order_.pop_front();
+        entries_.erase(it);
+        return freed;
+    }
+
     void Clear() noexcept {
         entries_.clear();
         order_.clear();

@@ -137,9 +137,10 @@ namespace vmux {
                 bool                                    disposed_        : 1; ///< Set when the socket has been finalized.
                 bool                                    connected_       : 1; ///< Set when the remote peer acknowledged the connection.
                 bool                                    fin_             : 1; ///< Set when a FIN command was received from peer.
+                bool                                    peer_eof_        : 1; ///< Peer half-closed (cmd_fin observed); no more peer payload.
                 bool                                    tx_acceleration_ : 1; ///< Transmit acceleration mode is active.
                 bool                                    rx_acceleration_ : 1; ///< Receive acceleration mode is active.
-                bool                                    connecton_       : 3; ///< Reserved / connection-phase sub-state.
+                bool                                    connecton_       : 2; ///< Reserved / connection-phase sub-state.
             };
             std::atomic<int>                            sending_    = false; ///< Non-zero while an async send to peer is in flight.
             std::atomic<int>                            forwarding_ = false; ///< Non-zero while local-socket forwarding is in progress.

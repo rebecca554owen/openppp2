@@ -42,7 +42,39 @@ namespace vmux {
 
     /** @brief Finalize vmux socket resources on destruction. */
     vmux_skt::~vmux_skt() noexcept {
-        finalize();
+        /* Container cleanup (release_connection) must run on the mux strand.
+           The destructor can fire on any thread (last shared_ptr released
+           from a carrier/socket thread); calling finalize() there races with
+           the strand's container insert/erase (std::map read-write data race)
+           and corrupts the heap on darwin arm64 (SIGSEGV/SIGBUS/SIGABRT).
+           skts_ holds this instance via shared_ptr, so by the time the
+           destructor runs the entry was already removed by the normal
+           close()/finalize() path, or the cid was reused by a new socket
+           (which must not be erased). Local-only cleanup is safe here because
+           no other reference to this object can exist. */
+        if (NULLPTR != mux_ && NULLPTR != mux_->strand_ && mux_->strand_->running_in_this_thread()) {
+            finalize();
+            return;
+        }
+
+        bool fin = !status_.fin_;
+        status_.fin_ = true;
+        status_.disposed_ = true;
+        rx_queue_.clear();
+
+        std::shared_ptr<vmux_net> mux = mux_;
+        std::shared_ptr<boost::asio::ip::tcp::socket> tx_socket = std::move(tx_socket_);
+        if (fin && NULLPTR != mux) {
+            mux->post(vmux_net::cmd_fin, NULLPTR, 0, connection_id_);
+        }
+        if (NULLPTR != tx_socket) {
+            auto tx_context = tx_context_;
+            auto tx_strand = tx_strand_;
+            vmux_post_exec(tx_context_, tx_strand_,
+                [tx_context, tx_strand, tx_socket]() noexcept {
+                    ppp::net::Socket::Closesocket(tx_socket);
+                });
+        }
     }
 
     /**
@@ -473,6 +505,18 @@ namespace vmux {
             return false;
         }
 
+        if (payload_size < 1) {
+            // Peer half-closed (cmd_fin observed): remember EOF and keep the
+            // local-socket read loop alive so in-flight data (e.g. a large
+            // download) still reaches the peer. Do NOT enqueue an empty packet
+            // here: forward_to_tx_socket() rejects zero-length payloads
+            // (VmuxSocketForwardTxInvalidPayload, error 244) and closes the
+            // socket, which resets the local TCP stream and truncates the
+            // transfer before the peer drains its buffers.
+            status_.peer_eof_ = true;
+            return true;
+        }
+
         std::shared_ptr<Byte> buffer;
         if (payload_size > 0) {
             if (NULLPTR != owner) {
@@ -803,15 +847,19 @@ namespace vmux {
      * @tparam T2 Buffer sequence type.
      * @tparam T3 Completion handler type.
      */
-    template <class T1, class T2, class T3>
-    static inline void vmux_skt_async_write(const std::shared_ptr<T1>& socket, const T2& buffers, T3&& handler) noexcept {
-        if (NULLPTR == socket) {
+    template <class T1, class T3>
+    static inline void vmux_skt_async_write(const std::shared_ptr<T1>& socket, const std::shared_ptr<Byte>& payload, int payload_size, T3&& handler) noexcept {
+        if (NULLPTR == socket || NULLPTR == payload || payload_size < 1) {
             return;
         }
 
+        /* Capture the payload owner (shared_ptr) so the underlying buffer
+           stays alive until async_write is initiated on the socket executor;
+           a bare asio::buffer here would dangle and corrupt the buddy pool
+           (SIGBUS/SIGSEGV/heap corruption on darwin arm64). */
         boost::asio::post(socket->get_executor(),
-            [socket, buffers, handler]() noexcept {
-                boost::asio::async_write(*socket, buffers, handler);
+            [socket, payload, payload_size, handler]() noexcept {
+                boost::asio::async_write(*socket, boost::asio::buffer(payload.get(), payload_size), handler);
             });
     }
 
@@ -821,15 +869,17 @@ namespace vmux {
      * @tparam T2 Mutable buffer sequence type.
      * @tparam T3 Completion handler type.
      */
-    template <class T1, class T2, class T3>
-    static inline void vmux_skt_async_read_some(const std::shared_ptr<T1>& socket, const T2& buffers, T3&& handler) noexcept {
-        if (NULLPTR == socket) {
+    template <class T1, class T3>
+    static inline void vmux_skt_async_read_some(const std::shared_ptr<T1>& socket, const std::shared_ptr<Byte>& buffer, int buffer_size, T3&& handler) noexcept {
+        if (NULLPTR == socket || NULLPTR == buffer || buffer_size < 1) {
             return;
         }
 
+        /* Same ownership rule as vmux_skt_async_write: keep the receive
+           buffer alive until async_read_some is initiated. */
         boost::asio::post(socket->get_executor(),
-            [socket, buffers, handler]() noexcept {
-                socket->async_read_some(buffers, handler);
+            [socket, buffer, buffer_size, handler]() noexcept {
+                socket->async_read_some(boost::asio::buffer(buffer.get(), buffer_size), handler);
             });
     }
 
@@ -904,6 +954,23 @@ namespace vmux {
                                 return true;
                             }
                         }
+                        elif(boost::asio::error::eof == ec) {
+                            // Local peer half-closed (read-side EOF): stop
+                            // reading, signal FIN to the vmux peer and keep
+                            // forwarding peer data back until the peer also
+                            // closes. A full close() here would reset the
+                            // local TCP stream and truncate any in-flight
+                            // response still being delivered.
+                            if (!status_.fin_) {
+                                status_.fin_ = true;
+                                mux_->post(vmux_net::cmd_fin, NULLPTR, 0, connection_id_);
+                            }
+                            if (status_.peer_eof_) {
+                                close();
+                                return false;
+                            }
+                            return true;
+                        }
 
                         close();
                         return false;
@@ -916,7 +983,7 @@ namespace vmux {
         }
 
         int bytes_transferred = ppp::BufferSkateboarding(mux_->AppConfiguration->key.sb, read_size, vmux_net::max_buffers_size);
-        vmux_skt_async_read_some(tx_socket, boost::asio::buffer(tx_buffer_.get(), bytes_transferred), reading_cb);
+        vmux_skt_async_read_some(tx_socket, tx_buffer_, bytes_transferred, reading_cb);
         return true;
     }
 
@@ -1014,7 +1081,7 @@ namespace vmux {
                     });
             };
 
-        vmux_skt_async_write(tx_socket, boost::asio::buffer(payload.get(), payload_size), writing_cb);
+        vmux_skt_async_write(tx_socket, payload, payload_size, writing_cb);
         return true;
     }
 

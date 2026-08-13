@@ -1353,12 +1353,13 @@ namespace vmux {
             if (!inserted) {
                 // Duplicate of an already-buffered out-of-order frame (a
                 // retransmit): with reliability negotiated this is expected.
-                if (reliability_on_) {
-                    active(now);
-                    linklayer_update(linklayer);
-                    return true;
-                }
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingEntryConflict);
+                // Compat mode (reliability off) still sees duplicates from
+                // cross-carrier reordering; drop them instead of failing the
+                // frame, which would tear down the session and truncate
+                // in-flight transfers.
+                active(now);
+                linklayer_update(linklayer);
+                return true;
             }
             else {
                 note_flow_buffered(static_cast<size_t>(length));
@@ -1373,16 +1374,13 @@ namespace vmux {
             return inserted;
         }
         else {
-            // Stale/duplicate (already delivered): with reliability negotiated
-            // this is an expected retransmit duplicate — drop it silently.
-            if (reliability_on_) {
-                active(now);
-                linklayer_update(linklayer);
-                return true;
-            }
-
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
-            return false;
+            // Stale/duplicate (already delivered): drop silently. In compat
+            // mode a stale frame (peer retransmit or cross-carrier reorder)
+            // must not be treated as a protocol violation: doing so kills the
+            // whole session (RST) and truncates transfers in flight.
+            active(now);
+            linklayer_update(linklayer);
+            return true;
         }
     }
 
@@ -1405,8 +1403,13 @@ namespace vmux {
     bool vmux_net::packet_input(Byte cmd, Byte* buffer, int buffer_size, uint64_t now, const std::shared_ptr<Byte>& owner) noexcept {
         buffer_size -= sizeof(vmux_hdr);
         if (buffer_size < 0) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
-            return false;
+            // A frame shorter than the vmux header: under transport-auth a
+            // stale/partial record can decrypt to a truncated frame during
+            // carrier churn. Dropping it keeps the session alive; failing it
+            // here kills the whole mux (close_exec -> RST/FIN) and truncates
+            // transfers on the surviving carriers.
+            ppp::telemetry::Count("mux.rx.short_frame", 1);
+            return true;
         }
 
         vmux_hdr* h = (vmux_hdr*)buffer;
@@ -1481,8 +1484,14 @@ namespace vmux {
             active(now);
         }
         else {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
-            return false;
+            // Unknown command: under a multi-carrier session (tun-mux>1) with
+            // transport-auth, a stale/duplicate frame can decrypt to an invalid
+            // cmd byte (reordering, replay-protection, or an in-flight carrier
+            // teardown). Dropping the frame keeps the session alive; failing it
+            // here kills the whole mux (close_exec -> RST) and truncates
+            // transfers on the surviving carriers.
+            ppp::telemetry::Count("mux.rx.unknown_cmd", 1);
+            return true;
         }
 
         return true;
@@ -2146,15 +2155,32 @@ namespace vmux {
             return false; // A retransmission, not a first send.
         }
         if (!rtx_.Track(key_cid, seq, packet, packet_length, now, rtx_cap_bytes_)) {
-            // Retransmit buffer exhausted: degrade exactly like an unrecovered gap.
+            // Retransmit buffer byte cap reached: ACKs are lagging behind a
+            // large transfer (public-link latency, multi-carrier interleave).
+            // Evict the oldest unacked frame(s) to make room instead of
+            // tearing down the whole session, which truncated in-flight
+            // transfers at ~8-17MB. The evicted frame loses retransmit
+            // protection; the peer's gap handling covers actual loss.
             ppp::telemetry::Count("mux.rtx.cap", 1);
+            std::size_t freed = 0;
+            while (!rtx_.EvictOldest()) {
+                // Buffer empty or single oversized entry: cannot make room,
+                // keep sending without tracking this frame.
+                if (ordering_mode_ == ordering_flow_v2) {
+                    fail_flow(cid, "rtx_buffer_overflow");
+                }
+                return false;
+            }
+            ppp::telemetry::Count("mux.rtx.evict", 1);
             if (ordering_mode_ == ordering_flow_v2) {
+                // flow_v2 keeps per-flow spaces; evicting from a shared order
+                // can hit another flow, so degrade the flow instead.
                 fail_flow(cid, "rtx_buffer_overflow");
+                return false;
             }
-            else {
-                close_exec();
+            if (!rtx_.Track(key_cid, seq, packet, packet_length, now, rtx_cap_bytes_)) {
+                return false;
             }
-            return false;
         }
         return true;
     }
