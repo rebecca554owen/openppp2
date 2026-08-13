@@ -107,7 +107,7 @@ jobs:
             /p:VcpkgEnabled=true `
             /p:VcpkgUseStatic=true `
             /p:VcpkgTriplet=arm64-windows-static `
-            /p:PreprocessorDefinitions="PPP_APPLICATION_VERSION=`"${{ steps.ver.outputs.label }}`";$(PreprocessorDefinitions)"
+            /p:PreprocessorDefinitions="PPP_APPLICATION_VERSION=`"${{ steps.ver.outputs.label }}`";`$(PreprocessorDefinitions)"
 
       - name: Collect artifacts
         shell: pwsh
