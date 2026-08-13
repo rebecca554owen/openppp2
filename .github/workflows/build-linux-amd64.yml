@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: build-linux-amd64-${{ github.event.pull_request.number || github.ref }}
+  group: build-linux-amd64-${{ github.event.pull_request.number || (github.event_name == 'workflow_dispatch' && github.run_id) || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -77,6 +77,15 @@ jobs:
           mv jemalloc-* jemalloc
           cd jemalloc && ./autogen.sh --with-jemalloc-prefix=je_ && make -j$(nproc)
 
+      - name: Compute version label
+        id: ver
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch --tags --force 2>/dev/null || true
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "label=${TAG}-${SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Build openppp2
         run: |
           TP="${{ github.workspace }}/third-party"
@@ -84,6 +93,7 @@ jobs:
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
             -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
+            -DPPP_APPLICATION_VERSION="${{ steps.ver.outputs.label }}" \
             -DENABLE_SYSNAT=${{ matrix.enable_sysnat }} \
             -DENABLE_IO_URING=${{ matrix.enable_io_uring }} \
             -DENABLE_SIMD=${{ matrix.enable_simd }}
@@ -213,6 +223,16 @@ jobs:
           mv jemalloc-* jemalloc
           cd jemalloc && ./autogen.sh --with-jemalloc-prefix=je_ && make -j$(nproc)
 
+      - name: Compute version label
+        id: ver
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch --tags --force 2>/dev/null || true
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "label=${TAG}-${SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Build openppp2
         shell: bash
         run: |
@@ -223,6 +243,7 @@ jobs:
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
             -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
+            -DPPP_APPLICATION_VERSION="${{ steps.ver.outputs.label }}" \
             -DENABLE_SYSNAT=OFF \
             -DENABLE_IO_URING=OFF
           make -j$(nproc)
@@ -303,6 +324,15 @@ jobs:
           mv openssl-* openssl
           cd openssl && ./Configure && make -j$(nproc)
 
+      - name: Compute version label
+        id: ver
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch --tags --force 2>/dev/null || true
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "label=${TAG}-${SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Build openppp2 (ASan)
         run: |
           TP="${{ github.workspace }}/third-party"
@@ -310,6 +340,7 @@ jobs:
           cmake .. \
             -DCMAKE_BUILD_TYPE=Debug \
             -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
+            -DPPP_APPLICATION_VERSION="${{ steps.ver.outputs.label }}" \
             -DENABLE_ASAN=ON \
             -DENABLE_UBSAN=ON \
             -DENABLE_VMUX_CHURN_TEST=ON \

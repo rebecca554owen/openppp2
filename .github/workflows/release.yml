@@ -122,6 +122,11 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          # Fork 仓库的 GITHUB_TOKEN 对 release 写操作返回 403（Resource not
+          # accessible by integration）。token 必须作为 input 传入（env.GITHUB_TOKEN
+          # 对 action 无效，action 读 input token，默认 github.token=GITHUB_TOKEN），
+          # 用 PAT（RELEASE_TOKEN secret）恢复 Action 自动发布。
+          token: ${{ secrets.RELEASE_TOKEN }}
           tag_name: ${{ inputs.tag }}
           target_commitish: ${{ steps.release.outputs.tag_sha }}
           name: ${{ inputs.title }}
@@ -129,5 +134,3 @@ jobs:
           files: release-assets/*
           generate_release_notes: true
           fail_on_unmatched_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

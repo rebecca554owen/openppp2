@@ -49,6 +49,12 @@ ELSE()
     SET(CMAKE_C_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-implicit-function-declaration")
     SET(CMAKE_CXX_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-inconsistent-missing-override -Wno-pointer-bool-conversion -Wno-unsequenced -Wno-null-dereference -Wno-gnu-variable-sized-type-not-at-end -Wno-tautological-undefined-compare -Wno-deprecated-declarations -Wno-shift-count-overflow")
 ENDIF()
+# Allow CI to inject a concrete version label (e.g. v2.2.0-<short sha>).
+# Overrides the hardcoded PPP_APPLICATION_VERSION default in ppp/stdafx.h.
+IF(DEFINED PPP_APPLICATION_VERSION)
+    ADD_DEFINITIONS(-DPPP_APPLICATION_VERSION="${PPP_APPLICATION_VERSION}")
+ENDIF()
+
 
 # Configure predefined compilation macros.
 # ADD_DEFINITIONS(-DANCIL_FD_BUFFER_STRUCT)

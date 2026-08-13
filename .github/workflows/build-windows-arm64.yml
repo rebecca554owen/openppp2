@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: build-windows-arm64-${{ github.event.pull_request.number || github.ref }}
+  group: build-windows-arm64-${{ github.event.pull_request.number || (github.event_name == 'workflow_dispatch' && github.run_id) || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -88,6 +88,15 @@ jobs:
         shell: pwsh
         run: nuget restore .\ppp.sln
 
+      - name: Compute version label
+        shell: pwsh
+        run: |
+          git fetch --tags --force 2>$null
+          $tag = (git describe --tags --abbrev=0 2>$null)
+          if (-not $tag) { $tag = "dev" }
+          $sha = (git rev-parse --short=8 HEAD)
+          "label=$tag-$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Build openppp2
         shell: pwsh
         run: |
@@ -97,7 +106,8 @@ jobs:
             /p:VcpkgEnableManifest=false `
             /p:VcpkgEnabled=true `
             /p:VcpkgUseStatic=true `
-            /p:VcpkgTriplet=arm64-windows-static
+            /p:VcpkgTriplet=arm64-windows-static `
+            /p:PreprocessorDefinitions="PPP_APPLICATION_VERSION=`"${{ steps.ver.outputs.label }}`";$(PreprocessorDefinitions)"
 
       - name: Collect artifacts
         shell: pwsh

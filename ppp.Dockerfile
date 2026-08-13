@@ -152,7 +152,8 @@ RUN set -ex && \
     fi && \
     rm -f release.json
 
-# 运行阶段：直接复用已发布的 openppp2 镜像（运行时依赖已内置），仅替换二进制
+# 运行阶段：复用已发布的 openppp2 base 镜像（ghcr.io/rebecca554owen/openppp2:base，
+# ubuntu 22.04 + 运行时依赖，手动发布，见 base.Dockerfile），仅替换二进制
 FROM ${BASE_IMAGE}
 
 # 从下载阶段复制新版本二进制（覆盖旧版，/opt/ 布局不变）

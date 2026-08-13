@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: test-linux-coverage-${{ github.event.pull_request.number || github.ref }}
+  group: test-linux-coverage-${{ github.event.pull_request.number || (github.event_name == 'workflow_dispatch' && github.run_id) || github.ref }}
   cancel-in-progress: true
 
 jobs:

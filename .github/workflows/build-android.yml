@@ -16,7 +16,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   ANDROID_API: "21"
   BOOST_VERSION: "1.86.0"
-  OPENSSL_VERSION: "4.0.0"
+  OPENSSL_VERSION: "4.0.1"
   NDK_VERSION: "r29"
   CACHE_VERSION: "v2.2.0"
 
@@ -234,6 +234,14 @@ jobs:
             test -f "$BOOST_OUT_DIR/libboost_${lib}.a"
           done
 
+      - name: Compute version label
+        id: ver
+        run: |
+          git fetch --tags --force 2>/dev/null || true
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "label=${TAG}-${SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Build openppp2
         run: |
           set -euo pipefail
@@ -256,7 +264,8 @@ jobs:
             -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
             -DBOOST_ANDROID_INCLUDE_DIR="$BOOST_SRC_DIR" \
             -DBOOST_ANDROID_LIB_DIR="$BOOST_OUT_DIR" \
-            -DOPENSSL_ANDROID_ROOT="$OPENSSL_OUT_DIR"
+            -DOPENSSL_ANDROID_ROOT="$OPENSSL_OUT_DIR" \
+            -DPPP_APPLICATION_VERSION="${{ steps.ver.outputs.label }}"
           make -j"$(nproc)"
 
       - name: Package artifact
