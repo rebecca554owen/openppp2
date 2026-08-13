@@ -318,6 +318,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: '3.44.5'
           cache: true
 
       - name: Set up Gradle 8.14
@@ -398,6 +399,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: '3.44.5'
           cache: true
 
       - name: Flutter doctor & pub get
