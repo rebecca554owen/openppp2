@@ -38,14 +38,14 @@ jobs:
       - name: Checkout release tag
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.tag || github.ref_name }}
           fetch-depth: 0
 
       - name: Resolve release revision
         id: release
         shell: bash
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
 
@@ -87,14 +87,14 @@ jobs:
               --jq '.[0].databaseId // empty')
 
             if [ -z "$run_id" ]; then
-              echo "::error::No successful $workflow run found for ${RELEASE_SHA}"
-              exit 1
+              echo "::warning::No successful $workflow run found for ${RELEASE_SHA}; skipping its assets"
+              continue
             fi
 
             run_sha=$(gh run view "$run_id" --json headSha --jq '.headSha')
             if [ "$run_sha" != "$RELEASE_SHA" ]; then
-              echo "::error::$workflow run $run_id belongs to $run_sha, expected ${RELEASE_SHA}"
-              exit 1
+              echo "::warning::$workflow run $run_id belongs to $run_sha, expected ${RELEASE_SHA}; skipping its assets"
+              continue
             fi
 
             artifact_dir="artifacts/${workflow%.yml}"
@@ -131,10 +131,10 @@ jobs:
           # 对 action 无效，action 读 input token，默认 github.token=GITHUB_TOKEN），
           # 用 PAT（RELEASE_TOKEN secret）恢复 Action 自动发布。
           token: ${{ secrets.RELEASE_TOKEN }}
-          tag_name: ${{ inputs.tag }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
           target_commitish: ${{ steps.release.outputs.tag_sha }}
-          name: ${{ inputs.title }}
-          prerelease: ${{ inputs.prerelease }}
+          name: ${{ inputs.title || inputs.tag || github.ref_name }}
+          prerelease: ${{ inputs.prerelease || false }}
           files: release-assets/*
           generate_release_notes: true
           fail_on_unmatched_files: true

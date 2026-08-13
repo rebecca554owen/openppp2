@@ -65,7 +65,7 @@ jobs:
       - name: Get tag
         id: get-tag
         run: |
-          echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          echo "tag=${{ inputs.tag || github.ref_name }}" >> $GITHUB_OUTPUT
 
       - name: Validate Docker tag
         run: |
@@ -135,9 +135,9 @@ jobs:
       - name: Create multi-arch manifest and push
         run: |
           docker buildx imagetools create \
-            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.inputs.tag }} \
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag || github.ref_name }} \
             $(cat /tmp/digests/*)
 
       - name: Verify multi-arch image
         run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.inputs.tag }}
+          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag || github.ref_name }}

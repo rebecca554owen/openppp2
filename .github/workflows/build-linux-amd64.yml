@@ -8,6 +8,7 @@ name: Build · Linux amd64
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main, codex/runtime-ui-lifecycle-integration]
   workflow_dispatch:
