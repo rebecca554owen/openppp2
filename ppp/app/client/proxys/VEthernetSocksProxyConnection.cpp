@@ -192,8 +192,15 @@ namespace ppp {
 
                 VEthernetSocksProxyConnection::~VEthernetSocksProxyConnection() noexcept {
                     VEthernetExchangerPtr exchanger = GetExchanger();
-                    if (NULLPTR != exchanger && udp_client_ep_.port() > ppp::net::IPEndPoint::MinPort) {
-                        exchanger->ReleaseDatagramHandler(udp_client_ep_);
+                    if (NULLPTR != exchanger) {
+                        // Release every registered datagram handler, not only
+                        // the last udp_client_ep_. Handlers capture this connection
+                        // via shared_ptr, so a leaked handler keeps the whole object
+                        // (and its UDP socket) alive indefinitely.
+                        for (const boost::asio::ip::udp::endpoint& source : udp_registered_handlers_) {
+                            exchanger->ReleaseDatagramHandler(source);
+                        }
+                        udp_registered_handlers_.clear();
                     }
 
                     ppp::net::Socket::Closesocket(udp_socket_);
@@ -378,12 +385,22 @@ namespace ppp {
 
                         int string_size = data[0];
                         if (string_size > 0) {
+                            // Reject oversized lengths so the payload cannot
+                            // overflow the fixed 256-byte scratch buffer.
+                            if (string_size >= (int)sizeof(data)) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AuthChallengeFailed);
+                                return SOCKS_ERR_NO;
+                            }
+
                             if (!ppp::coroutines::asio::async_read(*socket, boost::asio::buffer(data, string_size), y)) {
                                 return PublishSocketReadFailure(socket);
                             }
 
-                            data[string_size] = '\x0';
-                            strings[i] = reinterpret_cast<char*>(data);
+                            // Copy by (ptr, len) instead of NUL-terminating the
+                            // shared scratch buffer. Both credentials previously pointed
+                            // at the same buffer, so the password read overwrote the
+                            // username and a username != password pair never matched.
+                            strings[i] = ppp::string(reinterpret_cast<char*>(data), string_size);
                         }
                     }
 
@@ -839,6 +856,13 @@ namespace ppp {
                     }
 
                     udp_client_ep_ = sourceEP;
+
+                    // Bound the destination table so a remote client cannot
+                    // grow it without limit by spraying distinct UDP targets.
+                    if (udp_destination_clients_.size() >= MaxUdpAssociateDestinations &&
+                        udp_destination_clients_.find(destinationEP) == udp_destination_clients_.end()) {
+                        return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::UdpPacketInvalid);
+                    }
                     udp_destination_clients_[destinationEP] = sourceEP;
 
                     VEthernetExchangerPtr exchanger = GetExchanger();
@@ -847,14 +871,22 @@ namespace ppp {
                     }
 
                     auto self = std::dynamic_pointer_cast<VEthernetSocksProxyConnection>(shared_from_this());
-                    exchanger->RegisterDatagramHandler(sourceEP,
-                        [self](const boost::asio::ip::udp::endpoint& replySourceEP, const boost::asio::ip::udp::endpoint& relaySourceEP, void* responsePacket, int responsePacketLength) noexcept -> bool {
-                            if (NULLPTR == self || NULLPTR == responsePacket || responsePacketLength < 1) {
-                                return false;
-                            }
+                    // Register each source endpoint at most once; re-registering
+                    // every packet overwrote the handler and leaked the earlier ones
+                    // (each handler captured a shared_ptr to this connection).
+                    if (udp_registered_handlers_.find(sourceEP) == udp_registered_handlers_.end()) {
+                        if (!exchanger->RegisterDatagramHandler(sourceEP,
+                            [self](const boost::asio::ip::udp::endpoint& replySourceEP, const boost::asio::ip::udp::endpoint& relaySourceEP, void* responsePacket, int responsePacketLength) noexcept -> bool {
+                                if (NULLPTR == self || NULLPTR == responsePacket || responsePacketLength < 1) {
+                                    return false;
+                                }
 
-                            return self->SendUdpAssociatePacketToClient(replySourceEP, relaySourceEP, responsePacket, responsePacketLength);
-                        });
+                                return self->SendUdpAssociatePacketToClient(replySourceEP, relaySourceEP, responsePacket, responsePacketLength);
+                            })) {
+                            return false;
+                        }
+                        udp_registered_handlers_.insert(sourceEP);
+                    }
 
                     return exchanger->SendTo(sourceEP, destinationEP, packet + offset, payload_length);
                 }

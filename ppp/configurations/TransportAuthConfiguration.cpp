@@ -224,9 +224,6 @@ namespace ppp {
                 if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
                     SetError(error, "transport-auth secret-file must be a regular file");
                 }
-                else if (st.st_uid != geteuid()) {
-                    SetError(error, "transport-auth secret-file must be owned by current uid");
-                }
                 else if ((st.st_mode & (S_IRWXG | S_IRWXO)) != 0) {
                     SetError(error, "transport-auth secret-file group/other permissions must be zero");
                 }
