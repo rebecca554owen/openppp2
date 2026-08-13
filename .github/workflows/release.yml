@@ -124,7 +124,7 @@ jobs:
           find release-assets -maxdepth 1 -type f -printf '%f\t%s bytes\n' | sort
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Fork 仓库的 GITHUB_TOKEN 对 release 写操作返回 403（Resource not
           # accessible by integration）。token 必须作为 input 传入（env.GITHUB_TOKEN
