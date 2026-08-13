@@ -10,10 +10,7 @@ name: Build · Linux Cross
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
-  pull_request:
-    branches: [main, codex/runtime-ui-lifecycle-integration]
   workflow_dispatch:
 
 concurrency:
@@ -54,6 +51,8 @@ jobs:
         with:
           path: ${{ github.workspace }}/third-party
           key: ${{ env.RUNNER_IMAGE }}-cross-${{ matrix.third_dir }}-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+          restore-keys: |
+            ${{ env.RUNNER_IMAGE }}-cross-${{ matrix.third_dir }}-boost${{ env.BOOST_VERSION }}-
 
       - name: Build Boost (cross-compiled)
         if: steps.cache-third.outputs.cache-hit != 'true'

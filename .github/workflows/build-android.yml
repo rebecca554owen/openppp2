@@ -7,10 +7,7 @@ name: Build · Android
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
-  pull_request:
-    branches: [main, codex/runtime-ui-lifecycle-integration]
   workflow_dispatch:
 
 concurrency:
@@ -92,6 +89,8 @@ jobs:
             ${{ runner.temp }}/ndk
             ${{ runner.temp }}/third-party
           key: android-${{ matrix.abi }}-ndk${{ env.NDK_VERSION }}-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-ubuntu-${{ env.CACHE_VERSION }}
+          restore-keys: |
+            android-${{ matrix.abi }}-ndk${{ env.NDK_VERSION }}-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-ubuntu-
 
       - name: Download NDK ${{ env.NDK_VERSION }}
         if: steps.cache-ndk.outputs.cache-hit != 'true'

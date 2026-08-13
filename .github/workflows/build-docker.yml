@@ -1,4 +1,4 @@
-name: build-openppp2-docker # push docker image
+name: Build · Docker
 
 on:
   workflow_dispatch:

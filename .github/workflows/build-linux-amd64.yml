@@ -7,10 +7,7 @@ name: Build · Linux amd64
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
-  pull_request:
-    branches: [main, codex/runtime-ui-lifecycle-integration]
   workflow_dispatch:
 
 concurrency:
@@ -50,6 +47,8 @@ jobs:
         with:
           path: ${{ github.workspace }}/third-party
           key: ${{ env.RUNNER_IMAGE }}-third-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+          restore-keys: |
+            ${{ env.RUNNER_IMAGE }}-third-boost${{ env.BOOST_VERSION }}-
 
       - name: Build Boost
         if: steps.cache-third.outputs.cache-hit != 'true'
@@ -193,6 +192,8 @@ jobs:
         with:
           path: ${{ github.workspace }}/third-party
           key: linux-amd64-debian10-third-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+          restore-keys: |
+            linux-amd64-debian10-third-v2-boost${{ env.BOOST_VERSION }}-
 
       - name: Build Boost
         if: steps.cache-third.outputs.cache-hit != 'true'
@@ -306,6 +307,8 @@ jobs:
         with:
           path: ${{ github.workspace }}/third-party
           key: ${{ env.RUNNER_IMAGE }}-asan-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}
+          restore-keys: |
+            ${{ env.RUNNER_IMAGE }}-asan-boost${{ env.BOOST_VERSION }}-
 
       - name: Build Boost
         if: steps.cache-third-asan.outputs.cache-hit != 'true'
