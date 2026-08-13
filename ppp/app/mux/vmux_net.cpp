@@ -2262,6 +2262,20 @@ namespace vmux {
 
         const uint64_t now = now_tick();
         if (base_.established_ && reliability_on_) {
+            // Container access (rtx_, rtx_pending_, ack_trackers_, tx_links_,
+            // FEC state) is guarded by syncobj_ so it serializes against
+            // finalize() teardown, which clears the same members under the
+            // same lock. finalize() can run outside the vmux strand (close_exec
+            // stopped-executor fallback / destructor path), so without this
+            // guard a pending reliability tick can dereference containers being
+            // cleared concurrently -> EXC_BAD_ACCESS (Mac darwin reproduced at
+            // high carrier turnover). All work below is lock-free inside the
+            // guard; its posts are asynchronous and cannot re-enter the lock.
+            SynchronizationObjectScope __SCOPE__(syncobj_);
+            if (base_.disposed_.load(std::memory_order_acquire)) {
+                return;
+            }
+
             maybe_send_ack(now, false);
 
             rtx_.CollectExpired(now, current_pto(), (size_t)PPP_MUX_RELIABILITY_RXT_BURST, rtx_pending_);
@@ -2277,6 +2291,11 @@ namespace vmux {
             }
         }
 
+        // Re-arm outside the lock; a concurrent finalize() may have cancelled
+        // the timer, so re-check before touching it.
+        if (base_.disposed_.load(std::memory_order_acquire) || NULLPTR == reliability_timer_) {
+            return;
+        }
         std::weak_ptr<vmux_net> weak = weak_from_this();
         reliability_timer_->expires_after(std::chrono::milliseconds(PPP_MUX_RELIABILITY_TIMER_MS));
         reliability_timer_->async_wait(
