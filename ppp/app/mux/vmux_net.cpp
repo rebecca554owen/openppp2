@@ -1469,7 +1469,10 @@ namespace vmux {
             }
         }
         elif(cmd == cmd_keep_alived) {
-            active(now);
+            // keepalive is control-plane liveness only: do NOT refresh
+            // status_.last_ (data-plane activity). Otherwise a dead data
+            // plane with a live control plane never trips the 60s inactive
+            // timeout and the session hangs half-dead until restart.
         }
         elif(cmd == cmd_mux_mode_set) {
             packet_input_mux_mode_set(buffer, buffer_size);
