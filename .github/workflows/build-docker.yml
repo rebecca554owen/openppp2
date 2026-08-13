@@ -109,6 +109,7 @@ jobs:
           retention-days: 1
 
   merge:
+    if: github.event.inputs.arch == 'all'
     runs-on: ubuntu-22.04
     needs: build
     steps:
