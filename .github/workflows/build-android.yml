@@ -12,6 +12,10 @@ on:
     branches: [main, codex/runtime-ui-lifecycle-integration]
   workflow_dispatch:
 
+concurrency:
+  group: build-android-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   ANDROID_API: "21"

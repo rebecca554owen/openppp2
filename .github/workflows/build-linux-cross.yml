@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: build-linux-cross-${{ github.event.pull_request.number || (github.event_name == 'workflow_dispatch' && github.run_id) || github.ref }}
+  group: build-linux-cross-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:

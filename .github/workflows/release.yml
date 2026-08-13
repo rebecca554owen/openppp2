@@ -26,6 +26,10 @@ permissions:
   actions: read
   contents: write
 
+concurrency:
+  group: release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   release:
     name: Create Release
