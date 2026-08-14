@@ -24,7 +24,20 @@ namespace ppp {
 
             /** @brief Releases resources and fails all pending write operations. */
             IAsynchronousWriteIoQueue::~IAsynchronousWriteIoQueue() noexcept {
-                Finalize();
+                /* Destruction path: silently drop queued writes WITHOUT invoking
+                 * user callbacks. Running callbacks during destruction is a
+                 * dangerous pattern: C++ destroys derived-class members before
+                 * base-class destructor bodies run, so a callback may touch
+                 * already-destroyed derived state (e.g. ITransmission::GetContext()),
+                 * or call shared_from_this() on an object whose strong count has
+                 * already reached zero (bad_weak_ptr -> std::terminate). The object
+                 * is being destroyed because its last strong reference was dropped,
+                 * so no live caller depends on write completion anymore; dropping
+                 * the queued writes is the correct semantics. */
+                disposed_.store(true, std::memory_order_release);
+                SynchronizedObjectScope scope(syncobj_);
+                sending_ = false;
+                queues_.clear();
             }
 
             /** @brief Public disposal entry that finalizes queue state. */
@@ -67,8 +80,8 @@ namespace ppp {
                     if (NULLPTR != context) {
                         drain_items++;
                         drain_bytes += context->packet_length;
+                        context->Forward(false);
                     }
-                    context->Forward(false);
                 }
 
                 if (drain_items > 0) {

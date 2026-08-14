@@ -65,11 +65,15 @@ namespace ppp
 
         /**
          * @brief Detaches the underlying thread when possible.
+         * @note  Serialized against `Join()` through `_syncobj`; a concurrent
+         *        `join()`/`detach()` on the same `std::thread` object is undefined
+         *        behaviour. When a join is in progress this call is a no-op.
          */
         bool Thread::Detach() noexcept
         {
+            SynchronizedObjectScope scope(_syncobj);
             auto& t = _thread;
-            if (!t.joinable())
+            if (_joining || !t.joinable())
             {
                 return false;
             }
@@ -115,25 +119,40 @@ namespace ppp
 
         /**
          * @brief Joins the underlying thread when joinable.
+         * @note  The blocking `join()` runs without holding `_syncobj`: the worker
+         *        thread's own `Detach()` needs that mutex to finish, so holding it
+         *        across the join would deadlock. `_joining` is set under the lock to
+         *        make `Detach()` back off, keeping `join()`/`detach()` serialized.
          */
         bool Thread::Join() noexcept
         {
-            auto& t = _thread;
-            if (!t.joinable())
             {
-                return false;
+                SynchronizedObjectScope scope(_syncobj);
+                if (!_thread.joinable())
+                {
+                    return false;
+                }
+
+                _joining = true;
             }
 
+            bool ok = false;
             try
             {
-                t.join();
-                return true;
+                _thread.join();
+                ok = true;
             }
             catch (const std::exception&)
             {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadJoinFailed);
-                return false;
             }
+
+            {
+                SynchronizedObjectScope scope(_syncobj);
+                _joining = false;
+            }
+
+            return ok;
         }
 
         /**

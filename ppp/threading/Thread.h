@@ -169,6 +169,15 @@ namespace ppp
             std::thread                                                     _thread;
             /** @brief Mutex guarding lifecycle state transitions. */
             SynchronizedObject                                              _syncobj;
+            /**
+             * @brief Set while a `Join()` is in progress so `Detach()` cannot run
+             *        concurrently on the same `std::thread` object.
+             * @note  Concurrent `join()`/`detach()` on one `std::thread` is undefined
+             *        behaviour (crash during shutdown). `Join()` may not hold
+             *        `_syncobj` while blocking, or the worker thread's own `Detach()`
+             *        would deadlock, so the flag serializes the two paths instead.
+             */
+            bool                                                            _joining = false;
             /** @brief User-supplied entry-point callback. */
             ThreadStart                                                     _start;
             /** @brief Per-thread key-value storage map. */

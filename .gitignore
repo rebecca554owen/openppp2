@@ -131,3 +131,7 @@ ios/App/.build/
 
 # Superpowers planning docs (local agent workflow only)
 docs/superpowers/
+
+# Local crash-analysis report and agent workflow state (not for version control)
+docs/CRASH_ANALYSIS_CN.md
+.opencode/

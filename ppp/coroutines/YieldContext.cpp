@@ -86,6 +86,17 @@ namespace ppp
             }
             else
             {
+                /* Pairing window: the coroutine may still be entering its suspend
+                 * transition (STATUS_SUSPENDING) when this resume arrives, so the
+                 * CAS above fails and the wakeup would be lost forever. Record the
+                 * pending resume instead; Switch() consumes it right after the
+                 * suspend completes, preserving the 1:1 suspend/resume pairing. */
+                if (STATUS_SUSPENDING == s_.load(std::memory_order_acquire))
+                {
+                    pending_resume_.store(true, std::memory_order_release);
+                    return true;
+                }
+
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return false;
             }
@@ -132,6 +143,14 @@ namespace ppp
             int L = STATUS_SUSPENDING;
             if (s_.compare_exchange_strong(L, STATUS_SUSPEND))
             {
+                /* A resume that arrived while the suspend transition was still in
+                 * flight is consumed here: the coroutine is now fully suspended, so
+                 * resume it immediately to honour the 1:1 suspend/resume pairing. */
+                if (pending_resume_.exchange(false, std::memory_order_acq_rel))
+                {
+                    Resume();
+                }
+
                 return true;
             }
 
@@ -189,7 +208,23 @@ namespace ppp
 
                 if (h)
                 {
-                    h(*y);
+                    try
+                    {
+                        h(*y);
+                    }
+                    catch (const std::exception&)
+                    {
+                        /* An exception escaping the handler would cross the fcontext
+                         * boundary below (undefined behaviour per Boost.Context). Catch
+                         * every exception here and convert it into an error code so the
+                         * coroutine terminates gracefully instead of crashing. */
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineHandlerException);
+                    }
+                    catch (...)
+                    {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineHandlerException);
+                    }
+
                     h = NULLPTR;
                 }
 

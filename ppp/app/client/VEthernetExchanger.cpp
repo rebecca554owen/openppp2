@@ -2067,8 +2067,9 @@ namespace ppp {
                 }
 
                 std::shared_ptr<Byte> packet_managed = ppp::net::asio::IAsynchronousWriteIoQueue::Copy(configuration->GetBufferAllocator(), packet, packet_length);
+                auto self = shared_from_this();
                 Post(
-                    [this, packet_managed, sourceEP, packet_length, in, remote_port]() noexcept {
+                    [self, this, packet_managed, sourceEP, packet_length, in, remote_port]() noexcept {
                         VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, false, remote_port);
                         if (NULLPTR != mapping_port) {
                             mapping_port->Client_OnFrpSendTo(packet_managed.get(), packet_length, sourceEP);
@@ -2086,8 +2087,9 @@ namespace ppp {
             /** @brief Dispatches FRP TCP connect callback to mapped client port. */
             bool VEthernetExchanger::OnFrpConnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, YieldContext& y) noexcept {
 #if defined(_ANDROID)
+                auto self = shared_from_this();
                 Post(
-                    [this, in, remote_port, connection_id]() noexcept {
+                    [self, this, in, remote_port, connection_id]() noexcept {
                         VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
                         if (NULLPTR != mapping_port) {
                             mapping_port->Client_OnFrpConnect(connection_id);

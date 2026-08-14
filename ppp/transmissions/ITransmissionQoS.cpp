@@ -101,6 +101,23 @@ namespace ppp {
             if (bawait) {
                 bool suspend = y.Suspend();
                 if (!suspend) {
+                    /* Suspend rejected: this coroutine never parked on the QoS
+                     * gate, so its raw entry in contexts_ must be removed. A stale
+                     * entry would otherwise be resumed later by Update()/Finalize()
+                     * after the coroutine has completed and been destroyed ->
+                     * use-after-free. */
+                    {
+                        SynchronizedObjectScope scope(syncobj_);
+                        for (ppp::list<YieldContext*>::iterator it = contexts_.begin();
+                             it != contexts_.end(); ++it)
+                        {
+                            if (co == *it) {
+                                contexts_.erase(it);
+                                break;
+                            }
+                        }
+                    }
+
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid, NULLPTR);
                 }
             }

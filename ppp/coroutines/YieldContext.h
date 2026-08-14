@@ -386,6 +386,15 @@ namespace ppp
         private:
             /** @brief Atomic coroutine state flag; 0 = idle, non-zero = suspended/active. */
             std::atomic<int>                                                    s_          = 0;
+            /**
+             * @brief Pending wakeup recorded when a `Resume()` arrives while the coroutine
+             *        is still entering its suspend transition (`STATUS_SUSPENDING`).
+             * @note  Without this flag the wakeup would be lost forever (the resume CAS
+             *        fails, and after the suspend completes nobody resumes the coroutine).
+             *        `Switch()` consumes the flag right after the suspend transition
+             *        finishes and resumes immediately, preserving the 1:1 pairing.
+             */
+            std::atomic<bool>                                                   pending_resume_ = false;
             /** @brief Stored callee (coroutine) context handle; updated on each switch. */
             std::atomic<boost::context::detail::fcontext_t>                     callee_     = NULLPTR;
             /** @brief Stored caller (event loop) context handle; updated on each switch. */

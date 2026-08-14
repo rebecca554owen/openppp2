@@ -161,5 +161,15 @@ namespace vmux {
         StrandPtr                                       tx_strand_;         ///< Optional strand serializing local socket callbacks.
 
         ConnectAsynchronousCallback                     connect_ac_;        ///< One-shot callback fired when the connect result is known.
+
+        /**
+         * @brief Weak self-reference used to safely re-acquire the socket from
+         *        callbacks that may fire while the object is being destroyed.
+         * @note  `finalize()` can invoke the connect callback from inside the
+         *        destructor. `shared_from_this()` on a dying object throws
+         *        `bad_weak_ptr` (std::terminate); locking this weak reference
+         *        instead yields an empty pointer without throwing.
+         */
+        std::weak_ptr<vmux_skt>                         self_weak_;
     };
 }
