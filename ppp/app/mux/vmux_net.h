@@ -767,6 +767,17 @@ namespace vmux {
             std::atomic<uint64_t>                                                   last_              {0}; ///< Monotonic tick of last received packet. Atomic: written by carrier handshake and vmux strand; read via get_last() from any thread.
             std::atomic<uint64_t>                                                   last_heartbeat_    {0}; ///< Monotonic tick of last heartbeat sent. Atomic: written by carrier handshake and vmux strand.
 
+            /** @brief Monotonic tick of the last successful downstream TX drain
+             *         (bytes actually handed to the underlying carrier for delivery
+             *         to the peer). Reflects DOWNSTREAM data-plane progress. Unlike
+             *         last_ (any RX frame), this is NOT refreshed by inbound
+             *         keepalive/control/request frames, so a session whose request
+             *         (upstream) path still flows but whose response (downstream)
+             *         path has silently stopped draining can be detected and
+             *         reclaimed instead of hanging half-dead forever. Atomic:
+             *         written by the vmux strand TX completion and read by update(). */
+            std::atomic<uint64_t>                                                   last_tx_drain_     {0};
+
             std::atomic<uint64_t>                                                   heartbeat_timeout_ {0}; ///< Deadline tick beyond which session is considered dead. Atomic: written by carrier handshake and vmux strand.
         }                                                                           status_;
 

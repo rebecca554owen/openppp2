@@ -1001,6 +1001,13 @@ namespace vmux {
                     linklayer->queued_bytes_ = 0;
                 }
 
+                // A completed downstream write means real bytes were handed to the
+                // carrier for delivery to the peer: this is DOWNSTREAM data-plane
+                // progress. Record it so update() can tell a healthy session from a
+                // half-dead one whose response path has silently stopped draining
+                // while its request (upstream) and control planes keep flowing.
+                status_.last_tx_drain_.store(now_tick(), std::memory_order_release);
+
                 self->finish_tx_completion(completion, ok);
 
                 // Teardown guard: a send may complete after the session has been
@@ -1128,6 +1135,20 @@ namespace vmux {
                  */
                 uint64_t max_mux_inactive_timeout = ((uint64_t)AppConfiguration->mux.inactive.timeout) * 1000ULL;
                 uint64_t max_mux_connect_timeout = ((uint64_t)AppConfiguration->mux.connect.timeout) * 1000ULL;
+
+                // Downstream-stall reclaim: a session whose OUTBOUND data plane has
+                // kept queued frames un-drained for the whole inactivity window is
+                // half-dead (its response path to the peer has silently stopped),
+                // even though upstream/control frames keep refreshing status_.last_
+                // (which gauges inbound liveness only). Tear it down so the peer
+                // reconnects into a fresh session instead of hanging forever with
+                // requests going out and nothing coming back.
+                if (base_.established_ && tx_data_frames_ > 0) {
+                    uint64_t last_tx_drain = status_.last_tx_drain_.load(std::memory_order_acquire);
+                    if (last_tx_drain != 0 && (now - last_tx_drain) >= max_mux_inactive_timeout) {
+                        close_exec();
+                    }
+                }
 
                 if ((now - status_.last_) >= (base_.established_ ? max_mux_inactive_timeout : max_mux_connect_timeout)) {
                     close_exec();
