@@ -237,6 +237,16 @@ namespace ppp
                     return false;
                 }
 
+                // Also reject header lengths beyond the packet itself. The
+                // rebuild branch below reads (packet_length - header_length) bytes
+                // starting at header_length; without this upper bound an attacker
+                // controlled value causes an out-of-bounds read and a negative
+                // length write before the checksum is ever validated.
+                if (header_length > packet_length) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                    return false;
+                }
+
                 // Reverse XOR masking on the session_id field and following bytes.
                 ppp::Byte* x = p + offsetof(PACKET_HEADER, session_id);
                 ppp::Byte* y = p + packet_length;
