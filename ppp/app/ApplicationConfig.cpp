@@ -111,9 +111,12 @@ int PppApplication::PreparedArgumentEnvironment(int argc, const char* argv[]) no
     }
 
     int max_concurrent = configuration->concurrent - 1;
-    if (max_concurrent > 0) {
-        Executors::SetMaxSchedulers(max_concurrent);
-        if (!client_mode_) {
+    if (configuration->concurrent >= 1) {
+        // The dedicated scheduler context must exist even for concurrent=1:
+        // SelectScheduler() builds the handshake-timer strand over it, and a
+        // missing scheduler used to leave strand null (355cff bandaid).
+        Executors::SetMaxSchedulers(max_concurrent >= 1 ? max_concurrent : 1);
+        if (!client_mode_ && max_concurrent > 0) {
             Executors::SetMaxThreads(configuration->GetBufferAllocator(), max_concurrent);
         }
     }
@@ -149,7 +152,7 @@ int PppApplication::PreparedArgumentEnvironment(int argc, const char* argv[]) no
     ppp::telemetry::SetLogFile(configuration->telemetry.log_file.c_str());
 
     /**
-     * @brief Emit startup security diagnostics report (P1-5).
+     * @brief Emit startup security diagnostics report.
      *
      * Scans the loaded configuration for weak/default/short keys and plaintext
      * mode.  All findings are non-fatal warnings — startup never fails.

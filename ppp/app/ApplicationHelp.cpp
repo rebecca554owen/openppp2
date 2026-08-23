@@ -177,6 +177,7 @@ void PppApplication::PrintHelpInformation() noexcept {
     ppp::ConsoleWrite("├──────────────────────────────────────────┼──────────────────────────────────────────────────┼─────────────────────────┤\n");
     ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--help", col_description_width, "Display this help information", col_default_width, "none");
     ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--pull-iplist [file/country]", col_description_width, "Download country IP list from APNIC", col_default_width, "./ip.txt/CN");
+    ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--transport-auth-key=<path>", col_description_width, "Generate a 64-char transport-auth secret (0600)", col_default_width, "(none)");
     ppp::ConsoleWrite("└──────────────────────────────────────────┴──────────────────────────────────────────────────┴─────────────────────────┘\n\n");
 
     ppp::ConsoleWrite("CONTACT:\n");
