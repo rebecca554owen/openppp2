@@ -27,8 +27,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
 
       - name: Clone third-party environment
         run: git clone --depth 1 "https://github.com/${{ matrix.third_repo }}.git" "${{ runner.temp }}/3rd"
@@ -87,8 +85,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
 
       - name: Clone third-party environment
         run: git clone --depth 1 "https://github.com/${{ matrix.third_repo }}.git" "${{ runner.temp }}/3rd"

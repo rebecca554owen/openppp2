@@ -80,8 +80,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
 
       - name: Cache NDK and dependencies
         id: cache-ndk
@@ -297,8 +295,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
 
       - name: Download x86_64 native library
         uses: actions/download-artifact@v8
@@ -376,8 +372,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
 
       - name: Download all .so artifacts
         uses: actions/download-artifact@v8

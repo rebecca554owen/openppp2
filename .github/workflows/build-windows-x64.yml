@@ -31,8 +31,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
 
       - uses: microsoft/setup-msbuild@v2
         with:
