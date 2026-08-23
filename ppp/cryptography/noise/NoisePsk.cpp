@@ -43,6 +43,25 @@ bool IsAllZero(const std::uint8_t* data, std::size_t size) noexcept {
     return combined == 0;
 }
 
+bool IsCanonicalKeyIdBytes(const std::uint8_t* key_id, std::size_t size) noexcept {
+    if (key_id == nullptr || size == 0 ||
+        size > RecordProtectorBindingMaximumKeyIdLength) {
+        return false;
+    }
+    const std::uint8_t first = key_id[0];
+    if (!((first >= 'a' && first <= 'z') || (first >= '0' && first <= '9'))) {
+        return false;
+    }
+    for (std::size_t i = 0; i < size; ++i) {
+        const std::uint8_t ch = key_id[i];
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
+              ch == '.' || ch == '_' || ch == '-')) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool Sha256(const std::uint8_t* first, std::size_t first_size,
             const std::uint8_t* second, std::size_t second_size,
             Bytes32& output) noexcept {
@@ -206,6 +225,8 @@ const char* PurposeLabel(BindingPurpose purpose) noexcept {
         return CandidatePurpose;
     case BindingPurpose::P2PWrapV1:
         return P2PWrapPurpose;
+    case BindingPurpose::RecordProtector:
+        return RecordProtectorExporterLabel;
     default:
         return nullptr;
     }
@@ -297,6 +318,57 @@ bool BuildCanonicalPrologue(Carrier carrier,
     }
 }
 
+bool BuildRecordProtectorBindingContext(const std::uint8_t* ivv,
+                                        std::size_t ivv_size,
+                                        std::uint8_t carrier_kind,
+                                        const std::uint8_t* key_id,
+                                        std::size_t key_id_size,
+                                        std::vector<std::uint8_t>& output) noexcept {
+    output.clear();
+    if (ivv == nullptr || ivv_size != NoiseSessionIdSize ||
+        (carrier_kind != 0 && carrier_kind != 1) ||
+        !IsCanonicalKeyIdBytes(key_id, key_id_size)) {
+        return false;
+    }
+    try {
+        std::vector<std::uint8_t> built;
+        built.reserve(RecordProtectorBindingContextFixedLength + key_id_size);
+        built.push_back(RecordProtectorBindingContextVersion);
+        built.insert(built.end(), ivv, ivv + ivv_size);
+        built.push_back(carrier_kind);
+        built.push_back(static_cast<std::uint8_t>(key_id_size));
+        built.insert(built.end(), key_id, key_id + key_id_size);
+        output.swap(built);
+        return true;
+    } catch (...) {
+        output.clear();
+        return false;
+    }
+}
+
+bool IsValidRecordProtectorBindingContext(const std::uint8_t* context,
+                                          std::size_t context_length) noexcept {
+    if (context == nullptr ||
+        context_length < RecordProtectorBindingContextFixedLength) {
+        return false;
+    }
+    if (context[0] != RecordProtectorBindingContextVersion) {
+        return false;
+    }
+    const std::uint8_t carrier_kind = context[17];
+    if (carrier_kind != 0 && carrier_kind != 1) {
+        return false;
+    }
+    const std::uint8_t key_id_length = context[18];
+    if (key_id_length == 0 ||
+        key_id_length > RecordProtectorBindingMaximumKeyIdLength ||
+        context_length != RecordProtectorBindingContextFixedLength + key_id_length) {
+        return false;
+    }
+    return IsCanonicalKeyIdBytes(context + RecordProtectorBindingContextFixedLength,
+                                 key_id_length);
+}
+
 NoisePskHandshakeResult::~NoisePskHandshakeResult() noexcept {
     Clear();
 }
@@ -312,8 +384,12 @@ NoisePskHandshakeResult& NoisePskHandshakeResult::operator=(
         Clear();
         exporter_ = std::move(other.exporter_);
         handshake_hash_ = other.handshake_hash_;
+        key_id_ = other.key_id_;
+        key_id_size_ = other.key_id_size_;
         valid_ = other.valid_;
         OPENSSL_cleanse(other.handshake_hash_.data(), other.handshake_hash_.size());
+        other.key_id_.fill(0);
+        other.key_id_size_ = 0;
         other.valid_ = false;
     }
     return *this;
@@ -327,6 +403,16 @@ bool NoisePskHandshakeResult::GetHandshakeHash(Bytes32& output) const noexcept {
     output.fill(0);
     if (!valid_) return false;
     output = handshake_hash_;
+    return true;
+}
+
+bool NoisePskHandshakeResult::GetTransportAuthKeyId(
+    const std::uint8_t*& key_id, std::size_t& key_id_length) const noexcept {
+    key_id = nullptr;
+    key_id_length = 0;
+    if (!valid_ || key_id_size_ == 0) return false;
+    key_id = key_id_.data();
+    key_id_length = key_id_size_;
     return true;
 }
 
@@ -360,9 +446,29 @@ bool NoisePskHandshakeResult::DeriveBinding(
         return false;
     }
     const char* label = PurposeLabel(purpose);
-    const std::size_t required_context_length =
-        purpose == BindingPurpose::P2PWrapV1 ? 113u : 16u;
-    if (label == nullptr || context_length != required_context_length) return false;
+    std::size_t required_context_length = 16u;
+    bool strict_variable_length = false;
+    switch (purpose) {
+    case BindingPurpose::P2PWrapV1:
+        required_context_length = 113u;
+        break;
+    case BindingPurpose::RecordProtector:
+        // Strict parse of the explicit variable-length layout
+        // version(1) || ivv(16) || carrier_kind(1) || key_id_len(1) || key_id.
+        // No role byte is ever accepted; the total length must equal the
+        // fixed prefix plus the declared key id length.
+        if (!IsValidRecordProtectorBindingContext(binding_context, context_length)) {
+            return false;
+        }
+        strict_variable_length = true;
+        break;
+    default:
+        break;
+    }
+    if (label == nullptr ||
+        (!strict_variable_length && context_length != required_context_length)) {
+        return false;
+    }
 
     const std::size_t label_length = std::strlen(label);
     std::uint8_t lengths[24]{};
@@ -404,6 +510,8 @@ bool NoisePskHandshakeResult::TakeExporterSecret(Secret32& output) noexcept {
 void NoisePskHandshakeResult::Clear() noexcept {
     exporter_.Clear();
     OPENSSL_cleanse(handshake_hash_.data(), handshake_hash_.size());
+    OPENSSL_cleanse(key_id_.data(), key_id_.size());
+    key_id_size_ = 0;
     valid_ = false;
 }
 
@@ -738,11 +846,29 @@ bool NoisePskHandshake::Finish() noexcept {
     return true;
 }
 
-bool NoisePskHandshake::TakeResult(NoisePskHandshakeResult& output) noexcept {
-    if (state_ != State::Complete || !exporter_.IsSet() || output.IsValid()) return false;
+bool NoisePskHandshake::TakeResult(
+    NoisePskHandshakeResult& output,
+    const std::uint8_t* transport_auth_key_id,
+    std::size_t transport_auth_key_id_length) noexcept {
+    if (state_ != State::Complete || !exporter_.IsSet() || output.IsValid()) {
+        return false;
+    }
+    if (transport_auth_key_id == nullptr) {
+        if (transport_auth_key_id_length != 0) return false;
+    } else if (!IsCanonicalKeyIdBytes(transport_auth_key_id,
+                                      transport_auth_key_id_length)) {
+        // The negotiated canonical key id must be bounded (1..63 bytes) and
+        // use only [a-z0-9._-]; anything else is rejected before storage.
+        return false;
+    }
     output.Clear();
     output.exporter_ = std::move(exporter_);
     output.handshake_hash_ = handshake_hash_;
+    if (transport_auth_key_id != nullptr) {
+        std::memcpy(output.key_id_.data(), transport_auth_key_id,
+                    transport_auth_key_id_length);
+        output.key_id_size_ = transport_auth_key_id_length;
+    }
     output.valid_ = true;
     OPENSSL_cleanse(handshake_hash_.data(), handshake_hash_.size());
     state_ = State::ResultTaken;
