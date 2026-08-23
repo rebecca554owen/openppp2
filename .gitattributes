@@ -1,2 +1,4 @@
 * text=auto eol=lf
 ppp/app/server/VirtualEthernetDatagramPort.cpp whitespace=cr-at-eol
+# appsettings.json keeps its historical CRLF layout to keep diffs minimal
+appsettings.json -text
