@@ -7,13 +7,11 @@ name: Build · macOS
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main, codex/runtime-ui-lifecycle-integration]
+    tags: ['v*']
   workflow_dispatch:
 
 concurrency:
-  group: build-macos-${{ github.event.pull_request.number || github.ref }}
+  group: build-macos-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -28,10 +26,20 @@ jobs:
       matrix: ${{ fromJSON(github.event_name == 'pull_request' && '{"include":[{"arch":"arm64","third_repo":"Liz-Nozomi/openppp2-macos-arm64-environment"}]}' || '{"include":[{"arch":"arm64","third_repo":"Liz-Nozomi/openppp2-macos-arm64-environment"},{"arch":"x86_64","third_repo":"liulilittle/openppp2-macos-amd64-environment"}]}') }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Clone third-party environment
         run: git clone --depth 1 "https://github.com/${{ matrix.third_repo }}.git" "${{ runner.temp }}/3rd"
+
+      - name: Compute version label
+        id: ver
+        run: |
+          git fetch --tags --force 2>/dev/null || true
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "label=${TAG}-${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Build openppp2
         run: |
@@ -42,7 +50,8 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-            -DTHIRD_PARTY_LIBRARY_DIR="$TP"
+            -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
+            -DPPP_APPLICATION_VERSION="${{ steps.ver.outputs.label }}"
           make -j$(sysctl -n hw.physicalcpu)
 
       - name: Package artifact
@@ -51,7 +60,7 @@ jobs:
           echo "ARTIFACT=$ARTIFACT" >> $GITHUB_ENV
           cd bin && zip -r "$ARTIFACT" ppp
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.ARTIFACT }}
           path: bin/${{ env.ARTIFACT }}
@@ -77,10 +86,20 @@ jobs:
             third_repo: liulilittle/openppp2-macos-amd64-environment
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Clone third-party environment
         run: git clone --depth 1 "https://github.com/${{ matrix.third_repo }}.git" "${{ runner.temp }}/3rd"
+
+      - name: Compute version label
+        id: ver
+        run: |
+          git fetch --tags --force 2>/dev/null || true
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "label=${TAG}-${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Build openppp2 (ASan)
         run: |
@@ -92,7 +111,8 @@ jobs:
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DENABLE_ASAN=ON \
-            -DTHIRD_PARTY_LIBRARY_DIR="$TP"
+            -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
+            -DPPP_APPLICATION_VERSION="${{ steps.ver.outputs.label }}"
           make -j$(sysctl -n hw.physicalcpu)
 
       - name: Package artifact
@@ -101,7 +121,7 @@ jobs:
           echo "ARTIFACT_ASAN=$ARTIFACT" >> $GITHUB_ENV
           cd bin && zip -r "$ARTIFACT" ppp
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openppp2-darwin-${{ matrix.arch }}-asan
           path: bin/openppp2-darwin-${{ matrix.arch }}-asan.zip

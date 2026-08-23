@@ -88,6 +88,7 @@ INCLUDE_DIRECTORIES(
     ${PROJECT_ROOT_DIR}/common/json/include
     ${PROJECT_ROOT_DIR}/common/lwip/my
     ${PROJECT_ROOT_DIR}/common/lwip/include
+    ${PROJECT_ROOT_DIR}/third_party/xtcp/include
 
     ${THIRD_PARTY_LIBRARY_DIR}/boost
     ${THIRD_PARTY_LIBRARY_DIR}/openssl/$ENV{PPP_ANDROID_ABI}/include
@@ -116,6 +117,19 @@ FILE(GLOB_RECURSE SOURCE_FILES
     ${PROJECT_ROOT_DIR}/common/json/src/*.cpp
     ${PROJECT_ROOT_DIR}/common/libtcpip/*.cpp
     ${PROJECT_ROOT_DIR}/common/dnslib/*.cpp
+    ${PROJECT_ROOT_DIR}/common/xtcp/*.cpp
+    ${PROJECT_ROOT_DIR}/third_party/xtcp/src/async/*.cpp
+    ${PROJECT_ROOT_DIR}/third_party/xtcp/src/buf/*.cpp
+    ${PROJECT_ROOT_DIR}/third_party/xtcp/src/cc/*.cpp
+    ${PROJECT_ROOT_DIR}/third_party/xtcp/src/core/*.cpp
+    ${PROJECT_ROOT_DIR}/third_party/xtcp/src/mimt/*.cpp
+    ${PROJECT_ROOT_DIR}/third_party/xtcp/src/ndi/*.cpp
+    ${PROJECT_ROOT_DIR}/third_party/xtcp/src/options/*.cpp
+    ${PROJECT_ROOT_DIR}/third_party/xtcp/src/qdisc/*.cpp
+    ${PROJECT_ROOT_DIR}/third_party/xtcp/src/plugin/*.cpp
+    ${PROJECT_ROOT_DIR}/third_party/xtcp/src/pcap/*.cpp
+    ${PROJECT_ROOT_DIR}/third_party/xtcp/src/xtcp.cpp
+    ${PROJECT_ROOT_DIR}/third_party/xtcp/plugins/*.cpp
     ${PROJECT_ROOT_DIR}/common/unix/*.c
     ${PROJECT_ROOT_DIR}/common/unix/*.cpp
     ${PROJECT_ROOT_DIR}/common/aesni/aes.cpp
