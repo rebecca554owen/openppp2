@@ -51,7 +51,7 @@ class ServerTransportAuthWiringTest(unittest.TestCase):
         self.assertLess(authenticate, establish)
         self.assertLess(authenticate, managed)
 
-    def test_decision_gate_skips_legacy_disabled_and_wss(self) -> None:
+    def test_decision_gate_skips_non_plain_and_disabled_but_rejects_mismatch(self) -> None:
         helper = body(
             SWITCHER,
             "bool VirtualEthernetSwitcher::AuthenticatePlainTransport(",
@@ -62,14 +62,18 @@ class ServerTransportAuthWiringTest(unittest.TestCase):
             "                    kind == AuthenticatedCarrierKind::WebSocket",
             helper,
         )
-        gate = helper.index("if (!plain_carrier ||")
+        gate = helper.index("if (!plain_carrier) {")
         bypass = helper.index("return true;", gate)
         read = helper.index("ReadInformation(")
         self.assertLess(gate, bypass)
         self.assertLess(bypass, read)
-        self.assertIn("!configuration_->server.transport_auth.enabled", helper)
-        self.assertIn("!transmission->PeerSupportsTransportAuthV1()", helper)
-        self.assertIn("!transmission->PeerEnablesTransportAuthV1()", helper)
+        # v2.2.3 strict symmetric gate: an asymmetric configuration
+        # (local enabled != peer enabled) is rejected, and both-disabled
+        # peers fall back to the legacy data path without auth.
+        self.assertIn("local_enabled != peer_enables", helper)
+        self.assertIn("ErrorCode::SessionAuthFailed", helper)
+        self.assertIn("if (!local_enabled) {", helper)
+        self.assertNotIn("IsServerLoopbackIngress()", helper)
         self.assertNotIn("TransportAuthCarrier::TlsWebSocket", helper)
 
     def test_server_responder_enforces_strict_info_sequence(self) -> None:
@@ -121,7 +125,9 @@ class ServerTransportAuthWiringTest(unittest.TestCase):
             ),
         ):
             predicate = body(source, start, end)
-            self.assertIn("IsServerLoopbackIngress()", predicate)
+            # v2.2.0: loopback ingress is authenticated and exporter-capable
+            # exactly like LAN, so recovery eligibility must NOT exempt it.
+            self.assertNotIn("IsServerLoopbackIngress()", predicate)
             self.assertIn("IsAuthenticatedCarrierBindingActive()", predicate)
             self.assertIn("HasAuthenticatedSessionExporter()", predicate)
             self.assertIn("AuthenticatedCarrierKind::TlsWebSocket", predicate)
@@ -137,7 +143,7 @@ class ServerTransportAuthWiringTest(unittest.TestCase):
         )
         self.assertIn("configuration->server.session_resume.enabled", configured)
 
-    def test_loopback_ingress_is_marked_and_excluded_before_noise(self) -> None:
+    def test_loopback_ingress_is_marked_but_not_auth_or_exporter_excluded(self) -> None:
         accept = body(
             SWITCHER,
             "VirtualEthernetSwitcher::ITransmissionPtr VirtualEthernetSwitcher::Accept(",
@@ -147,28 +153,26 @@ class ServerTransportAuthWiringTest(unittest.TestCase):
         self.assertIn("remote_endpoint_error || remote_endpoint.address().is_loopback()", accept)
         self.assertIn("transmission->MarkServerLoopbackIngress()", accept)
 
+        # v2.2.0: the loopback flag is still recorded for observability, but
+        # it no longer gates the transport-auth negotiation.
         helper = body(
             SWITCHER,
             "bool VirtualEthernetSwitcher::AuthenticatePlainTransport(",
             "int VirtualEthernetSwitcher::Run(const ContextPtr& context",
         )
-        loopback_gate = helper.index("transmission->IsServerLoopbackIngress()")
-        read = helper.index("ReadInformation(")
-        self.assertLess(loopback_gate, read)
+        self.assertNotIn("IsServerLoopbackIngress()", helper)
+        self.assertIn("ReadInformation(", helper)
 
         server_advertisement = body(
             TRANSMISSION,
             "Int128 ITransmission::InternalHandshakeClient(",
             "bool ITransmission::InternalHandshakeServer(",
         )
-        self.assertIn("!IsServerLoopbackIngress()", server_advertisement)
-        for signature in (
-            "bool ITransmission::IsAuthenticatedCarrierBindingActive()",
-            "bool ITransmission::ExportAuthenticatedSessionKey(",
-            "bool ITransmission::InstallNoiseAuthenticatedCarrierBinding(",
-        ):
-            self.assertIn("IsServerLoopbackIngress()", TRANSMISSION[TRANSMISSION.index(signature):])
-        self.assertGreaterEqual(WEBSOCKET.count("IsServerLoopbackIngress()"), 2)
+        self.assertNotIn("IsServerLoopbackIngress()", server_advertisement)
+
+        # The WSS TLS exporter and the noise binding are loopback-agnostic.
+        self.assertNotIn("IsServerLoopbackIngress()", TRANSMISSION)
+        self.assertNotIn("IsServerLoopbackIngress()", WEBSOCKET)
 
     def test_late_transport_auth_control_fails_closed(self) -> None:
         on_information = body(

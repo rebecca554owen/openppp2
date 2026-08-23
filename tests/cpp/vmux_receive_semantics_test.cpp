@@ -616,19 +616,19 @@ void TestCompatGapTimeoutClosesSession() {
     Require(vmux::vmux_net_test_access::IsDisposed(*mux), "compat gap timeout must dispose session");
 }
 
-void TestCompatReorderCapClosesSession() {
+void TestCompatReorderCapDropsSurplusKeepsSession() {
     auto mux = MakeMux();
     constexpr std::size_t frame_size = 9;
     vmux::vmux_net_test_access::ConfigureCompat(*mux, 1000, frame_size);
 
     Require(vmux::vmux_net_test_access::InjectCompatFrame(*mux, 3, 1, 11000), "first future frame");
     Require(vmux::vmux_net_test_access::CompatReorderSize(*mux) == 1, "first frame fits cap");
-    Require(vmux::vmux_net_test_access::InjectCompatFrame(*mux, 4, 1, 11001), "overflow schedules close");
-    auto ctx = mux->get_context();
-    Require(static_cast<bool>(ctx), "ctx");
-    ctx->poll();
-    ctx->restart();
-    Require(vmux::vmux_net_test_access::IsDisposed(*mux), "compat reorder overflow must close session");
+    // Surplus frame over the reorder cap is dropped (never buffered, never
+    // note_ack_pending'd) instead of rebuilding the session: the peer keeps
+    // its retransmission copy and re-sends it once the gap closes.
+    Require(vmux::vmux_net_test_access::InjectCompatFrame(*mux, 4, 1, 11001), "surplus overflow frame");
+    Require(vmux::vmux_net_test_access::CompatReorderSize(*mux) == 1, "surplus frame must not be buffered");
+    Require(!vmux::vmux_net_test_access::IsDisposed(*mux), "compat reorder overflow must keep session alive");
 }
 
 void TestUnknownCidDoesNotGrowFlowsUnbounded() {
@@ -819,7 +819,7 @@ int main() {
         TestFrameOversizeResetsFlow();
         TestCompatOooRefreshesActivity();
         TestCompatGapTimeoutClosesSession();
-        TestCompatReorderCapClosesSession();
+        TestCompatReorderCapDropsSurplusKeepsSession();
         TestUnknownCidDoesNotGrowFlowsUnbounded();
         TestInitiatorOpenBarrierBlocksPush();
         TestSessionReorderCapResetsFlow();
