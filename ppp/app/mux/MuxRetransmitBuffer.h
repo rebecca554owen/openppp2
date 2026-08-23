@@ -103,14 +103,30 @@ public:
 
         // Collect keys first: erasing while iterating the map is fine, but the
         // candidate scan below walks the whole map anyway, so do one pass.
+        // Cumulative release: the receiver delivers data strictly in order, so
+        // every sequence at or below the reported largest has been consumed —
+        // even if its SACK range was lost or dropped by the peer's tracker
+        // wrap reset. Ranges then cover any sparse holes above largest.
         std::vector<std::uint64_t> acked;
         for (auto it = entries_.begin(); it != entries_.end(); ++it) {
             if (KeyCid(it->first) != connection_id) {
                 continue;
             }
             const std::uint32_t seq = static_cast<std::uint32_t>(it->first & 0xFFFFFFFFu);
+            const std::int32_t behind = static_cast<std::int32_t>(largest - seq);
+            if (behind >= 0) {
+                acked.push_back(it->first);
+                continue;
+            }
             for (const MuxAckRange& range : ranges) {
-                if (seq >= range.start && seq <= range.end) {
+                // Wrap-safe membership: signed 32-bit distance from range start
+                // to seq must be non-negative and within the range length. Plain
+                // unsigned comparisons break when either endpoint wrapped past
+                // 2^32 (ftt random baselines land near the top of the space),
+                // which stranded rtx entries until attempts were exhausted.
+                const std::int32_t offset = static_cast<std::int32_t>(seq - range.start);
+                const std::uint32_t span = range.end - range.start;
+                if (offset >= 0 && static_cast<std::uint32_t>(offset) <= span) {
                     acked.push_back(it->first);
                     break;
                 }
@@ -131,16 +147,20 @@ public:
         }
 
         // Fast-retransmit candidates: unacked entries of this space with at
-        // least fast_threshold acked sequences above them.
+        // least fast_threshold acked sequences above them. Wrap-safe: the
+        // signed distance from seq up to largest must exceed fast_threshold;
+        // plain unsigned comparison misjudges every entry once largest has
+        // wrapped past 2^32 while older entries still sit below it.
         for (auto& kv : entries_) {
             if (KeyCid(kv.first) != connection_id) {
                 continue;
             }
             const std::uint32_t seq = static_cast<std::uint32_t>(kv.first & 0xFFFFFFFFu);
-            if (!(largest > seq)) {
-                continue;
+            const std::int32_t ahead = static_cast<std::int32_t>(largest - seq);
+            if (ahead <= 0) {
+                continue; // Not acked-past this entry (or identical).
             }
-            if (static_cast<std::uint32_t>(largest - seq) < fast_threshold) {
+            if (ahead < static_cast<std::int32_t>(fast_threshold)) {
                 continue;
             }
             MuxRtxEntry& entry = kv.second;
@@ -197,6 +217,28 @@ public:
                 ++it;
             }
         }
+    }
+
+    /**
+     * Evict the oldest retained frame (insertion order). Used to keep the
+     * buffer within its byte cap under slow ACKs without killing the session.
+     * @return bytes freed, 0 when the buffer was already empty.
+     */
+    std::size_t EvictOldest() {
+        if (order_.empty()) {
+            return 0;
+        }
+        const std::uint64_t key = order_.front();
+        auto it = entries_.find(key);
+        if (it == entries_.end()) {
+            order_.pop_front();
+            return 0;
+        }
+        const std::size_t freed = static_cast<std::size_t>(it->second.length);
+        bytes_ -= freed;
+        order_.pop_front();
+        entries_.erase(it);
+        return freed;
     }
 
     void Clear() noexcept {

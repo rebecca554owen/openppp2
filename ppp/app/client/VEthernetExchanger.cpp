@@ -688,6 +688,11 @@ namespace ppp {
                         std::move(result))) {
                     return fail(ppp::diagnostics::ErrorCode::SessionAuthFailed);
                 }
+                // v2.2.0: acknowledgement fully received and verified in the
+                // legacy encoding; install the AEAD record protectors (now section 9).
+                if (!transmission->InstallRecordProtectorsFromHandshake()) {
+                    return fail(ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                }
                 return true;
             }
 
@@ -1764,6 +1769,91 @@ namespace ppp {
                 }
 
                 bool noerror = transmission->HandshakeServer(y, GetId(), false);
+                bool transport_auth_attempted = false;
+                if (noerror) {
+                    // v2.2.0: child data connections participate in
+                    // transport-auth exactly like the main session.  The
+                    // server runs the responder on every accepted connection,
+                    // so the client must run the initiator on child
+                    // connections too; otherwise the server responder reads
+                    // the child's first data frame (SYN) as a TA
+                    // advertisement and drops the connection.
+                    const AppConfigurationPtr configuration = GetConfiguration();
+                    if (configuration) {
+                        ppp::telemetry::Log(Level::kInfo, "client_exchanger",
+                            "child ta-check kind=%d enabled=%d supports=%d enables=%d",
+                            (int)transmission->GetAuthenticatedCarrierKind(),
+                            configuration->client.transport_auth.enabled ? 1 : 0,
+                            transmission->PeerSupportsTransportAuthV1() ? 1 : 0,
+                            transmission->PeerEnablesTransportAuthV1() ? 1 : 0);
+                    }
+                    if (configuration) {
+                        // v2.2.3 strict transport-auth: an asymmetric
+                        // configuration fails the child connection instead of
+                        // silently falling back to the unauthenticated legacy
+                        // data path.
+                        const auto kind = transmission->GetAuthenticatedCarrierKind();
+                        if ((kind == ppp::transmissions::AuthenticatedCarrierKind::Tcp ||
+                             kind == ppp::transmissions::AuthenticatedCarrierKind::WebSocket) &&
+                            configuration->client.transport_auth.enabled !=
+                                transmission->PeerEnablesTransportAuthV1()) {
+                            ppp::telemetry::Count("client.transport_auth.strict_reject", 1);
+                            ppp::telemetry::Log(Level::kInfo, "client_exchanger",
+                                "child transport-auth mismatch: local_enabled=%d peer_enables=%d; failing connection",
+                                configuration->client.transport_auth.enabled ? 1 : 0,
+                                transmission->PeerEnablesTransportAuthV1() ? 1 : 0);
+                            noerror = false;
+                        }
+                    }
+                    if (noerror && configuration && ShouldRunClientTransportAuth(
+                            transmission->GetAuthenticatedCarrierKind(),
+                            configuration->client.transport_auth.enabled,
+                            transmission->PeerSupportsTransportAuthV1(),
+                            transmission->PeerEnablesTransportAuthV1())) {
+                        transport_auth_attempted = true;
+                        static constexpr int HandshakePending = 0;
+                        static constexpr int HandshakeTimedOut = 1;
+                        static constexpr int HandshakeCompleted = 2;
+                        std::shared_ptr<std::atomic_int> handshake_state =
+                            make_shared_object<std::atomic_int>(HandshakePending);
+                        std::shared_ptr<boost::asio::steady_timer> handshake_timer =
+                            strand ? make_shared_object<boost::asio::steady_timer>(*strand)
+                                   : make_shared_object<boost::asio::steady_timer>(*context);
+                        if (NULLPTR == handshake_state || NULLPTR == handshake_timer) {
+                            noerror = false;
+                            transmission->Dispose();
+                            ppp::diagnostics::SetLastErrorCode(
+                                ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+                        }
+                        else {
+                            handshake_timer->expires_after(std::chrono::milliseconds(
+                                std::max<int64_t>(1, configuration->transport_auth.handshake_timeout_ms)));
+                            handshake_timer->async_wait(
+                                [transmission, handshake_state](
+                                    const boost::system::error_code& ec) noexcept {
+                                    int expected = HandshakePending;
+                                    if (ec == boost::system::errc::success &&
+                                        handshake_state->compare_exchange_strong(
+                                            expected, HandshakeTimedOut,
+                                            std::memory_order_acq_rel)) {
+                                        transmission->Dispose();
+                                    }
+                                });
+                            noerror = AuthenticatePlainTransport(transmission, y);
+                            int expected = HandshakePending;
+                            const bool handshake_timed_out =
+                                !handshake_state->compare_exchange_strong(
+                                    expected, HandshakeCompleted, std::memory_order_acq_rel) &&
+                                expected == HandshakeTimedOut;
+                            handshake_timer->cancel();
+                            if (handshake_timed_out) {
+                                noerror = false;
+                                ppp::diagnostics::SetLastErrorCode(
+                                    ppp::diagnostics::ErrorCode::SocketTimeout);
+                            }
+                        }
+                    }
+                }
                 if (noerror) {
 #if defined(_IPHONE)
                     if (ios_child_slot && NULLPTR != ios_child_slot_generation) {
@@ -1773,8 +1863,17 @@ namespace ppp {
                     return transmission;
                 }
                 else {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
-                    transmission->Dispose();
+                    if (transport_auth_attempted) {
+                        ppp::telemetry::Log(Level::kInfo, "client_exchanger",
+                            "child transport-auth failed error=%d",
+                            (int)ppp::diagnostics::GetLastErrorCode());
+                    }
+                    if (!transport_auth_attempted) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionHandshakeFailed);
+                        // AuthenticatePlainTransport already disposed the
+                        // transmission on the transport-auth failure paths.
+                        transmission->Dispose();
+                    }
 #if defined(_IPHONE)
                     if (ios_child_slot) {
                         ReleaseIosChildTransmissionSlot(ios_reserved_generation);
@@ -1988,7 +2087,8 @@ namespace ppp {
                         std::shared_ptr<std::atomic_int> handshake_state =
                             make_shared_object<std::atomic_int>(HandshakePending);
                         std::shared_ptr<boost::asio::steady_timer> handshake_timer =
-                            make_shared_object<boost::asio::steady_timer>(*strand);
+                            strand ? make_shared_object<boost::asio::steady_timer>(*strand)
+                                   : make_shared_object<boost::asio::steady_timer>(*context);
                         bool established = false;
                         bool transport_auth_failed = false;
                         if (NULLPTR == handshake_state || NULLPTR == handshake_timer) {
@@ -2021,6 +2121,27 @@ namespace ppp {
                             SessionResumeNegotiationResult negotiation =
                                 SessionResumeNegotiationResult::Fresh;
                             established = transmission->HandshakeServer(y, GetId(), true);
+                            if (established) {
+                                // v2.2.3 strict transport-auth: an asymmetric
+                                // configuration (local enabled != peer enabled)
+                                // is a misconfiguration; fail the session instead
+                                // of silently falling back to the unauthenticated
+                                // legacy data path.
+                                const auto kind = transmission->GetAuthenticatedCarrierKind();
+                                if ((kind == ppp::transmissions::AuthenticatedCarrierKind::Tcp ||
+                                     kind == ppp::transmissions::AuthenticatedCarrierKind::WebSocket) &&
+                                    configuration->client.transport_auth.enabled !=
+                                        transmission->PeerEnablesTransportAuthV1()) {
+                                    ppp::telemetry::Count("client.transport_auth.strict_reject", 1);
+                                    ppp::telemetry::Log(Level::kInfo, "client_exchanger",
+                                        "transport-auth mismatch: local_enabled=%d peer_enables=%d; failing session",
+                                        configuration->client.transport_auth.enabled ? 1 : 0,
+                                        transmission->PeerEnablesTransportAuthV1() ? 1 : 0);
+                                    ppp::diagnostics::SetLastErrorCode(
+                                        ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                                    established = false;
+                                }
+                            }
                             if (established && ShouldRunClientTransportAuth(
                                     transmission->GetAuthenticatedCarrierKind(),
                                     configuration->client.transport_auth.enabled,
@@ -2030,6 +2151,22 @@ namespace ppp {
                                     configuration->transport_auth.handshake_timeout_ms);
                                 established = AuthenticatePlainTransport(transmission, y);
                                 transport_auth_failed = !established;
+                            }
+                            else if (established) {
+                                // v2.2.0 zero-configuration AEAD (KNOWN_ISSUES
+                                // defect 2): transport-auth is off, but the peer
+                                // advertised transport-auth v1 capabilities;
+                                // install the AEAD record protectors derived from
+                                // handshake material only when the peer actually
+                                // enables transport-auth.  Failure is non-fatal
+                                // and falls back to the legacy CFB data path.
+                                if (transmission->PeerSupportsTransportAuthV1() &&
+                                    transmission->PeerEnablesTransportAuthV1() &&
+                                    !transmission->InstallRecordProtectorsFromHandshake()) {
+                                    ppp::telemetry::Count("client.record_protector.install_failed", 1);
+                                    ppp::telemetry::Log(Level::kInfo, "client_exchanger",
+                                        "record protector installation failed; continuing with legacy data path");
+                                }
                             }
                             if (established) {
                                 const bool recovery_carrier_eligible =
@@ -2281,6 +2418,12 @@ namespace ppp {
                             }
                             mux->set_pool_hard_max((uint16_t)hard);
                         }
+                        // Session incarnation nonce: regenerated with every new
+                        // vmux_net so the server can detect a client-side session
+                        // rebuild (its seq baseline would no longer match) and
+                        // rebuild its own retained session instead of silently
+                        // dropping every data frame as stale.
+                        mux->SessionEpoch = (uint32_t)ppp::RandomNext(INT32_MAX / 2, INT32_MAX) ^ (uint32_t)(uintptr_t)mux.get();
                     }
 
                     ITransmissionPtr vnet_transmission = GetTransmission();
@@ -2329,7 +2472,7 @@ namespace ppp {
                                         ordering_caps |= (Byte)vmux::vmux_net::ordering_caps_fec;
                                     }
                                 }
-                                ok = DoMux(vnet_transmission, mux->Vlan, max_connections, (switcher_->mux_acceleration_ & PPP_MUX_ACCELERATION_REMOTE) != 0, ordering_caps, y);
+                                ok = DoMux(vnet_transmission, mux->Vlan, max_connections, (switcher_->mux_acceleration_ & PPP_MUX_ACCELERATION_REMOTE) != 0, ordering_caps, mux->SessionEpoch, y);
                             }
 
                             if (!ok) {
@@ -2768,7 +2911,7 @@ namespace ppp {
             }
 
             /** @brief Handles mux negotiation callback and starts vmux linking. */
-            bool VEthernetExchanger::OnMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, Byte ordering_caps, YieldContext& y) noexcept {
+            bool VEthernetExchanger::OnMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, Byte ordering_caps, uint32_t session_epoch, YieldContext& y) noexcept {
                 std::shared_ptr<vmux::vmux_net> mux = mux_coordinator_->Session();
                 if (NULLPTR != mux) {
                     bool successed = false;

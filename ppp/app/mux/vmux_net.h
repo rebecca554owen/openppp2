@@ -7,6 +7,7 @@
  */
 
 #include "vmux.h"
+#include <cstdint>
 #include <ppp/app/mux/MuxFlowReorderBuffer.h>
 #include <ppp/app/mux/MuxFlowContextAdmission.h>
 #include <ppp/app/mux/IMuxTransport.h>
@@ -38,6 +39,7 @@ namespace vmux {
         std::shared_ptr<ppp::configurations::AppConfiguration>                      AppConfiguration;   ///< Application-wide runtime configuration snapshot.
         std::shared_ptr<ppp::app::protocol::VirtualEthernetLogger>                  Logger;             ///< Diagnostic and audit event logger.
         uint16_t                                                                    Vlan;               ///< VLAN identifier assigned to this session.
+        uint32_t                                                                    SessionEpoch = 0;   ///< Client-side session incarnation nonce carried in the MUX request. The server compares it against the retained session: a changed (non-zero) epoch means the client rebuilt its vmux_net and the seq baseline no longer matches, so the stale session must be rebuilt instead of silently dropping every frame as out-of-order. Zero = unknown/legacy peer (old behavior).
         std::shared_ptr<ppp::net::Firewall>                                         Firewall;           ///< Optional firewall rule evaluator.
 
         typedef std::shared_ptr<vmux_skt>                                           vmux_skt_ptr;
@@ -48,6 +50,7 @@ namespace vmux {
             IMuxTransportPtr                                                        connection;
             uint16_t                                                                id_ = 0; ///< Server-assigned carrier-link id used by MUXON handshake; 0 means unassigned. Protected by syncobj_ (written by the carrier handshake under it).
             std::atomic<uint64_t>                                                   last_active_{0}; ///< Tick of the most recent inbound frame on this link; turbo's approximate "best link" signal (recency, NOT RTT). Atomic: written by both the vmux strand and the carrier forwarding coroutine.
+            std::atomic<uint64_t>                                                   last_tx_active_{0}; ///< Tick of the most recently drained (completed) outbound frame on this link, data or heartbeat keepalive. Proves the write path works; read by idle aging so a healthy one-direction link is never retired. Atomic: written by the transmission completion, read on the vmux strand.
             size_t                                                                  queued_bytes_ = 0; ///< Outstanding local write bytes (not peer ACK). Strand-affine.
             uint64_t                                                                total_sent_bytes_ = 0; ///< Lifetime bytes accepted by local write path. Strand-affine.
             ppp::app::mux::MuxLinkDrainState                                        drain_;            ///< Strand-affine in-flight write and retirement state.
@@ -389,6 +392,16 @@ namespace vmux {
 
         /** @brief Close the session in executor context. */
         void                                                                        close_exec() noexcept;
+        /**
+         * @brief Requests session teardown from a context that may already hold syncobj_.
+         * @details close_exec() finalizes inline when called on the vmux strand, which
+         *          deadlocks if the caller holds the non-recursive syncobj_ (the
+         *          reliability tick holds it across CollectExpired/FEC flush). This
+         *          variant only arms begin_close() and posts the finalizer to the
+         *          strand, so it runs after the current handler returns and releases
+         *          the lock. Safe everywhere; use it from any lock-holding path.
+         */
+        void                                                                        close_exec_deferred() noexcept;
         /** @brief Drive periodic maintenance and heartbeat updates. */
         bool                                                                        update() noexcept;
         /**
@@ -766,6 +779,17 @@ namespace vmux {
 
             std::atomic<uint64_t>                                                   last_              {0}; ///< Monotonic tick of last received packet. Atomic: written by carrier handshake and vmux strand; read via get_last() from any thread.
             std::atomic<uint64_t>                                                   last_heartbeat_    {0}; ///< Monotonic tick of last heartbeat sent. Atomic: written by carrier handshake and vmux strand.
+
+            /** @brief Monotonic tick of the last successful downstream TX drain
+             *         (bytes actually handed to the underlying carrier for delivery
+             *         to the peer). Reflects DOWNSTREAM data-plane progress. Unlike
+             *         last_ (any RX frame), this is NOT refreshed by inbound
+             *         keepalive/control/request frames, so a session whose request
+             *         (upstream) path still flows but whose response (downstream)
+             *         path has silently stopped draining can be detected and
+             *         reclaimed instead of hanging half-dead forever. Atomic:
+             *         written by the vmux strand TX completion and read by update(). */
+            std::atomic<uint64_t>                                                   last_tx_drain_     {0};
 
             std::atomic<uint64_t>                                                   heartbeat_timeout_ {0}; ///< Deadline tick beyond which session is considered dead. Atomic: written by carrier handshake and vmux strand.
         }                                                                           status_;

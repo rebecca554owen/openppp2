@@ -514,18 +514,6 @@ namespace vmux {
             // socket, which resets the local TCP stream and truncates the
             // transfer before the peer drains its buffers.
             status_.peer_eof_ = true;
-            // Bidirectional EOF: when the local side already sent FIN
-            // (fin_ set and connected established), no more peer data will
-            // arrive and nothing is pending in the rx queue. Release the
-            // slot immediately instead of waiting for the inactive timeout —
-            // otherwise every short-lived connection leaves a stale entry in
-            // skts_ and the session hits the max_open_flows_ (4096) ceiling,
-            // refusing all new logical flows (flow-slot leak / fake-death
-            // after high-frequency use).
-            if (status_.fin_ && status_.connected_ && rx_queue_.empty()) {
-                close();
-                return false;
-            }
             return true;
         }
 
