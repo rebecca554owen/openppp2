@@ -138,12 +138,17 @@ flowchart TD
   "tcp": {
     "listen": { "port": 20000 }
   },
+  "udp": {
+    "listen": { "port": 20000 }
+  },
   "server": {
     "node": 1,
     "subnet": true
   }
 }
 ```
+
+> **提示：** 生产环境建议双端开启 `transport-auth`（数据面认证）。开启方法见 [CONFIGURATION_CN.md](../reference/CONFIGURATION_CN.md#77-transport-auth-块数据面认证推荐默认开启) 第 7.7 节。
 
 ### 客户端快速开始
 
