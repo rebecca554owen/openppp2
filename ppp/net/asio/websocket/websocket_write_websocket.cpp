@@ -67,19 +67,49 @@ namespace ppp {
                  *        most one write is ever in flight on the stream.
                  */
                 auto complete_do_write_async_callback = [self, this, cb, payload, length, context, strand]() noexcept {
+                    bool saturated = false;
+                    bool saturation_post_failed = false;
                     {
                         std::lock_guard<std::mutex> scope(write_mutex_);
 
-                        AsynchronousWriteContext message;
-                        message.buffer = payload;
-                        message.length = length;
-                        message.cb     = cb;
-                        write_queue_.emplace_back(std::move(message));
-                        if (write_in_progress_) {
-                            return;
+                        constexpr size_t MAX_QUEUE_SIZE = 1024;
+                        if (write_queue_.size() >= MAX_QUEUE_SIZE) {
+                            // Queue saturation is backpressure: deliver the
+                            // failure callback OUTSIDE the lock so a re-entrant
+                            // callback cannot deadlock on write_mutex_.  The
+                            // posted lambda never runs inline, so posting while
+                            // holding write_mutex_ is safe; the synchronous
+                            // fallback below runs after the lock is released.
+                            saturated = true;
+                            if (cb) {
+                                saturation_post_failed = !ppp::threading::Executors::Post(
+                                    context, strand, [cb]() noexcept { cb(false); });
+                            }
                         }
+                        else {
+                            AsynchronousWriteContext message;
+                            message.buffer = payload;
+                            message.length = length;
+                            message.cb     = cb;
+                            write_queue_.emplace_back(std::move(message));
+                            if (write_in_progress_) {
+                                return;
+                            }
 
-                        write_in_progress_ = true;
+                            write_in_progress_ = true;
+                        }
+                    }
+
+                    if (saturated) {
+                        // The Post rejected the callback delivery (e.g. the
+                        // context is stopped): this lambda already runs on the
+                        // strand, so deliver the failure synchronously, outside
+                        // write_mutex_, to avoid losing the completion and
+                        // stalling the IAsynchronousWriteIoQueue in-flight slot.
+                        if (saturation_post_failed && cb) {
+                            cb(false);
+                        }
+                        return;
                     }
 
                     DoWriteAsync();
