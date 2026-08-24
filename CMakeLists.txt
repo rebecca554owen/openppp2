@@ -498,7 +498,8 @@ IF(PLATFORM_SYSTEM_WINDOWS)
         ${Boost_LIBRARIES}
         ${OPENSSL_SSL_LIBRARY}
         ${OPENSSL_CRYPTO_LIBRARY}
-        ${JEMALLOC_LIBRARY})
+        ${JEMALLOC_LIBRARY}
+        $<$<BOOL:${XTCP_ENABLED}>:xtcp_static>)
 
     TARGET_LINK_LIBRARIES(${NAME} openppp2_lib)
 ELSEIF(PLATFORM_SYSTEM_DARWIN)
@@ -527,7 +528,12 @@ ELSEIF(PLATFORM_SYSTEM_DARWIN)
         ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_regex.a 
         ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_filesystem.a
         "-framework Security"
+<<<<<<< ours
         "-framework CoreFoundation")
+=======
+        "-framework CoreFoundation"
+        $<$<BOOL:${XTCP_ENABLED}>:xtcp_static>)
+>>>>>>> theirs
 
     TARGET_LINK_LIBRARIES(${NAME} openppp2_lib)
 ELSEIF(PLATFORM_COMPILER_CLANG)
@@ -545,6 +551,9 @@ ELSEIF(PLATFORM_COMPILER_CLANG)
         libboost_context.a
         libboost_regex.a
         libboost_filesystem.a)
+    IF(XTCP_ENABLED AND TARGET xtcp_static)
+        LIST(APPEND PPP_CLANG_LINK_LIBS xtcp_static)
+    ENDIF()
     IF(NOT ENABLE_ASAN AND NOT ENABLE_UBSAN)
         LIST(APPEND PPP_CLANG_LINK_LIBS libjemalloc.a)
     ENDIF()
@@ -576,6 +585,9 @@ ELSEIF(NOT MSVC)
             libboost_context.a
             libboost_regex.a
             libboost_filesystem.a)
+    IF(XTCP_ENABLED AND TARGET xtcp_static)
+        LIST(APPEND PPP_LINUX_LINK_LIBS xtcp_static)
+    ENDIF()
     ELSE()
         SET(PPP_LINUX_LINK_LIBS
             libc.a
@@ -595,6 +607,9 @@ ELSEIF(NOT MSVC)
             libboost_context.a
             libboost_regex.a
             libboost_filesystem.a)
+    IF(XTCP_ENABLED AND TARGET xtcp_static)
+        LIST(APPEND PPP_LINUX_LINK_LIBS xtcp_static)
+    ENDIF()
     ENDIF()
     IF(ENABLE_IO_URING)
         LIST(APPEND PPP_LINUX_LINK_LIBS uring)

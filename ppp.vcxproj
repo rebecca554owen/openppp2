@@ -102,22 +102,22 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(ProjectDir)\third_party\xtcp\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(ProjectDir)\third_party\xtcp\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(ProjectDir)\third_party\xtcp\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(ProjectDir)\third_party\xtcp\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
-    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(ProjectDir)\third_party\xtcp\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
-    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir);$(ProjectDir)\common;$(ProjectDir)\common\lwip\include;$(ProjectDir)\common\lwip\my;$(ProjectDir)\common\json\include;$(ProjectDir)\third_party\xtcp\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <VcpkgEnableManifest>false</VcpkgEnableManifest>
@@ -339,6 +339,36 @@
     <ClCompile Include="common\json\src\json_writer.cpp" />
     <ClCompile Include="common\libtcpip\netstack.cpp" />
     <ClCompile Include="common\libtcpip\netstack_cc.cpp" />
+    <ClCompile Include="common\xtcp\XtcpNetstackAdapter.cpp" />
+    <ClCompile Include="third_party\xtcp\src\async\async.cpp" />
+    <ClCompile Include="third_party\xtcp\src\buf\bufref.cpp" />
+    <ClCompile Include="third_party\xtcp\src\cc\cc.cpp" />
+    <ClCompile Include="third_party\xtcp\plugins\cc_bbrv1.cpp" />
+    <ClCompile Include="third_party\xtcp\plugins\cc_cubic.cpp" />
+    <ClCompile Include="third_party\xtcp\plugins\cc_kcc.cpp" />
+    <ClCompile Include="third_party\xtcp\src\core\gso.cpp" />
+    <ClCompile Include="third_party\xtcp\src\core\ip.cpp" />
+    <ClCompile Include="third_party\xtcp\src\core\md5.cpp" />
+    <ClCompile Include="third_party\xtcp\src\core\scheduler.cpp" />
+    <ClCompile Include="third_party\xtcp\src\core\stack.cpp" />
+    <ClCompile Include="third_party\xtcp\src\core\syncookies.cpp" />
+    <ClCompile Include="third_party\xtcp\src\core\tfo.cpp" />
+    <ClCompile Include="third_party\xtcp\src\mimt\mimt.cpp" />
+    <ClCompile Include="third_party\xtcp\src\options\options.cpp" />
+    <ClCompile Include="third_party\xtcp\src\pcap\pcap_reader.cpp" />
+    <ClCompile Include="third_party\xtcp\src\plugin\plugin.cpp" />
+    <ClCompile Include="third_party\xtcp\src\qdisc\cake.cpp" />
+    <ClCompile Include="third_party\xtcp\src\qdisc\fifo.cpp" />
+    <ClCompile Include="third_party\xtcp\src\core\mempool.cpp" />
+    <ClCompile Include="third_party\xtcp\src\core\timer.cpp" />
+    <ClCompile Include="third_party\xtcp\src\core\shard.cpp" />
+    <ClCompile Include="third_party\xtcp\src\core\tcp_fsm.cpp" />
+    <ClCompile Include="third_party\xtcp\src\ndi\manual.cpp" />
+    <ClCompile Include="third_party\xtcp\src\qdisc\fq.cpp" />
+    <ClCompile Include="third_party\xtcp\src\qdisc\fq_codel.cpp" />
+    <ClCompile Include="third_party\xtcp\src\qdisc\qdisc.cpp" />
+    <ClCompile Include="third_party\xtcp\src\xtcp.cpp" />
+    <ClCompile Include="third_party\xtcp\src\zc\zc_probe.cpp" />
     <ClCompile Include="common\lwip\core\altcp.c" />
     <ClCompile Include="common\lwip\core\altcp_alloc.c" />
     <ClCompile Include="common\lwip\core\altcp_tcp.c" />
