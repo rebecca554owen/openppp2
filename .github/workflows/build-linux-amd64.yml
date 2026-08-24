@@ -159,3 +159,104 @@ jobs:
           name: openppp2-linux-amd64${{ matrix.suffix }}
           path: bin/openppp2-linux-amd64${{ matrix.suffix }}.zip
           if-no-files-found: error
+<<<<<<< HEAD
+=======
+  build-asan:
+    name: Linux amd64 ASan
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake git zip unzip curl wget \
+            libkrb5-dev libicu-dev libssl-dev libunwind-dev \
+            autoconf clang \
+            liburing-dev libbpf-dev
+
+      - name: Cache third-party libraries (ASan, no jemalloc)
+        id: cache-third-asan
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/third-party
+          key: ${{ env.RUNNER_IMAGE }}-asan-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}
+          restore-keys: |
+            ${{ env.RUNNER_IMAGE }}-asan-boost${{ env.BOOST_VERSION }}-
+
+      - name: Build Boost
+        if: steps.cache-third-asan.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p third-party && cd third-party
+          wget -q "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION//./_}.tar.bz2"
+          tar jxf boost_*.tar.bz2 && rm boost_*.tar.bz2
+          mv boost_* boost
+          cd boost && ./bootstrap.sh && ./b2 cxxflags=-fPIC -j$(nproc)
+
+      - name: Build OpenSSL
+        if: steps.cache-third-asan.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p third-party && cd third-party
+          wget -q "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
+          tar zxf openssl-*.tar.gz && rm openssl-*.tar.gz
+          mv openssl-* openssl
+          cd openssl && ./Configure && make -j$(nproc)
+
+      - name: Compute version label
+        id: ver
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch --tags --force 2>/dev/null || true
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "label=${TAG}-${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build openppp2 (ASan)
+        run: |
+          TP="${{ github.workspace }}/third-party"
+          mkdir -p build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
+            -DPPP_APPLICATION_VERSION="${{ steps.ver.outputs.label }}" \
+            -DENABLE_ASAN=ON \
+            -DENABLE_UBSAN=ON \
+            -DENABLE_VMUX_CHURN_TEST=ON \
+            -DENABLE_VMUX_RECEIVE_SEMANTICS_TEST=ON \
+            -DENABLE_SYSNAT=OFF \
+            -DENABLE_IO_URING=OFF \
+            -DENABLE_SIMD=OFF
+          make -j$(nproc)
+
+      - name: Run VMUX sanitizer tests
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:strict_string_checks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          bin/vmux_net_churn_integration_test
+          bin/vmux_receive_semantics_test
+
+      - name: Collect ASan artifact
+        run: |
+          ARTIFACT="openppp2-linux-amd64-asan.zip"
+          ARTIFACT_DIR="artifact"
+          mkdir -p "$ARTIFACT_DIR"
+          cp bin/ppp "$ARTIFACT_DIR/"
+          for f in appsettings.json README.md LICENSE; do
+            if [ -f "$f" ]; then cp "$f" "$ARTIFACT_DIR/"; fi
+          done
+          cd "$ARTIFACT_DIR" && zip -r "../$ARTIFACT" .
+          cd ..
+          mv "$ARTIFACT" bin/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: openppp2-linux-amd64-asan
+          path: bin/openppp2-linux-amd64-asan.zip
+          if-no-files-found: error
+>>>>>>> 3d40598d (build: fix windows include path, drop the debian10 compatibility job)
