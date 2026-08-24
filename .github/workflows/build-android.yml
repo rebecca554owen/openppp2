@@ -278,7 +278,17 @@ jobs:
 
       - name: Extract .so into jniLibs
         run: |
-          for zip in so-artifacts/openppp2-android-*.zip/openppp2-android-*.zip; do
+          set -euo pipefail
+          # download-artifact may land artifacts as flat files
+          # (so-artifacts/<name>.zip) or per-artifact directories;
+          # match any depth.
+          zips=$(find so-artifacts -type f -name 'openppp2-android-*.zip' | sort)
+          if [ -z "$zips" ]; then
+            echo "no openppp2-android-*.zip found under so-artifacts:" >&2
+            find so-artifacts -maxdepth 3 >&2 || true
+            exit 1
+          fi
+          echo "$zips" | while IFS= read -r zip; do
             abi=$(basename "$zip" | sed 's/openppp2-android-//;s/\.zip//')
             mkdir -p "android/android/app/src/main/jniLibs/${abi}"
             unzip -o "$zip" -d "android/android/app/src/main/jniLibs/${abi}"
