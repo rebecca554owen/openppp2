@@ -347,34 +347,63 @@
     <ClCompile Include="common\libtcpip\netstack_cc.cpp" />
     <ClCompile Include="common\xtcp\XtcpNetstackAdapter.cpp" />
     <ClCompile Include="third_party\xtcp\src\async\async.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\buf\bufref.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\cc\cc.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\plugins\cc_bbrv1.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\plugins\cc_cubic.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\plugins\cc_kcc.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\core\gso.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\core\ip.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\core\md5.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\core\scheduler.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\core\stack.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\core\syncookies.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\core\tfo.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\mimt\mimt.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\options\options.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\pcap\pcap_reader.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\plugin\plugin.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\qdisc\cake.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\qdisc\fifo.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\core\mempool.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\core\timer.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\core\shard.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\core\tcp_fsm.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\ndi\manual.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\qdisc\fq.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\qdisc\fq_codel.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\qdisc\qdisc.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\xtcp.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="third_party\xtcp\src\zc\zc_probe.cpp" />
+      <ObjectFileName>$(IntDir)xtcp\%(Filename).obj</ObjectFileName>
     <ClCompile Include="common\lwip\core\altcp.c" />
     <ClCompile Include="common\lwip\core\altcp_alloc.c" />
     <ClCompile Include="common\lwip\core\altcp_tcp.c" />
