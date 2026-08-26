@@ -2568,6 +2568,7 @@ namespace vmux {
             return false;
         }
 
+        skt->self_weak_ = skt;
         skts_[connection_id] = skt;
         return skt->accept(template_string(host, host_size));
     }
@@ -3844,14 +3845,26 @@ namespace vmux {
         // lambda (and every ppp::coroutines::asio::R() inside it) will never run, so
         // calling Suspend() would park the coroutine with no future Resume() �?a
         // permanent coroutine leak.
+        std::shared_ptr<vmux_net> self = shared_from_this();
         bool posted = vmux_post_exec(context_, strand_,
-            [this, sk, host, port, status, context, strand, return_connection, &y]() noexcept {
+            [self, this, sk, host, port, status, context, strand, return_connection, &y]() noexcept {
                 bool ok = connect(context, strand, sk, host, port,
                     [status, return_connection, &y](vmux_skt* sender, bool success) noexcept {
 
                         ppp::coroutines::asio::R(y, *status, success, 
                             [return_connection, sender]() noexcept {
-                                *return_connection = sender->shared_from_this();
+                                /* The socket may already be inside its destructor when
+                                 * this failure callback fires (session teardown while a
+                                 * logical connect is in flight). shared_from_this() on a
+                                 * dying object throws bad_weak_ptr across noexcept
+                                 * boundaries -> std::terminate. Locking the weak
+                                 * self-reference instead returns an empty pointer
+                                 * without throwing, which safely reports the failure. */
+                                std::shared_ptr<vmux_skt> connection =
+                                    NULLPTR != sender ? sender->self_weak_.lock() : NULLPTR;
+                                if (NULLPTR != connection) {
+                                    *return_connection = connection;
+                                }
                             });
                     });
 
@@ -3902,6 +3915,7 @@ namespace vmux {
                 return false;
             }
 
+            skt->self_weak_ = skt;
             skt->tx_socket_ = sk;
             skts_[connection_id] = skt;
             break;

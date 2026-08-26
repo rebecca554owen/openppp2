@@ -257,10 +257,19 @@ namespace ppp {
                 }
                 else {
                     // Not in a coroutine: direct callback‑based write.
+                    /* The completion callback may fire while the transmission is
+                     * being destroyed (the write queue base class fails pending
+                     * writes during its destructor). Capturing the raw pointer then
+                     * calling Dispose() would hit shared_from_this() with a zero
+                     * strong count -> bad_weak_ptr -> std::terminate. Capture a
+                     * shared reference so the object survives until the callback
+                     * runs, mirroring the vmux self_weak_ fix pattern. */
+                    std::shared_ptr<ITransmission> self =
+                        std::static_pointer_cast<ITransmission>(transmission->shared_from_this());
                     bool ok = ITransmissionBridge::Write(transmission, packet, packet_length,
-                        [transmission](bool ok) noexcept {
+                        [self](bool ok) noexcept {
                             if (!ok) {
-                                transmission->Dispose();
+                                self->Dispose();
                             }
                         });
                     if (!ok && !transmission->disposed_.load(std::memory_order_acquire)) {

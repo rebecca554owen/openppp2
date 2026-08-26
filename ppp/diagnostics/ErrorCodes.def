@@ -72,6 +72,7 @@ X(RuntimeCoroutineSpawnFailed, "Coroutine spawn failed", ErrorSeverity::kError)
 X(RuntimeThreadStartFailed, "Thread start failed", ErrorSeverity::kError)
 X(RuntimeThreadJoinFailed, "Thread join failed", ErrorSeverity::kError)
 X(RuntimeStateTransitionInvalid, "Invalid runtime state transition", ErrorSeverity::kError)
+X(RuntimeCoroutineHandlerException, "Coroutine handler threw an exception", ErrorSeverity::kError)
 
 X(MemoryAllocationFailed, "Memory allocation failed", ErrorSeverity::kFatal)
 X(MemoryPoolCreateFailed, "Memory pool creation failed", ErrorSeverity::kFatal)
