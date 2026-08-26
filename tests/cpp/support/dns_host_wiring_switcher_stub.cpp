@@ -40,7 +40,8 @@ VEthernet::VEthernet(
     const std::shared_ptr<boost::asio::io_context>& context,
     bool lwip,
     bool vnet,
-    bool mta) noexcept
+    bool mta,
+    bool xtcp) noexcept
     : disposed_(false)
     , lwip_(lwip)
     , vnet_(vnet)
@@ -116,8 +117,9 @@ VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(
     bool lwip,
     bool vnet,
     bool mta,
-    const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept
-    : VEthernet(context, lwip, vnet, mta)
+    const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
+    bool xtcp) noexcept
+    : VEthernet(context, lwip, vnet, mta, xtcp)
     , configuration_(configuration)
     , timeout_registry_(std::make_unique<SwitcherTimeoutRegistry>())
     , aggregator_loader_(std::make_unique<AggregatorLoader>()) {

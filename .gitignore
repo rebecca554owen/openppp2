@@ -149,3 +149,8 @@ __pycache__/
 work/
 work/
 .gitnexus/
+
+# Local crash-analysis report and agent workflow state (not for version control)
+docs/CRASH_ANALYSIS_CN.md
+.opencode/
+.hermes/

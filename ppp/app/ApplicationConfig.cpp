@@ -431,6 +431,8 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
         ni->Lwip = ppp::ToBoolean(ppp::GetCommandArgument("--lwip", argc, argv, ppp::tap::TapWindows::IsWintun() ? ppp::string() : "y").data());
 #else
         ni->Lwip = ppp::ToBoolean(ppp::GetCommandArgument("--lwip", argc, argv).data());
+        ppp::string tcpip = ppp::LTrim(ppp::RTrim(ppp::GetCommandArgument("--tun-tcpip", argc, argv)));
+        ni->TcpStackMode = (tcpip == "xtcp") ? NetworkInterface::TcpStack::Xtcp : NetworkInterface::TcpStack::Lwip;
 #endif
         ni->Nic = ppp::RTrim(ppp::LTrim(ppp::GetCommandArgument("--nic", argc, argv)));
         ni->BlockQUIC = ppp::ToBoolean(ppp::GetCommandArgument("--block-quic", argc, argv).data());

@@ -117,6 +117,7 @@ void PppApplication::PrintHelpInformation() noexcept {
     ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--tun-static=[yes|no]", col_description_width, "Enable static tunnel", col_default_width, "no");
     ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--tun-mux=<connections>", col_description_width, "MUX connection count (0=disabled)", col_default_width, "0");
     ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--tun-mux-acceleration=<mode>", col_description_width, "MUX acceleration mode (0-3)", col_default_width, "0 (standard)");
+    ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--tun-tcpip=<lwip|xtcp>", col_description_width, "User-space TCP/IP stack (xtcp=experimental)", col_default_width, "lwip");
     ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--mux-mode=<compat|flow|balance|stripe>", col_description_width, "MUX scheduler mode", col_default_width, "compat");
     ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--debug-key=<secret>", col_description_width, "Debug shared key for remote mux control", col_default_width, "(disabled)");
     ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--mux-mode-set=<compat|flow>", col_description_width, "Push mux mode to peer (needs --debug-key)", col_default_width, "(off)");

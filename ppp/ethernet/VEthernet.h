@@ -9,6 +9,8 @@
 
 struct pbuf;
 
+#include <ppp/ethernet/XtcpNetstackAdapterFwd.h>
+
 namespace ppp {
     namespace threading {
         class Timer;
@@ -58,7 +60,7 @@ namespace ppp
              * @param vnet Enables virtual network packet interception mode when true.
              * @param mta Enables multi-threaded acceleration mode when true.
              */
-            VEthernet(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta) noexcept;
+            VEthernet(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, bool xtcp = false) noexcept;
             /**
              * @brief Releases runtime resources.
              */
@@ -243,6 +245,8 @@ namespace ppp
             std::atomic<bool>                                               disposed_ = { false };
             /** @brief Enables lwIP-based virtual TCP/IP stack when true. */
             bool                                                            lwip_     = false;
+            bool                                                            xtcp_     = false;
+            std::shared_ptr<XtcpNetstackAdapter>                                 xtcp_adapter_;
             /** @brief Enables virtual-network packet interception mode when true. */
             bool                                                            vnet_     = false;
             /** @brief Enables multi-threaded acceleration (SSMT) mode when true. */
