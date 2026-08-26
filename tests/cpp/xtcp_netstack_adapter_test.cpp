@@ -107,8 +107,8 @@ int main() {
     CHECK(stack_b.Listen(listen_ep));
 
     // MIMT hook (adapter BindFlow semantics at the flow level): echo every
-    // read back through the flow. RemoteEndpoint must carry the SYN's
-    // destination (the fork patch stamps it at accept time) - the adapter
+    // read back through the flow. Local must carry the SYN's
+    // destination (upstream stamps it via SetOrigin at accept time) - the adapter
     // relies on it to dial the outbound socket.
     std::atomic<int> flows_seen{0};
     std::atomic<bool> echo_ok{false};
@@ -117,7 +117,7 @@ int main() {
 
     auto on_flow = [&](const std::shared_ptr<xtcp::mimt::MimtFlow>& flow) {
         flows_seen.fetch_add(1);
-        accepted_remote = flow->RemoteEndpoint();
+        accepted_remote = flow->Local();
         auto buf = std::make_shared<std::vector<Byte>>(256);
         flow->AsyncRead(buf->data(), (UInt32)buf->size(),
             [flow, buf, &echoed, &echo_ok](xtcp::mimt::Result ec, UInt32 n) {

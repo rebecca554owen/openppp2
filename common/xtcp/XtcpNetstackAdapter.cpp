@@ -118,7 +118,7 @@ namespace ppp {
 
             // Recover the SYN's destination so we can dial the outbound
             // connection; the fork patch stamps this at accept time.
-            boost::asio::ip::tcp::endpoint remoteEP = ToAsioEndpoint(flow->RemoteEndpoint());
+            boost::asio::ip::tcp::endpoint remoteEP = ToAsioEndpoint(flow->Local());
             if (remoteEP.port() == 0) {
                 // No stamped remote endpoint: nothing to dial, drop the flow.
                 ShutdownFlow(flow);
@@ -291,7 +291,7 @@ namespace ppp {
             // Propagate close into XTCP so the peer sees FIN: the MIMT
             // layer alone never signals a close to the TCP connection, so
             // issue a stack Close on the owning connection handle (stamped
-            // by the fork patch at accept time).
+            // by upstream SetOrigin at accept time).
             if (opened_ && NULLPTR != stack_ && !flow->IsClosed()) {
                 const UInt64 conn_id = flow->ConnId();
                 if (conn_id != 0) {
