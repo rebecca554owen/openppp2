@@ -259,7 +259,7 @@
 #endif
 
 #ifndef PPP_APPLICATION_VERSION
-#define PPP_APPLICATION_VERSION ("2.1.5.0") /* 2.1.5.0 */
+#define PPP_APPLICATION_VERSION ("2.1.7.0") /* 2.1.7.0 */
 #endif
 
 #ifndef PPP_APPLICATION_NAME
@@ -401,7 +401,7 @@ static constexpr int                                                        PPP_
 static constexpr int                                                        PPP_MUX_TX_BACKLOG_STALL_TIMEOUT = 8000;    /* ms the data tx queue may stay backlogged before the session is rebuilt (D11 watchdog) */
 static constexpr int                                                        PPP_MUX_TURBO_FACTOR_MAX        = 3;        /* turbo dynamic pool: max multiplier of the --tun-mux base (pool_hard_max = base * this) */
 static constexpr int                                                        PPP_MUX_TURBO_CONTROL_COOLDOWN  = 3000;     /* ms minimum interval between turbo pool grow/shrink steps (hysteresis vs jitter) */
-static constexpr int                                                        PPP_MUX_RELIABILITY_RTX_BYTES   = 8 << 20;  /* 8 MiB session-wide retransmit buffer byte cap */
+static constexpr int                                                        PPP_MUX_RELIABILITY_RTX_BYTES   = 32 << 20;  /* 32 MiB session-wide retransmit buffer byte cap */
 static constexpr int                                                        PPP_MUX_RELIABILITY_RTX_MAX_ATTEMPTS = 8;   /* per-frame retransmit attempts before flow/session teardown */
 static constexpr int                                                        PPP_MUX_RELIABILITY_ACK_DELAY   = 10;       /* ms max delayed-ACK wait before flushing an ACK frame */
 static constexpr int                                                        PPP_MUX_RELIABILITY_GAP_TIMEOUT = 3000;     /* ms gap timeout when reliability is negotiated (replaces the 400ms default) */
@@ -532,7 +532,7 @@ static constexpr const char*                                                PPP_
 
     "211.148.192.141"
 };
-// P2-3 regression guard: pin the expected entry count so that any implicit
+//  regression guard: pin the expected entry count so that any implicit
 // adjacent-string concatenation (caused by a missing comma) will be caught
 // at compile time.  If you intentionally add/remove entries, update this
 // number to match the new count.
@@ -1891,11 +1891,16 @@ namespace ppp {
         }
 
         memset(memory, 0, sizeof(T));
-        return std::shared_ptr<T>(new (memory) T(std::forward<A&&>(args)...),
-            [](T* p) noexcept {
-                p->~T();
-                Mfree(p);
-            });
+        try {
+            return std::shared_ptr<T>(new (memory) T(std::forward<A&&>(args)...),
+                [](T* p) noexcept {
+                    p->~T();
+                    Mfree(p);
+                });
+        } catch (...) {
+            Mfree(memory);
+            return NULLPTR;
+        }
     }
 
     /**
