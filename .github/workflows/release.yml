@@ -26,22 +26,27 @@ permissions:
   actions: read
   contents: write
 
+concurrency:
+  group: release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   release:
     name: Create Release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.tag || github.ref_name }}
           fetch-depth: 0
+          submodules: recursive
 
       - name: Resolve release revision
         id: release
         shell: bash
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
 
@@ -83,14 +88,14 @@ jobs:
               --jq '.[0].databaseId // empty')
 
             if [ -z "$run_id" ]; then
-              echo "::error::No successful $workflow run found for ${RELEASE_SHA}"
-              exit 1
+              echo "::warning::No successful $workflow run found for ${RELEASE_SHA}; skipping its assets"
+              continue
             fi
 
             run_sha=$(gh run view "$run_id" --json headSha --jq '.headSha')
             if [ "$run_sha" != "$RELEASE_SHA" ]; then
-              echo "::error::$workflow run $run_id belongs to $run_sha, expected ${RELEASE_SHA}"
-              exit 1
+              echo "::warning::$workflow run $run_id belongs to $run_sha, expected ${RELEASE_SHA}; skipping its assets"
+              continue
             fi
 
             artifact_dir="artifacts/${workflow%.yml}"
@@ -101,9 +106,15 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
+          # zip/tar.gz artifacts are already named openppp2-{os}-{arch}[-variant].zip;
+          # the APK artifact is uploaded with name=openppp2-android.apk but the
+          # underlying file is app-release.apk, so rename by artifact dir name.
           find artifacts -type f -size +0c \
-            \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.apk' \) \
+            \( -name '*.zip' -o -name '*.tar.gz' \) \
             -exec cp {} release-assets/ \;
+          find artifacts -type f -size +0c -name '*.apk' | while read -r f; do
+            cp "$f" "release-assets/$(basename "$(dirname "$f")")"
+          done
 
           if ! find release-assets -maxdepth 1 -type f -print -quit | grep -q .; then
             echo "No non-empty release assets found"
@@ -114,14 +125,17 @@ jobs:
           find release-assets -maxdepth 1 -type f -printf '%f\t%s bytes\n' | sort
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ inputs.tag }}
+          # Fork 仓库的 GITHUB_TOKEN 对 release 写操作返回 403（Resource not
+          # accessible by integration）。token 必须作为 input 传入（env.GITHUB_TOKEN
+          # 对 action 无效，action 读 input token，默认 github.token=GITHUB_TOKEN），
+          # 用 PAT（RELEASE_TOKEN secret）恢复 Action 自动发布。
+          token: ${{ secrets.RELEASE_TOKEN }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
           target_commitish: ${{ steps.release.outputs.tag_sha }}
-          name: ${{ inputs.title }}
-          prerelease: ${{ inputs.prerelease }}
+          name: ${{ inputs.title || inputs.tag || github.ref_name }}
+          prerelease: ${{ inputs.prerelease || false }}
           files: release-assets/*
           generate_release_notes: true
           fail_on_unmatched_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

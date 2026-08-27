@@ -7,9 +7,7 @@ name: Build · Windows x64
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main, codex/runtime-ui-lifecycle-integration]
+    tags: ['v*']
   workflow_dispatch:
 
 concurrency:
@@ -32,7 +30,9 @@ jobs:
         platform: [x64]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - uses: microsoft/setup-msbuild@v2
         with:
@@ -56,7 +56,7 @@ jobs:
           & "$vcpkgPath\vcpkg.exe" integrate install
 
       - name: Cache vcpkg installed packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             C:\vcpkg\installed
@@ -90,6 +90,16 @@ jobs:
         shell: pwsh
         run: nuget restore .\ppp.sln
 
+      - name: Compute version label
+        id: ver
+        shell: pwsh
+        run: |
+          git fetch --tags --force 2>$null
+          $tag = (git describe --tags --abbrev=0 2>$null)
+          if (-not $tag) { $tag = "dev" }
+          $sha = (git rev-parse --short=8 HEAD)
+          "label=$tag-$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Build openppp2
         shell: pwsh
         run: |
@@ -98,7 +108,8 @@ jobs:
             /p:Platform=${{ matrix.platform }} `
             /p:VcpkgEnableManifest=false `
             /p:VcpkgEnabled=true `
-            /p:VcpkgUseStatic=true
+            /p:VcpkgUseStatic=true `
+            /p:PreprocessorDefinitions="PPP_APPLICATION_VERSION=`"${{ steps.ver.outputs.label }}`";`$(PreprocessorDefinitions)"
 
       - name: Collect artifacts
         shell: pwsh
@@ -139,12 +150,12 @@ jobs:
             if (Test-Path $src) { Copy-Item $src $artifactDir -Force }
           }
 
-          $zip = "openppp2-windows-${{ matrix.platform }}-${{ matrix.configuration }}.zip"
+          $zip = "openppp2-windows-amd64.zip"
           if (Test-Path $zip) { Remove-Item $zip -Force }
           Compress-Archive -Path (Join-Path $artifactDir '*') -DestinationPath $zip -Force
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: openppp2-windows-${{ matrix.platform }}-${{ matrix.configuration }}
-          path: openppp2-windows-${{ matrix.platform }}-${{ matrix.configuration }}.zip
+          name: openppp2-windows-amd64
+          path: openppp2-windows-amd64.zip
           if-no-files-found: error
