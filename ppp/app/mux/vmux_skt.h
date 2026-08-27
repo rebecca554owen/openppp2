@@ -98,7 +98,7 @@ namespace vmux {
         bool                                            input(const std::shared_ptr<Byte>& owner, Byte* payload, int payload_size) noexcept;
         /** @brief Send local payload to peer; synchronously rejects calls outside the mux strand. */
         bool                                            send_to_peer(const void* packet, int packet_length, const SendAsynchronousCallback& ac) noexcept;
-        
+
         /** @brief Update activity timestamp using provided tick value. */
         void                                            active(uint64_t now) noexcept;
         /** @brief Update activity timestamp using current tick count. */
@@ -123,6 +123,8 @@ namespace vmux {
         bool                                            forward_to_rx_socket() noexcept;
         /** @brief Forward data from vmux queue to local TCP socket. */
         bool                                            forward_to_tx_socket(const std::shared_ptr<Byte>& payload, int payload_size, packet_queue::iterator* packet_tail) noexcept;
+        /** @brief Close after both halves reached EOF and pending local writes drained. */
+        bool                                            close_on_eof_convergence() noexcept;
 
     private:
         /**
@@ -136,10 +138,11 @@ namespace vmux {
             struct {
                 bool                                    disposed_        : 1; ///< Set when the socket has been finalized.
                 bool                                    connected_       : 1; ///< Set when the remote peer acknowledged the connection.
-                bool                                    fin_             : 1; ///< Set when a FIN command was received from peer.
+                bool                                    fin_             : 1; ///< Local read side reached EOF and sent FIN.
+                bool                                    peer_eof_        : 1; ///< Peer half-closed; no more peer payload is expected.
                 bool                                    tx_acceleration_ : 1; ///< Transmit acceleration mode is active.
                 bool                                    rx_acceleration_ : 1; ///< Receive acceleration mode is active.
-                bool                                    connecton_       : 3; ///< Reserved / connection-phase sub-state.
+                bool                                    connecton_       : 2; ///< Reserved / connection-phase sub-state.
             };
             std::atomic<int>                            sending_    = false; ///< Non-zero while an async send to peer is in flight.
             std::atomic<int>                            forwarding_ = false; ///< Non-zero while local-socket forwarding is in progress.
@@ -159,10 +162,20 @@ namespace vmux {
 
         std::shared_ptr<boost::asio::ip::tcp::socket>   tx_socket_;         ///< Local TCP socket to which inbound data is forwarded.
         std::shared_ptr<Byte>                           tx_buffer_;         ///< Persistent receive buffer for the local socket read loop.
-        
+
         ContextPtr                                      tx_context_;        ///< ASIO execution context for the local socket operations.
         StrandPtr                                       tx_strand_;         ///< Optional strand serializing local socket callbacks.
 
         ConnectAsynchronousCallback                     connect_ac_;        ///< One-shot callback fired when the connect result is known.
+
+        /**
+         * @brief Weak self-reference used to safely re-acquire the socket from
+         *        callbacks that may fire while the object is being destroyed.
+         * @note  `finalize()` can invoke the connect callback from inside the
+         *        destructor. `shared_from_this()` on a dying object throws
+         *        `bad_weak_ptr` (std::terminate); locking this weak reference
+         *        instead yields an empty pointer without throwing.
+         */
+        std::weak_ptr<vmux_skt>                         self_weak_;
     };
 }

@@ -333,13 +333,13 @@ namespace vmux {
 
         vmux_net* const m             = this;
         m->Vlan                       = 0;
-   
+
         m->base_.server_or_client_    = server_mode;
         m->base_.disposed_.store(false, std::memory_order_release);
         m->base_.ftt_                 = false;
         m->base_.established_         = false;
         m->base_.acceleration_        = acceleration;
-        
+
         m->status_.max_connections    = max_connections;
         m->status_.pool_hard_max      = max_connections; // raised by turbo via set_pool_hard_max() before establishment.
         m->status_.pool_current       = max_connections; // runtime target; equals base until the turbo controller moves it.
@@ -834,7 +834,7 @@ namespace vmux {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
         }
-        
+
         if (!base_.ftt_) {
             base_.ftt_ = true;
             status_.tx_seq_ = seq;
@@ -879,6 +879,34 @@ namespace vmux {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
             self->finalize();
         }
+    }
+
+    void vmux_net::close_exec_deferred() noexcept {
+        // Teardown request from a context that may already hold syncobj_ (the
+        // reliability maintenance tick holds it across CollectExpired / FEC
+        // flush). finalize() locks the same non-recursive mutex, so finalizing
+        // inline here would deadlock the strand — every later handler (reads,
+        // heartbeats, ACKs) would queue forever behind the futex and the session
+        // would go silently half-dead. Arm the close and post the finalizer: it
+        // executes after this handler returns and releases the lock. If posting
+        // is impossible (stopped context), fall back to inline teardown — a
+        // stopped io_context cannot run this handler again, so no self-lock.
+        std::shared_ptr<vmux_net> self = weak_from_this().lock();
+        if (NULLPTR == self || !self->begin_close()) {
+            return;
+        }
+
+        const ContextPtr& context = self->context_;
+        if (NULLPTR != context && !context->stopped() &&
+            vmux_post_exec(context, self->strand_,
+                [self]() noexcept {
+                    self->finalize();
+                })) {
+            return;
+        }
+
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+        self->finalize();
     }
 
     /**
@@ -932,7 +960,7 @@ namespace vmux {
 
         return posted;
     }
-    
+
     /**
      * @brief Sends one packet through the specified underlying linklayer.
      */
@@ -941,7 +969,7 @@ namespace vmux {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
             return false;
         }
-        
+
         if (base_.disposed_.load(std::memory_order_acquire) || close_requested()) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
@@ -1000,6 +1028,17 @@ namespace vmux {
                 else {
                     linklayer->queued_bytes_ = 0;
                 }
+
+                // A completed downstream write is per-link liveness: the underlying
+                // carrier accepted and drained a frame (data or heartbeat keepalive).
+                // Idle aging must not mistake a healthy one-direction link for a
+                // half-dead one, so track this alongside the inbound-only stamp.
+                linklayer->last_tx_active_.store(now_tick(), std::memory_order_release);
+
+                // A completed downstream write is data-plane progress. Keep a
+                // separate timestamp so update() can reclaim a half-dead session
+                // whose inbound/control traffic remains active.
+                status_.last_tx_drain_.store(now_tick(), std::memory_order_release);
 
                 self->finish_tx_completion(completion, ok);
 
@@ -1101,6 +1140,9 @@ namespace vmux {
                 uint64_t max_tcp_connect_timeout = ((uint64_t)AppConfiguration->tcp.connect.timeout) * 1000ULL;
 
                 uint64_t now = now_tick();
+                uint64_t max_mux_inactive_timeout = ((uint64_t)AppConfiguration->mux.inactive.timeout) * 1000ULL;
+                uint64_t max_mux_connect_timeout = ((uint64_t)AppConfiguration->mux.connect.timeout) * 1000ULL;
+
                 if (base_.established_) {
                     for (const std::pair<uint32_t, vmux_skt_ptr>& kv : skts_) {
                         bool is_port_aging = false;
@@ -1118,6 +1160,87 @@ namespace vmux {
                             release_skts.emplace_back(skt);
                         }
                     }
+
+                    /**
+                     * @brief Age idle carrier linklayers (tx_links_/rx_links_),
+                     *        aligned with the per-socket idle aging above.
+                     *        A link is half-dead only when BOTH directions stalled:
+                     *        no inbound mux frame AND no drained outbound frame
+                     *        (data or heartbeat) for the inactivity window — the peer
+                     *        closed the underlying carrier and the EOF read completion
+                     *        was missed, parking its socket in CLOSE_WAIT and leaking
+                     *        one fd per dead session. A healthy one-direction link
+                     *        still drains writes and must survive (its last_tx_active_
+                     *        keeps moving). Aging may only shrink the overcommit
+                     *        headroom above the base pool (--tun-mux), matching the
+                     *        turbo shrink floor. Retire candidates here so the
+                     *        periodic reaper below disposes them once their in-flight
+                     *        writes drain to 0.
+                     */
+                    vmux_linklayer_vector aged_links;
+                    {
+                        SynchronizationObjectScope __SCOPE__(syncobj_);
+                        for (vmux_linklayer_vector::iterator it = rx_links_.begin(); it != rx_links_.end(); ++it) {
+                            const vmux_linklayer_ptr& linklayer = *it;
+                            bool is_link_aging = false;
+                            if (NULLPTR != linklayer && !linklayer->drain_.retiring()) {
+                                uint64_t delta_time = now - linklayer->last_active_.load(std::memory_order_acquire);
+                                uint64_t tx_delta_time = now - linklayer->last_tx_active_.load(std::memory_order_acquire);
+                                if (!linklayer->handshake_complete_.load(std::memory_order_acquire)) {
+                                    is_link_aging = delta_time >= max_mux_connect_timeout;
+                                }
+                                else if (delta_time >= max_mux_inactive_timeout &&
+                                         tx_delta_time >= max_mux_inactive_timeout) {
+                                    // Half-dead means BOTH directions stalled: no inbound frame
+                                    // AND no drained outbound frame (data or heartbeat keepalive)
+                                    // for the inactivity window. A healthy one-direction link
+                                    // (bulk upload keeps only ACKs flowing back on other
+                                    // carriers) still proves its write path works and survives.
+                                    //
+                                    // Floor guard: idle aging may only shrink the overcommit
+                                    // headroom above the base pool (--tun-mux), matching the
+                                    // turbo shrink semantics. The base pool stands even when
+                                    // quiet, or a burst would drain it link by link. Links
+                                    // retired earlier in this tick already show retiring() and
+                                    // drop out of the count, so we stop exactly at the floor.
+                                    size_t live = 0;
+                                    for (vmux_linklayer_vector::iterator live_it = rx_links_.begin(); live_it != rx_links_.end(); ++live_it) {
+                                        const vmux_linklayer_ptr& l = *live_it;
+                                        if (NULLPTR != l && !l->drain_.retiring()) {
+                                            live++;
+                                        }
+                                    }
+
+                                    is_link_aging = live > status_.max_connections;
+                                }
+                            }
+
+                            if (is_link_aging) {
+                                // Two-phase retirement, matching the turbo shrink path:
+                                // stop giving the link new frames immediately, keep it in
+                                // rx_links_ until reap_retired_linklayers() collects it
+                                // (same update tick when inflight is already 0).
+                                linklayer->drain_.BeginRetire();
+                                for (vmux_linklayer_list::iterator t = tx_links_.begin(); t != tx_links_.end();) {
+                                    if (*t == linklayer) {
+                                        t = tx_links_.erase(t);
+                                    }
+                                    else {
+                                        ++t;
+                                    }
+                                }
+                                aged_links.emplace_back(linklayer);
+                            }
+                        }
+                    }
+
+                    if (!aged_links.empty()) {
+                        for (const vmux_linklayer_ptr& linklayer : aged_links) {
+                            ppp::telemetry::Count("mux.link.age.release", 1);
+                            ppp::telemetry::Log(Level::kInfo, "mux", "link aged out (idle), pending reap, links=%d",
+                                (int)aged_links.size());
+                        }
+                    }
                 }
 
                 /**
@@ -1126,11 +1249,23 @@ namespace vmux {
                  * - enforce global mux inactivity timeout,
                  * - schedule heartbeat keepalive when established.
                  */
-                uint64_t max_mux_inactive_timeout = ((uint64_t)AppConfiguration->mux.inactive.timeout) * 1000ULL;
-                uint64_t max_mux_connect_timeout = ((uint64_t)AppConfiguration->mux.connect.timeout) * 1000ULL;
+
+                if (base_.established_ && tx_data_frames_ > 0) {
+                    uint64_t last_tx_drain = status_.last_tx_drain_.load(std::memory_order_acquire);
+                    if (last_tx_drain != 0 && (now - last_tx_drain) >= max_mux_inactive_timeout) {
+                        if (count_live_carriers(NULLPTR) == 0) {
+                            close_exec();
+                        }
+                        else {
+                            ppp::telemetry::Count("mux.downstream.stall.bypassed.live_carrier", 1);
+                        }
+                    }
+                }
 
                 if ((now - status_.last_) >= (base_.established_ ? max_mux_inactive_timeout : max_mux_connect_timeout)) {
-                    close_exec();
+                    if (!base_.established_ || count_live_carriers(NULLPTR) == 0) {
+                        close_exec();
+                    }
                 }
                 elif(base_.established_ && (now - status_.last_heartbeat_) >= status_.heartbeat_timeout_) {
                     if (post(cmd_keep_alived, NULLPTR, 0, ftt_random_aid(1, INT32_MAX))) {
@@ -1324,10 +1459,20 @@ namespace vmux {
                 session_reorder_bytes_ + static_cast<size_t>(length) > session_reorder_cap_bytes_) {
                 ppp::telemetry::Count("mux.rx.compat.reorder_cap", 1);
                 ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
-                    "compat reorder cap exceeded: buffered=%u incoming=%u cap=%u; rebuilding session",
+                    "compat reorder cap exceeded: buffered=%u incoming=%u cap=%u; forcing ACK and dropping surplus frame",
                     (unsigned)session_reorder_bytes_, (unsigned)length,
                     (unsigned)session_reorder_cap_bytes_);
-                close_exec();
+                // The surplus frame is dropped WITHOUT entering the ACK state:
+                // the SACK broadcast is capped at the contiguous frontier
+                // (rx_ack_), so gap frames are never note_ack_pending'd. The
+                // peer's retransmission machinery still sees this sequence as
+                // missing and re-sends it. Force the capped ACK out right now
+                // so the peer learns of the gap immediately (not only on its
+                // PTO timer), keep the session alive, and let the buffered
+                // frames be delivered once the gap closes. A gap that truly
+                // never heals is reclaimed by the compat_evict_expired()
+                // timeout backstop.
+                maybe_send_ack(now, true);
                 active(now);
                 linklayer_update(linklayer);
                 return true;
@@ -1351,19 +1496,21 @@ namespace vmux {
 
             bool inserted = rx_queue_.emplace(std::make_pair(seq, packet)).second;
             if (!inserted) {
-                // Duplicate of an already-buffered out-of-order frame (a
-                // retransmit): with reliability negotiated this is expected.
-                if (reliability_on_) {
-                    active(now);
-                    linklayer_update(linklayer);
-                    return true;
-                }
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MappingEntryConflict);
+                // Compat mode can also receive duplicates when carriers reorder
+                // or retransmit frames. Dropping them keeps the session alive.
+                active(now);
+                linklayer_update(linklayer);
+                return true;
             }
             else {
                 note_flow_buffered(static_cast<size_t>(length));
                 if (rx_gap_oldest_tick_ == 0) {
                     rx_gap_oldest_tick_ = now;
+                    if (reliability_on_) {
+                        // Advertise the gap immediately instead of waiting for
+                        // the periodic reliability timer.
+                        maybe_send_ack(now, true);
+                    }
                 }
             }
 
@@ -1373,16 +1520,11 @@ namespace vmux {
             return inserted;
         }
         else {
-            // Stale/duplicate (already delivered): with reliability negotiated
-            // this is an expected retransmit duplicate — drop it silently.
-            if (reliability_on_) {
-                active(now);
-                linklayer_update(linklayer);
-                return true;
-            }
-
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
-            return false;
+            // Stale/duplicate frames are harmless retransmits or cross-carrier
+            // reordering artifacts. They must not tear down the mux session.
+            active(now);
+            linklayer_update(linklayer);
+            return true;
         }
     }
 
@@ -1405,8 +1547,8 @@ namespace vmux {
     bool vmux_net::packet_input(Byte cmd, Byte* buffer, int buffer_size, uint64_t now, const std::shared_ptr<Byte>& owner) noexcept {
         buffer_size -= sizeof(vmux_hdr);
         if (buffer_size < 0) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
-            return false;
+            ppp::telemetry::Count("mux.rx.short_frame", 1);
+            return true;
         }
 
         vmux_hdr* h = (vmux_hdr*)buffer;
@@ -1466,7 +1608,8 @@ namespace vmux {
             }
         }
         elif(cmd == cmd_keep_alived) {
-            active(now);
+            // Keepalive proves control-plane liveness only. It must not refresh
+            // the data-plane inactivity timer.
         }
         elif(cmd == cmd_mux_mode_set) {
             packet_input_mux_mode_set(buffer, buffer_size);
@@ -1481,8 +1624,8 @@ namespace vmux {
             active(now);
         }
         else {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
-            return false;
+            ppp::telemetry::Count("mux.rx.unknown_cmd", 1);
+            return true;
         }
 
         return true;
@@ -1946,7 +2089,7 @@ namespace vmux {
             (unsigned long long)(now - rx_gap_oldest_tick_));
         close_exec();
     }
-    
+
     // ------------------------------------------------------------------------
     // Reliability sub-protocol (negotiated): ACK feedback, retransmission, FEC.
     // All state below is strand-affine unless noted otherwise.
@@ -2006,8 +2149,18 @@ namespace vmux {
             fec_note_received(linklayer, cid, seq, frame, length, now);
         }
         else {
-            // compat: every sequenced frame shares the global space (cid 0).
-            note_ack_pending(0, seq, now);
+            // compat: every sequenced frame shares the global space (cid 0),
+            // but the SACK broadcast is capped at the contiguous frontier
+            // (status_.rx_ack_): only the next in-order frame advances the ACK
+            // state. Frames arriving after an open gap may be dropped once the
+            // reorder cap is exceeded; advertising one as received would
+            // release the peer's retransmission copy and turn a capped surplus
+            // frame into a permanent loss. Unacked gap frames stay in the
+            // peer's rtx buffer until the gap closes, and a retransmitted
+            // duplicate lands in the stale/duplicate path below.
+            if (seq == status_.rx_ack_) {
+                note_ack_pending(0, seq, now);
+            }
             if (is_per_flow_data(cmd)) {
                 fec_note_received(linklayer, cid, seq, frame, length, now);
             }
@@ -2146,15 +2299,24 @@ namespace vmux {
             return false; // A retransmission, not a first send.
         }
         if (!rtx_.Track(key_cid, seq, packet, packet_length, now, rtx_cap_bytes_)) {
-            // Retransmit buffer exhausted: degrade exactly like an unrecovered gap.
+            // Keep compat sessions alive under slow ACKs by evicting the oldest
+            // retained frames until the new frame fits. Flow-scoped ordering
+            // instead fails only the affected flow.
             ppp::telemetry::Count("mux.rtx.cap", 1);
             if (ordering_mode_ == ordering_flow_v2) {
                 fail_flow(cid, "rtx_buffer_overflow");
+                return false;
             }
-            else {
-                close_exec();
+            for (;;) {
+                const std::size_t freed = rtx_.EvictOldest();
+                if (freed == 0) {
+                    return false;
+                }
+                ppp::telemetry::Count("mux.rtx.evict", 1);
+                if (rtx_.Track(key_cid, seq, packet, packet_length, now, rtx_cap_bytes_)) {
+                    break;
+                }
             }
-            return false;
         }
         return true;
     }
@@ -2180,14 +2342,21 @@ namespace vmux {
             }
             if (entry->attempts >= rtx_max_attempts_) {
                 // Unrecoverable frame: degrade exactly like an unrecovered gap.
+                // Deferred teardown: this runs inside reliability_tick's syncobj_
+                // scope; an inline finalize() would self-deadlock the strand.
                 ppp::telemetry::Count("mux.rtx.exhausted", 1);
+                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
+                    "rtx exhausted: cid=%u seq=%u attempts=%u; rebuilding session",
+                    (unsigned)ppp::app::mux::MuxRetransmitBuffer::KeyCid(key),
+                    (unsigned)(key & 0xFFFFFFFFu),
+                    (unsigned)entry->attempts);
                 const uint32_t cid = ppp::app::mux::MuxRetransmitBuffer::KeyCid(key);
                 if (ordering_mode_ == ordering_flow_v2) {
                     fail_flow(cid, "rtx_exhausted");
                     continue;
                 }
 
-                close_exec();
+                close_exec_deferred();
                 return;
             }
 
@@ -2236,6 +2405,11 @@ namespace vmux {
 
         const uint64_t now = now_tick();
         if (base_.established_ && reliability_on_) {
+            SynchronizationObjectScope __SCOPE__(syncobj_);
+            if (base_.disposed_.load(std::memory_order_acquire)) {
+                return;
+            }
+
             maybe_send_ack(now, false);
 
             rtx_.CollectExpired(now, current_pto(), (size_t)PPP_MUX_RELIABILITY_RXT_BURST, rtx_pending_);
@@ -2251,6 +2425,9 @@ namespace vmux {
             }
         }
 
+        if (base_.disposed_.load(std::memory_order_acquire) || NULLPTR == reliability_timer_) {
+            return;
+        }
         std::weak_ptr<vmux_net> weak = weak_from_this();
         reliability_timer_->expires_after(std::chrono::milliseconds(PPP_MUX_RELIABILITY_TIMER_MS));
         reliability_timer_->async_wait(
@@ -2466,7 +2643,10 @@ namespace vmux {
                             ? packet_input_flow(linklayer, rh, recovered_length, now, recovered)
                             : packet_input_unorder(linklayer, rh, recovered_length, now, recovered);
                         if (!delivered) {
-                            close_exec();
+                            // Deferred teardown: fec_flush_group runs inside
+                            // reliability_tick's syncobj_ scope; an inline finalize()
+                            // would self-deadlock the strand.
+                            close_exec_deferred();
                             return;
                         }
                     }
@@ -2686,7 +2866,7 @@ namespace vmux {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
             return false;
         }
-        
+
         if (base_.disposed_.load(std::memory_order_acquire) || !base_.established_) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetPostInternalNotEstablished);
             return false;
@@ -3127,7 +3307,7 @@ namespace vmux {
         vmux_hdr* h = (vmux_hdr*)packet_memory;
         h->cmd = cmd;
         h->connection_id = htonl(connection_id);
-        
+
         return post_internal(packet_managed, packet_length, acceleration, posted_ac);
     }
 
@@ -3151,6 +3331,8 @@ namespace vmux {
         }
 
         linklayer->connection = connection;
+        linklayer->last_active_ = now_tick(); // Seed the idle-aging baseline (aligned with skts_ last_).
+        linklayer->last_tx_active_ = linklayer->last_active_.load(std::memory_order_acquire); // Seed the tx-drain baseline so a freshly attached link is not instantly aged.
         tx_links_.emplace_back(linklayer);
         rx_links_.emplace_back(linklayer);
         refresh_runtime_active_links();
@@ -3603,9 +3785,9 @@ namespace vmux {
 
         /** @brief Packed handshake acknowledgement payload carrying receive id. */
 #pragma pack(push, 1)
-        typedef struct 
+        typedef struct
 #if defined(__GNUC__) || defined(__clang__)
-            __attribute__((packed)) 
+            __attribute__((packed))
 #endif
         {
             uint16_t receive_id;
@@ -3672,7 +3854,7 @@ namespace vmux {
     void vmux_net::linklayer_established() noexcept {
         SynchronizationObjectScope __SCOPE__(syncobj_);
         if (!base_.established_) {
-            base_.established_ = 
+            base_.established_ =
                 status_.opened_connections >= status_.max_connections;
 
             ppp::telemetry::Log(Level::kDebug, "mux", "linklayer handshake complete, links=%d", static_cast<int>(status_.opened_connections));
@@ -3758,7 +3940,7 @@ namespace vmux {
 
             any |= posted;
         }
-        
+
         return any;
     }
 
@@ -3851,7 +4033,7 @@ namespace vmux {
                 bool ok = connect(context, strand, sk, host, port,
                     [status, return_connection, &y](vmux_skt* sender, bool success) noexcept {
 
-                        ppp::coroutines::asio::R(y, *status, success, 
+                        ppp::coroutines::asio::R(y, *status, success,
                             [return_connection, sender]() noexcept {
                                 /* The socket may already be inside its destructor when
                                  * this failure callback fires (session teardown while a

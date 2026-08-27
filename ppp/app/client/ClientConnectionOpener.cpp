@@ -117,6 +117,8 @@ namespace ppp {
                 // main coroutine can never cache or pin the logical server instead of the proxy.
                 std::shared_ptr<VEthernetExchanger> exchanger = owner_->NewExchanger();
                 if (NULLPTR == exchanger) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
+                    IDisposable::DisposeReferences(qos);
                     return false;
                 }
                 owner_->exchanger_ = exchanger;
@@ -138,6 +140,9 @@ namespace ppp {
                 // Enable the local HTTP PROXY server middleware to provide proxy services directly by the VPN.
                 VEthernetNetworkSwitcher::VEthernetHttpProxySwitcherPtr http_proxy = owner_->NewHttpProxy(exchanger);
                 if (NULLPTR == http_proxy) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
+                    owner_->exchanger_.reset();
+                    IDisposable::DisposeReferences(qos, exchanger);
                     return false;
                 }
                 elif(http_proxy->Open()) {
@@ -151,6 +156,9 @@ namespace ppp {
                 // Enable the local SOCKS PROXY server middleware to provide proxy services directly by the VPN.
                 VEthernetNetworkSwitcher::VEthernetSocksProxySwitcherPtr socks_proxy = owner_->NewSocksProxy(exchanger);
                 if (NULLPTR == socks_proxy) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
+                    owner_->exchanger_.reset();
+                    IDisposable::DisposeReferences(qos, exchanger, http_proxy);
                     return false;
                 }
                 elif(socks_proxy->Open()) {
@@ -188,10 +196,18 @@ namespace ppp {
 #endif
                     dns_context.handle_resolver_response = [](const auto&, const auto&, const auto&, auto) noexcept {};
                     if (!owner_->dns_controller_->Configure(std::move(dns_context))) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
+                        IDisposable::DisposeReferences(owner_->qos_, owner_->exchanger_, http_proxy, socks_proxy);
+                        owner_->qos_.reset();
+                        owner_->exchanger_.reset();
                         return false;
                     }
                     owner_->dns_session_ = owner_->dns_controller_->OpenSession(owner_->exchanger_);
                     if (NULLPTR == owner_->dns_session_) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
+                        IDisposable::DisposeReferences(owner_->qos_, owner_->exchanger_, http_proxy, socks_proxy);
+                        owner_->qos_.reset();
+                        owner_->exchanger_.reset();
                         return false;
                     }
                 }
@@ -209,6 +225,10 @@ namespace ppp {
                             , owner_->protect_network_
 #endif
                         )) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
+                        IDisposable::DisposeReferences(owner_->qos_, owner_->exchanger_, http_proxy, socks_proxy);
+                        owner_->qos_.reset();
+                        owner_->exchanger_.reset();
                         return false;
                     }
                 }
@@ -216,13 +236,19 @@ namespace ppp {
                 // New the beast network bandwidth aggregator only for full TUN mode.
                 if (!owner_->proxy_only_ && owner_->static_mode_ && owner_->configuration_->udp.static_.aggligator > 0) {
                     if (!owner_->PreparedAggregator()) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionOpenFailed);
+                        IDisposable::DisposeReferences(owner_->qos_, owner_->exchanger_, http_proxy, socks_proxy);
+                        owner_->qos_.reset();
+                        owner_->exchanger_.reset();
                         return false;
                     }
                 }
 
 #if defined(_ANDROID) || defined(_IPHONE)
                 if (!owner_->AddAllRoute(tap)) {
-                    IDisposable::DisposeReferences(qos, exchanger, http_proxy);
+                    IDisposable::DisposeReferences(owner_->qos_, owner_->exchanger_, http_proxy);
+                    owner_->qos_.reset();
+                    owner_->exchanger_.reset();
                     return false;
                 }
 #else

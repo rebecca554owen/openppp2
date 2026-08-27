@@ -139,8 +139,8 @@ namespace ppp {
     namespace app {
         namespace client {
             /** @brief Constructs network switcher and initializes baseline state flags. */
-            VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept
-                : VEthernet(context, lwip, vnet, mta)
+            VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, bool xtcp) noexcept
+                : VEthernet(context, lwip, vnet, mta, xtcp)
                 , configuration_(configuration)
                 , dns_controller_(std::make_shared<dns::DnsController>(
                     std::make_unique<dns::DnsInterceptor>(), nullptr))
