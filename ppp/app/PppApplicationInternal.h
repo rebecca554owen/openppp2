@@ -114,6 +114,8 @@ struct NetworkInterface final {
 #endif
 
     bool StaticMode = false;
+    enum class TcpStack { Lwip, Xtcp };
+    TcpStack TcpStackMode = TcpStack::Lwip;
     bool Lwip = false;
     bool VNet = false;
     bool HostedNetwork = false;
