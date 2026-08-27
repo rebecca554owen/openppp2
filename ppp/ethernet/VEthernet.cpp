@@ -1,4 +1,5 @@
 #include <ppp/ethernet/VEthernet.h>
+#include <xtcp/XtcpNetstackAdapter.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
 /**
@@ -41,9 +42,10 @@ namespace ppp
         /**
          * @brief Initializes VEthernet runtime flags and context.
          */
-        VEthernet::VEthernet(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta) noexcept
+        VEthernet::VEthernet(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, bool xtcp) noexcept
             : disposed_(false)
             , lwip_(lwip)
+            , xtcp_(xtcp)
             , vnet_(vnet)
             , mta_(mta)
             , context_(context)
@@ -150,7 +152,20 @@ namespace ppp
          */
         bool VEthernet::OnUpdate(uint64_t now) noexcept
         {
-            return !disposed_.load(std::memory_order_acquire);
+            if (disposed_.load(std::memory_order_acquire))
+            {
+                return false;
+            }
+
+            // Drive the XTCP user-space stack: dispatch MIMT completions and
+            // sweep per-connection timers (delayed-ACK, RTO/TLP, keepalive).
+            std::shared_ptr<XtcpNetstackAdapter> xtcp = std::atomic_load(&xtcp_adapter_);
+            if (NULLPTR != xtcp)
+            {
+                xtcp->Pump();
+            }
+
+            return true;
         }
 
         /**
@@ -439,6 +454,36 @@ namespace ppp
                 std::shared_ptr<ITap>& netstack_tap = constantof(netstack->Tap);
                 netstack_tap = tap;
 
+                if (xtcp_)
+                {
+                    // XTCP MIMT path: create the adapter, bind the TAP as the
+                    // NDI packet backend, and route accepted flows through the
+                    // virtual stack's client factory (same routing/connect
+                    // logic the lwIP accept path uses).
+                    ppp::threading::Executors::StrandPtr xtcp_strand =
+                        ppp::make_shared_object<ppp::threading::Executors::Strand>(context_->get_executor());
+                    std::shared_ptr<XtcpNetstackAdapter> xtcp_adapter =
+                        ppp::make_shared_object<XtcpNetstackAdapter>(context_, xtcp_strand);
+                    if (NULLPTR != xtcp_adapter)
+                    {
+                        xtcp_adapter->SetClientFactory(
+                            [netstack](const boost::asio::ip::tcp::endpoint& localEP,
+                                       const boost::asio::ip::tcp::endpoint& remoteEP) noexcept
+                            {
+                                return NULLPTR != netstack
+                                    ? netstack->BeginAcceptClient(localEP, remoteEP)
+                                    : std::shared_ptr<VNetstack::TapTcpClient>(NULLPTR);
+                            });
+
+                        std::shared_ptr<xtcp::ndi::Backend> ndi_backend =
+                            ppp::make_shared_object<TapNdiBackend>(tap);
+                        if (NULLPTR != ndi_backend && xtcp_adapter->Open(ndi_backend))
+                        {
+                            std::atomic_store(&xtcp_adapter_, xtcp_adapter);
+                        }
+                    }
+                }
+
                 if (!netstack->Open(lwip_, 0))
                 {
                     netstack->Release();
@@ -457,7 +502,7 @@ namespace ppp
                         return OnPacketInput((Byte*)e.Packet, packet_length, vnet_);
                     }
 #if !defined(_WIN32)
-                    elif(mta_)
+                    elif(mta_ && !xtcp_)
                     {
                         /** @brief Use SSMT sharding when enabled for TCP inputs. */
                         if (ssmt_ > 0 && VETHERNET_INTERNAL::PacketSsmtInput(this, iphdr, packet_length))
@@ -620,6 +665,23 @@ namespace ppp
                             return 1;
                         }
                     }
+                    elif (xtcp_)
+                    {
+                        // XTCP MIMT path: feed the raw IP packet into the
+                        // user-space stack; flows are delivered via StartMimt.
+                        std::shared_ptr<XtcpNetstackAdapter> xtcp = std::atomic_load(&xtcp_adapter_);
+                        if (NULLPTR != xtcp)
+                        {
+                            xtcp::buf::BufRef buf = xtcp::buf::BufRef::Acquire(packet_length);
+                            if (!buf.IsEmpty())
+                            {
+                                std::memcpy(buf.Data(), iphdr, packet_length);
+                                buf.SetLen(packet_length);
+                                xtcp->OnPacket(std::move(buf));
+                            }
+                        }
+                        return 0;
+                    }
                     else
                     {
                         struct tcp_hdr* tcphdr = tcp_hdr::Parse(iphdr, (Byte*)iphdr + iphdr_hlen, tcp_len); 
@@ -661,9 +723,9 @@ namespace ppp
             using Awaitable = ppp::threading::Executors::Awaitable;
 
             /**
-             * @brief Skip worker startup when lwIP is enabled or MTA is disabled.
+             * @brief Skip worker startup when lwIP/XTCP is enabled or MTA is disabled.
              */
-            if (lwip_ || !mta_)
+            if (lwip_ || xtcp_ || !mta_)
             {
                 return true;
             }
