@@ -62,6 +62,10 @@ namespace ppp {
             TransportAuthSecret& secret,
             std::string* error = nullptr) noexcept;
 
+        bool GenerateTransportAuthSecretFile(
+            const std::string& path,
+            std::string* error = nullptr) noexcept;
+
         class TransportAuthKeyringSnapshot final {
         public:
             struct Key final {

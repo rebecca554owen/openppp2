@@ -237,6 +237,16 @@ namespace ppp
                     return false;
                 }
 
+                // Also reject header lengths beyond the packet itself. The
+                // rebuild branch below reads (packet_length - header_length) bytes
+                // starting at header_length; without this upper bound an attacker
+                // controlled value causes an out-of-bounds read and a negative
+                // length write before the checksum is ever validated.
+                if (header_length > packet_length) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
+                    return false;
+                }
+
                 // Reverse XOR masking on the session_id field and following bytes.
                 ppp::Byte* x = p + offsetof(PACKET_HEADER, session_id);
                 ppp::Byte* y = p + packet_length;
@@ -737,8 +747,16 @@ namespace ppp
                         return true;
                     }
 
-                    ok = Socket::Closesocket(socket);
-                    if (!ok) {
+                    // A failed bind can leave the socket either still open (it
+                    // must be closed before the retry, because Socket::OpenSocket
+                    // rejects an already-open socket) or already closed -- on a
+                    // bind failure Socket::OpenSocket() cleans up after itself.
+                    // So "nothing to close" is the normal state here and must NOT
+                    // abort the wildcard fallback below, which is the whole point
+                    // of this retry: a configured interface address that is not
+                    // present on this host fails the first bind and then has to
+                    // fall back exactly like the TCP acceptor chain does.
+                    if (socket.is_open() && !Socket::Closesocket(socket)) {
                         return false;
                     }
 
