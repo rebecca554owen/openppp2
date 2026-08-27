@@ -101,8 +101,9 @@ static bool BuildSessionResumeId(const ppp::Int128& id,
 
 static bool IsEligibleAuthenticatedRecoveryCarrier(
     const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept {
-    if (!transmission || transmission->IsServerLoopbackIngress() ||
-        !transmission->IsAuthenticatedCarrierBindingActive() ||
+    // v2.2.0: loopback ingress is authenticated and exporter-capable exactly
+    // like LAN; recovery eligibility no longer exempts it.
+    if (!transmission || !transmission->IsAuthenticatedCarrierBindingActive() ||
         !transmission->HasAuthenticatedSessionExporter()) {
         return false;
     }
@@ -1784,11 +1785,26 @@ namespace ppp {
                     transmission->GetAuthenticatedCarrierKind();
                 const bool plain_carrier = kind == AuthenticatedCarrierKind::Tcp ||
                     kind == AuthenticatedCarrierKind::WebSocket;
-                if (!plain_carrier || transmission->IsServerLoopbackIngress() ||
-                    !configuration_->server.transport_auth.enabled ||
-                    !transmission->PeerSupportsTransportAuthV1() ||
-                    !transmission->PeerEnablesTransportAuthV1()) {
+                if (!plain_carrier) {
                     return true;
+                }
+                // v2.2.3 strict transport-auth: an asymmetric configuration
+                // (local enabled != peer enabled) is a misconfiguration; refuse
+                // the session instead of silently falling back to the
+                // unauthenticated legacy data path.
+                const bool local_enabled = configuration_->server.transport_auth.enabled;
+                const bool peer_enables = transmission->PeerEnablesTransportAuthV1();
+                if (local_enabled != peer_enables) {
+                    ppp::telemetry::Count("server.transport_auth.strict_reject", 1);
+                    ppp::telemetry::Log(Level::kInfo, "server",
+                        "transport-auth mismatch: local_enabled=%d peer_enables=%d; rejecting session",
+                        local_enabled ? 1 : 0, peer_enables ? 1 : 0);
+                    ppp::diagnostics::SetLastErrorCode(
+                        ppp::diagnostics::ErrorCode::SessionAuthFailed);
+                    return false;
+                }
+                if (!local_enabled) {
+                    return true;   // both sides disabled: legacy data path
                 }
 
                 ppp::app::protocol::SessionResumeId binary_session_id{};
@@ -1917,8 +1933,9 @@ namespace ppp {
                     authenticated = responder.ConsumeAdvertisement(
                         advertisement, response);
                     if (!authenticated) {
-                        (void)send_control(response);
-                        reject_sent = true;
+                        if (send_control(response)) {
+                            reject_sent = true;
+                        }
                     }
                 }
                 if (authenticated) {
@@ -1932,8 +1949,9 @@ namespace ppp {
                 if (authenticated) {
                     authenticated = responder.ConsumeClientProof(proof, response);
                     if (!authenticated) {
-                        (void)send_control(response);
-                        reject_sent = true;
+                        if (send_control(response)) {
+                            reject_sent = true;
+                        }
                     }
                 }
 
@@ -1945,6 +1963,11 @@ namespace ppp {
                 }
                 if (authenticated) {
                     authenticated = send_control(response);
+                }
+                // v2.2.0: the acknowledgement has been fully written in the legacy
+                // encoding; install the AEAD record protectors now (protocol section 9).
+                if (authenticated) {
+                    authenticated = transmission->InstallRecordProtectorsFromHandshake();
                 }
 
                 if (!authenticated && advertisement_received && !reject_sent) {
@@ -2014,6 +2037,25 @@ namespace ppp {
                 if (!AuthenticatePlainTransport(transmission, session_id, y)) {
                     ppp::telemetry::Count("server.transport_auth.rejected", 1);
                     return STATUS_ERROR;
+                }
+
+                // v2.2.0 zero-configuration AEAD (KNOWN_ISSUES defect 2): when
+                // transport-auth is disabled the protectors are not installed by
+                // AuthenticatePlainTransport, so install them here whenever the
+                // peer advertised transport-auth v1 capabilities. The call is
+                // idempotent when transport-auth already installed them; failure
+                // is non-fatal and falls back to the legacy CFB data path.
+                ppp::telemetry::Count("server.record_protector.attempt", 1);
+                ppp::telemetry::Log(Level::kInfo, "server",
+                    "record protector install check: peer_supports=%d peer_enables=%d",
+                    transmission->PeerSupportsTransportAuthV1() ? 1 : 0,
+                    transmission->PeerEnablesTransportAuthV1() ? 1 : 0);
+                if (transmission->PeerSupportsTransportAuthV1() &&
+                    transmission->PeerEnablesTransportAuthV1() &&
+                    !transmission->InstallRecordProtectorsFromHandshake()) {
+                    ppp::telemetry::Count("server.record_protector.install_failed", 1);
+                    ppp::telemetry::Log(Level::kInfo, "server",
+                        "record protector installation failed; continuing with legacy data path");
                 }
 
                 if (!mux) {
