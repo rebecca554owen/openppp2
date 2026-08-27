@@ -222,17 +222,30 @@ namespace ppp {
             boost::system::error_code read_ec;
             std::size_t bytes_transferred = 0;
             auto buffer = boost::asio::buffer(packet.get(), length);
+
+            //  UAF fix: capture shared_ptr in the callback instead of raw references to coroutine frame locals
+            // YieldContext must also use a pointer instead of a reference to avoid dangling after coroutine destruction
+            auto self = shared_from_this();
+            auto ec_ptr = std::make_shared<boost::system::error_code>();
+            auto transferred_ptr = std::make_shared<std::size_t>(0);
+            YieldContext* y_ptr = &y;
+
+            // UAF fix (round 2): capture the packet owner (shared_ptr) in the post
+            // lambda. The bare `buffer` alias would dangle if the coroutine frame is
+            // destroyed while the post is still pending (heap corruption on darwin arm64).
             boost::asio::post(socket->get_executor(),
-                [socket, buffer, &y, &read_ec, &bytes_transferred]() noexcept {
-                    boost::asio::async_read(*socket, buffer,
-                        [&y, &read_ec, &bytes_transferred](const boost::system::error_code& ec, std::size_t sz) noexcept {
-                            read_ec = ec;
-                            bytes_transferred = sz;
-                            y.R();
+                [self, socket, packet, length, y_ptr, ec_ptr, transferred_ptr]() noexcept {
+                    boost::asio::async_read(*socket, boost::asio::buffer(packet.get(), length),
+                        [self, y_ptr, ec_ptr, transferred_ptr](const boost::system::error_code& ec, std::size_t sz) noexcept {
+                            *ec_ptr = ec;
+                            *transferred_ptr = sz;
+                            y_ptr->R();
                         });
                 });
 
             y.Suspend();
+            read_ec = *ec_ptr;
+            bytes_transferred = *transferred_ptr;
             bool ok = !read_ec && bytes_transferred == (std::size_t)length;
             if (!ok) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketReadFailed);

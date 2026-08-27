@@ -506,8 +506,10 @@
     <ClCompile Include="ppp\configurations\AppConfiguration.cpp" />
     <ClCompile Include="ppp\configurations\TransportAuthConfiguration.cpp" />
     <ClCompile Include="ppp\coroutines\YieldContext.cpp" />
+    <ClCompile Include="ppp\cryptography\AuthenticatedRecordProtector.cpp" />
     <ClCompile Include="ppp\cryptography\Ciphertext.cpp" />
     <ClCompile Include="ppp\cryptography\EVP.cpp" />
+    <ClCompile Include="ppp\cryptography\RecordKeyDerivation.cpp" />
     <ClCompile Include="ppp\cryptography\noise\NoisePsk.cpp" />
     <ClCompile Include="ppp\cryptography\md5.cpp" />
     <ClCompile Include="ppp\cryptography\rc4.cpp" />
@@ -873,6 +875,7 @@
     <ClInclude Include="ppp\app\PppApplicationInternal.h" />
     <ClInclude Include="ppp\auxiliary\StringAuxiliary.h" />
     <ClInclude Include="ppp\auxiliary\UriAuxiliary.h" />
+    <ClInclude Include="ppp\cryptography\AuthenticatedRecordProtector.h" />
     <ClInclude Include="ppp\cryptography\Ciphertext.h" />
     <ClInclude Include="ppp\DateTime.h" />
     <ClInclude Include="ppp\diagnostics\Stopwatch.h" />
@@ -916,6 +919,7 @@
     <ClInclude Include="ppp\coroutines\asio\asio.h" />
     <ClInclude Include="ppp\coroutines\YieldContext.h" />
     <ClInclude Include="ppp\cryptography\EVP.h" />
+    <ClInclude Include="ppp\cryptography\RecordKeyDerivation.h" />
     <ClInclude Include="ppp\cryptography\noise\NoisePsk.h" />
     <ClInclude Include="ppp\cryptography\md5.h" />
     <ClInclude Include="ppp\cryptography\rc4.h" />

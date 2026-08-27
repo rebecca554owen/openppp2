@@ -206,7 +206,7 @@ namespace ppp {
 
                     // Zero-copy: wrap the options region into a shared_ptr slice backed by owner.
                     options_->Length = options_size;
-                    options_->Buffer = ppp::wrap_shared_pointer(reinterpret_cast<ppp::Byte*>(packet) + sizeof(struct ip_hdr), owner);
+                    options_->Buffer = ppp::wrap_shared_pointer(reinterpret_cast<ppp::Byte*>(const_cast<void*>(packet)) + sizeof(struct ip_hdr), owner);
                     if (NULLPTR == options_->Buffer) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpFrameParseOptionsBufferAllocFailed);
                         return NULLPTR;
@@ -225,7 +225,7 @@ namespace ppp {
 
                     // Zero-copy: wrap the payload region into a shared_ptr slice backed by owner.
                     messages_->Length = message_size_;
-                    messages_->Buffer = ppp::wrap_shared_pointer(reinterpret_cast<ppp::Byte*>(packet) + iphdr_hlen, owner);
+                    messages_->Buffer = ppp::wrap_shared_pointer(reinterpret_cast<ppp::Byte*>(const_cast<void*>(packet)) + iphdr_hlen, owner);
                     if (NULLPTR == messages_->Buffer) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpFrameParsePayloadBufferAllocFailed);
                         return NULLPTR;
@@ -268,6 +268,10 @@ namespace ppp {
 
                 int szz = messages->Length;
                 max = (max >> 3) << 3;
+                if (max <= 0) {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IpFrameSubpackagesInvalidMaxFragmentSize);
+                    return 0;
+                }
                 if (szz <= max) {
                     out.emplace_back(packet);
                     return 1;
