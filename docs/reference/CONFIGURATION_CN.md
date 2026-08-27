@@ -503,6 +503,103 @@ key.kf / key.kh / key.kl / key.kx / key.sb —— 非法值时重置为框架内
 原始证据，并满足 [`VMUX_VALIDATION_CN.md`](VMUX_VALIDATION_CN.md)
 规定的双平台 benchmark、兼容、有界内存与 sanitizer 门槛。
 
+### 7.7 `transport-auth` 块——数据面认证（推荐默认开启）
+
+`transport-auth`（TA）提供数据面握手认证。TA 握手完成后，数据面由
+`AuthenticatedRecordProtector` 接管，成为真正的认证加密（AEAD）记录层。
+记录层使用的 AEAD 算法由 `key.transport` 选择（必须是 OpenSSL 支持的
+GCM / CCM / ChaCha20-Poly1305），推荐 `aes-256-gcm`。
+
+记录密钥只来自 Noise 握手导出（`record_root`，经 HKDF 仅做方向/用途分离）；
+`protocol-key` / `transport-key` 只服务握手与 legacy framing，不参与记录加密。
+
+#### 如何生成 key
+
+```bash
+# 生成 64 个小写 hex 字符（= 32 字节随机 secret），双端放相同内容
+python3 -c "import secrets; print(secrets.token_hex(32))" > transport.key
+chmod 600 transport.key
+```
+
+或用内置命令直接生成文件（自动 64 字符无换行 + 0600 权限，写后回读校验）：
+
+```bash
+./bin/ppp --transport-auth-key=./secrets/transport.key
+```
+
+secret 文件必须运行时生成并部署挂载，**不随仓库提交**。secret-file 硬校验
+（`TransportAuthConfiguration.cpp`，不满足拒绝启动）：
+
+- 文件必须恰好 **64 个小写 hex 字符**（无换行符，表示 32 字节）
+- 属主必须为当前运行 uid；group/other 任何权限位都必须为 0（即 `600`）
+- 不能复用 `protocol-key`/`transport-key`（16 字符且非 hex）
+
+#### 如何启用（双端都要）
+
+```json
+{
+    "transport-auth": {
+        "handshake-timeout-ms": 5000,
+        "keys": [
+            { "id": "primary", "state": "active", "secret-file": "./secrets/transport.key" }
+        ]
+    },
+    "server": { "transport-auth": { "enabled": true } },
+    "client": { "transport-auth": { "enabled": true } }
+}
+```
+
+- 顶层 `transport-auth.keys` 双端都要，内容一致；`state` 支持 `active`/`verify-only`/`revoked`
+- `server.transport-auth.enabled` + `client.transport-auth.enabled` 必须同时为 `true` 才激活
+- 两端 enabled 不对称会被拒绝（不静默降级）；loopback 与 LAN 一样执行认证
+- 一次连接在握手时固定使用协商出的 `key-id`，连接内不切换
+- docker 容器需挂载 secret 文件，容器内路径与 `secret-file` 一致
+
+#### 轮换示例
+
+```json
+{
+    "transport-auth": {
+        "handshake-timeout-ms": 5000,
+        "keys": [
+            { "id": "primary",   "state": "active",      "secret-file": "./secrets/transport.key" },
+            { "id": "previous",  "state": "verify-only",  "secret-file": "./secrets/previous.key" }
+        ]
+    }
+}
+```
+
+轮换流程：
+
+1. 部署新 key（`active`），旧 key 保留为 `verify-only`：新连接用新 key，旧客户端仍可验证
+2. 排空旧连接后，把旧 key 改为 `revoked`（或删除条目）
+3. `revoked` 条目不会加载 secret，也不参与任何连接
+
+#### 推荐配置：aes-256-gcm（纯 EVP AEAD）
+
+```json
+"key": {
+    "kf": 154543927,
+    "protocol": "aes-128-cfb",
+    "protocol-key": "N6HMzdUs7IUnYHwq",
+    "transport": "aes-256-gcm",
+    "transport-key": "HWFweXu2g5RVMEpy",
+    "simd-auto": false,
+    "masked": false,
+    "plaintext": false,
+    "delta-encode": false,
+    "shuffle-data": false
+}
+```
+
+- `transport` 层用 `aes-256-gcm`：GCM 名强制走 OpenSSL EVP AEAD 认证路径（SIMD 无
+  认证 tag，GCM 永不转 simd）
+- `protocol` 层必须保持非 GCM（如 `aes-128-cfb`）：帧头 2 字节长度字段装不下
+  GCM 16B tag，protocol 层 GCM 会导致握手帧解码失败（190 ProtocolDecodeFailed）
+- `simd-auto: false`：裸名（不带 `simd-` 前缀）不在自研 SIMD 表内，关闭自动提升
+  即保证纯 OpenSSL EVP 路径。默认 `true` 会把裸 CFB 名透明提升回 `simd-` 变体
+- 命令行开关无单独 TA 参数，全部由 JSON 控制
+
 ---
 
 ## 8. IPv6 Server 行为
