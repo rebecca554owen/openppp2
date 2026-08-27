@@ -145,6 +145,66 @@ BOOST_AUTO_TEST_CASE(secret_loader_rejects_mode_symlink_hex_and_length) {
     BOOST_TEST(!LoadTransportAuthSecretFile(link, secret, &error));
 }
 
+BOOST_AUTO_TEST_CASE(generate_transport_auth_secret_file_writes_owner_only_key) {
+    TempDirectory temp;
+    std::string error;
+    const std::string path = temp.Path("generated.key");
+    temp.Track(path);
+
+    BOOST_REQUIRE(GenerateTransportAuthSecretFile(path, &error));
+
+    struct stat st{};
+    BOOST_REQUIRE(stat(path.c_str(), &st) == 0);
+    BOOST_TEST(S_ISREG(st.st_mode));
+    BOOST_TEST((st.st_mode & (S_IRWXG | S_IRWXO)) == 0);
+    BOOST_TEST(st.st_size == static_cast<off_t>(TransportAuthSecret::Size * 2));
+
+    // The generated file must satisfy the runtime loader's hard checks verbatim.
+    TransportAuthSecret secret;
+    BOOST_TEST(LoadTransportAuthSecretFile(path, secret, &error));
+
+    // Pin the canonical shape explicitly: 64 lowercase hex characters, no newline.
+    std::ifstream stream(path.c_str(), std::ios::binary);
+    const std::string contents((std::istreambuf_iterator<char>(stream)),
+                               std::istreambuf_iterator<char>());
+    BOOST_TEST(contents.size() == TransportAuthSecret::Size * 2);
+    BOOST_TEST(contents.find_first_not_of("0123456789abcdef") == std::string::npos);
+
+    // Fresh random bytes on every generation.
+    const std::string second = temp.Path("generated2.key");
+    temp.Track(second);
+    BOOST_REQUIRE(GenerateTransportAuthSecretFile(second, &error));
+    std::ifstream stream2(second.c_str(), std::ios::binary);
+    const std::string contents2((std::istreambuf_iterator<char>(stream2)),
+                                std::istreambuf_iterator<char>());
+    BOOST_TEST(contents != contents2);
+}
+
+BOOST_AUTO_TEST_CASE(generate_transport_auth_secret_file_fails_closed) {
+    TempDirectory temp;
+    std::string error;
+
+    BOOST_TEST(!GenerateTransportAuthSecretFile("", &error));
+    BOOST_TEST(!error.empty());
+
+    // Parent is a regular file: open(2) must fail (ENOTDIR even as root) and
+    // no partial file may be left behind.
+    const std::string parent = temp.Write("parent", "blocker");
+    const std::string nested = parent + "/child.key";
+    BOOST_TEST(!GenerateTransportAuthSecretFile(nested, &error));
+    struct stat st{};
+    BOOST_TEST(stat(nested.c_str(), &st) != 0);
+
+    // A symlink path passes open(2) but fails the loader's O_NOFOLLOW check;
+    // generation must remove the symlink and report failure (read-back path).
+    const std::string target = temp.Write("symtarget", kSecretA);
+    const std::string link = temp.Path("symlink.key");
+    BOOST_REQUIRE(symlink(target.c_str(), link.c_str()) == 0);
+    temp.Track(link);
+    BOOST_TEST(!GenerateTransportAuthSecretFile(link, &error));
+    BOOST_TEST(lstat(link.c_str(), &st) != 0);
+}
+
 BOOST_AUTO_TEST_CASE(successful_builds_advance_and_failed_build_retains_published_snapshot) {
     TempDirectory temp;
     const std::string path = temp.Write("secret", kSecretA);
