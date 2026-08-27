@@ -1,4 +1,0 @@
-/home/openppp2/.tmp-v215-build/CMakeFiles/openppp2_lib.dir
-/home/openppp2/.tmp-v215-build/CMakeFiles/ppp.dir
-/home/openppp2/.tmp-v215-build/CMakeFiles/edit_cache.dir
-/home/openppp2/.tmp-v215-build/CMakeFiles/rebuild_cache.dir
