@@ -823,7 +823,7 @@ namespace vmux {
         bool                                                                        mux_mode_set_pushed_ = false; ///< One-shot guard for the debug mux-mode-set push.
         uint64_t                                                                    mux_mode_set_last_accept_ = 0; ///< Tick of last accepted mux-mode-set (rate limit).
         int                                                                         mux_mode_set_reject_streak_ = 0; ///< Consecutive rejected mux-mode-set frames (rate-limit log spam).
-        uint32_t                                                                    next_connection_id_ = 0; ///< Session-local connection_id allocator (never reuses within a session until wrap).
+        uint64_t                                                                    next_connection_id_ = 0; ///< Session-local connection_id allocator (never reuses within a session until wrap). (H1 fix: 64-bit)
         bool                                                                        connection_id_wrap_ = false; ///< True after connection id space exhausted; refuse new logical connects.
         size_t                                                                      stripe_cursor_ = 0; ///< Round-robin cursor over rx_links_ (stripe mode).
 
@@ -832,6 +832,7 @@ namespace vmux {
         vmux::unordered_map<uint32_t, uint32_t>                                     tx_flow_seq_;       ///< connection_id -> next per-flow DSN to send (flow v2 only).
         size_t                                                                      flow_reorder_cap_bytes_ = 0; ///< Per-connection reorder buffer byte cap (from config).
         size_t                                                                      session_reorder_cap_bytes_ = 0; ///< Session-wide reorder byte cap (from config).
+        std::atomic<bool>                                                           update_pending_{false}; ///< H3 fix: dedupe update() postings */
         size_t                                                                      session_reorder_bytes_ = 0; ///< Current session-wide buffered reorder bytes.
         size_t                                                                      flow_context_cap_       = 0; ///< Max concurrent flow receive contexts (DoS bound).
         size_t                                                                      flow_aggregate_cap_bytes_ = 0; ///< Aggregate reorder bytes across all flow contexts.

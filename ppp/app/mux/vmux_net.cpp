@@ -1131,6 +1131,12 @@ namespace vmux {
             return false;
         }
 
+        // H3 fix: dedupe update() postings. If an update is already pending on the strand,
+        // skip posting a new one to prevent unbounded queue growth under load.
+        if (update_pending_.exchange(true, std::memory_order_acq_rel)) {
+            return false;  // Already pending
+        }
+
         std::shared_ptr<vmux_net> self = shared_from_this();
         bool posted = vmux_post_exec(context_, strand_,
             [self, this]() noexcept {
@@ -1349,9 +1355,12 @@ namespace vmux {
                     ppp::telemetry::Gauge("mux.rx.reorder.depth", static_cast<int64_t>(rx_queue_.size()));
                     ppp::telemetry::Gauge("mux.link.count", static_cast<int64_t>(rx_links_.size()));
                 }
+
+                update_pending_.store(false, std::memory_order_release);  // H3 fix: allow next update
             });
 
         if (!posted) {
+            update_pending_.store(false, std::memory_order_release);  // H3 fix: allow next update on failure
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
         }
 
@@ -2403,13 +2412,27 @@ namespace vmux {
             return;
         }
 
+        // H2 fix: try to acquire the shard lock without blocking. If the strand is busy,
+        // just re-arm the timer and retry next tick instead of queuing up callbacks.
+        std::unique_lock<SynchronizationObject> lock(syncobj_, std::try_to_lock);
+        if (!lock.owns_lock()) {
+            // Strand is busy; re-arm timer and retry next tick.
+            std::weak_ptr<vmux_net> weak = weak_from_this();
+            reliability_timer_->expires_after(std::chrono::milliseconds(PPP_MUX_RELIABILITY_TIMER_MS));
+            reliability_timer_->async_wait(
+                [weak](const boost::system::error_code& ec) noexcept {
+                    if (ec) {
+                        return;
+                    }
+                    if (std::shared_ptr<vmux_net> self = weak.lock()) {
+                        self->reliability_tick();
+                    }
+                });
+            return;
+        }
+
         const uint64_t now = now_tick();
         if (base_.established_ && reliability_on_) {
-            SynchronizationObjectScope __SCOPE__(syncobj_);
-            if (base_.disposed_.load(std::memory_order_acquire)) {
-                return;
-            }
-
             maybe_send_ack(now, false);
 
             rtx_.CollectExpired(now, current_pto(), (size_t)PPP_MUX_RELIABILITY_RXT_BURST, rtx_pending_);
@@ -2755,7 +2778,7 @@ namespace vmux {
 
     /** @brief Generates a non-zero session-local connection identifier.
      *  @details IDs are allocated from a per-session counter and never reused
-     *           within the session. When the 32-bit space wraps, further
+     *           within the session. When the 64-bit space wraps, further
      *           allocation fails (returns 0) so callers rebuild the session
      *           rather than risk delayed frames landing on a recycled cid.
      */
@@ -2772,29 +2795,25 @@ namespace vmux {
             }
         }
 
-        for (uint32_t attempts = 0; attempts < 0xffffffffu; ++attempts) {
-            uint32_t n = next_connection_id_++;
-            if (next_connection_id_ == 0) {
-                // Exhausted; mark wrap so we do not recycle within this session.
-                connection_id_wrap_ = true;
-                if (n != 0 && skts_.find(n) == skts_.end()) {
-                    return n;
-                }
-                ppp::telemetry::Count("mux.cid.wrap", 1);
-                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
-                    "connection id space exhausted; refuse new logical connections until session rebuild");
-                return 0;
-            }
+        // H1 fix: 64-bit counter avoids 32-bit wrap exhaustion.
+        // After ~4 billion connections, the 64-bit counter continues incrementing,
+        // searching for a free 32-bit ID (old connections should have been recycled by then).
+        for (uint64_t attempts = 0; attempts < UINT32_MAX; ++attempts) {
+            uint64_t n64 = next_connection_id_++;
+            uint32_t n = static_cast<uint32_t>(n64);
             if (n == 0) {
-                continue;
+                continue;  // Skip 0 (reserved)
             }
             if (skts_.find(n) == skts_.end()) {
                 return n;
             }
-            // Extremely unlikely collision with an in-flight id; try next.
+            // Collision with in-flight id; try next.
         }
 
         connection_id_wrap_ = true;
+        ppp::telemetry::Count("mux.cid.wrap", 1);
+        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
+            "connection id space exhausted; refuse new logical connections until session rebuild");
         return 0;
     }
 
