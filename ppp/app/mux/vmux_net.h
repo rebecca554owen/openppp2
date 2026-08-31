@@ -8,6 +8,8 @@
 
 #include "vmux.h"
 #include <cstdint>
+#include <unordered_set>
+#include <vector>
 #include <ppp/app/mux/MuxFlowReorderBuffer.h>
 #include <ppp/app/mux/MuxFlowContextAdmission.h>
 #include <ppp/app/mux/IMuxTransport.h>
@@ -508,7 +510,7 @@ namespace vmux {
         /** @brief Finish one completion and remove it from the pending registry. */
         void                                                                        finish_tx_completion(const tx_completion_ptr& completion, bool successed) noexcept;
         /** @brief Finish a detached completion list without holding VMUX state locks. */
-        static void                                                                 finish_tx_completions(tx_completion_list& completions, bool successed) noexcept;
+        static void                                                                 finish_tx_completions(std::vector<tx_completion_ptr>& completions, bool successed) noexcept;
         /** @brief Fail every accepted TX completion that has not finished yet. */
         void                                                                        fail_pending_tx_completions() noexcept;
         /** @brief Begin terminal close once and fail outstanding user completions. */
@@ -802,7 +804,18 @@ namespace vmux {
          * touching queues, links, maps, or socket state off strand.
          */
         mutable std::mutex                                                          tx_completion_mutex_;
-        tx_completion_list                                                          pending_tx_completions_;
+        // M5 fix: use unordered_set for O(1) completion lookup instead of linear scan
+        struct tx_completion_hash {
+            size_t operator()(const tx_completion_ptr& p) const noexcept {
+                return reinterpret_cast<size_t>(p.get());
+            }
+        };
+        struct tx_completion_eq {
+            bool operator()(const tx_completion_ptr& a, const tx_completion_ptr& b) const noexcept {
+                return a.get() == b.get();
+            }
+        };
+        std::unordered_set<tx_completion_ptr, tx_completion_hash, tx_completion_eq> pending_tx_completions_;
         bool                                                                        close_requested_ = false;
         mutable std::mutex                                                          runtime_state_mutex_; ///< Guards runtime_state_ writes; prefer strand.
         ppp::app::mux::MuxRuntimeState                                               runtime_state_;       ///< Authoritative runtime facts.

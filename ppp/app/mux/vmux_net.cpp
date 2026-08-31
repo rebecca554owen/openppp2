@@ -406,8 +406,8 @@ namespace vmux {
             std::lock_guard<std::mutex> scope(tx_completion_mutex_);
             if (!close_requested_) {
                 try {
-                    pending_tx_completions_.emplace_back(completion);
-                    accepted = true;
+                    // M5 fix: use unordered_set insert
+                    accepted = pending_tx_completions_.insert(completion).second;
                 }
                 catch (...) {
                 }
@@ -427,22 +427,14 @@ namespace vmux {
 
         {
             std::lock_guard<std::mutex> scope(tx_completion_mutex_);
-            for (tx_completion_list::iterator it = pending_tx_completions_.begin(); it != pending_tx_completions_.end();) {
-                if (*it == completion) {
-                    it = pending_tx_completions_.erase(it);
-                }
-                else {
-                    ++it;
-                }
-            }
+            // M5 fix: O(1) hash lookup instead of linear scan
+            pending_tx_completions_.erase(completion);
         }
         completion->Finish(successed);
     }
 
-    void vmux_net::finish_tx_completions(tx_completion_list& completions, bool successed) noexcept {
-        while (!completions.empty()) {
-            tx_completion_ptr completion = std::move(completions.front());
-            completions.pop_front();
+    void vmux_net::finish_tx_completions(std::vector<tx_completion_ptr>& completions, bool successed) noexcept {
+        for (auto& completion : completions) {
             if (NULLPTR != completion) {
                 completion->Finish(successed);
             }
@@ -450,25 +442,37 @@ namespace vmux {
     }
 
     void vmux_net::fail_pending_tx_completions() noexcept {
-        tx_completion_list completions;
+        std::vector<tx_completion_ptr> completions;
         {
             std::lock_guard<std::mutex> scope(tx_completion_mutex_);
-            completions.swap(pending_tx_completions_);
+            completions.reserve(pending_tx_completions_.size());
+            for (auto& c : pending_tx_completions_) {
+                completions.push_back(c);
+            }
+            pending_tx_completions_.clear();
         }
-        finish_tx_completions(completions, false);
+        for (auto& c : completions) {
+            c->Finish(false);
+        }
     }
 
     bool vmux_net::begin_close() noexcept {
-        tx_completion_list completions;
+        std::vector<tx_completion_ptr> completions;
         {
             std::lock_guard<std::mutex> scope(tx_completion_mutex_);
             if (close_requested_) {
                 return false;
             }
             close_requested_ = true;
-            completions.swap(pending_tx_completions_);
+            completions.reserve(pending_tx_completions_.size());
+            for (auto& c : pending_tx_completions_) {
+                completions.push_back(c);
+            }
+            pending_tx_completions_.clear();
         }
-        finish_tx_completions(completions, false);
+        for (auto& c : completions) {
+            c->Finish(false);
+        }
         return true;
     }
 
