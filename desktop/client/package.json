@@ -1,7 +1,7 @@
 {
   "name": "openppp2-client",
   "private": true,
-  "version": "2.1.8",
+  "version": "2.1.9",
   "type": "module",
   "scripts": {
     "dev": "vite",
