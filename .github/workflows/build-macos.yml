@@ -1,7 +1,7 @@
 # Copyright  : Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.
 # Description: PPP PRIVATE NETWORK(TM) 2 – macOS builds (arm64 & x86_64).
 # Author     : OpenCode.
-# Date-Time  : 2026/05/03
+# Date-Time  : 2026-05-03
 
 name: Build · macOS
 
@@ -15,6 +15,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  BOOST_VERSION: "1.86.0"
+  OPENSSL_VERSION: "4.0.2"
+  JEMALLOC_VERSION: "5.3.1"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -23,15 +26,82 @@ jobs:
     runs-on: macos-latest
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(github.event_name == 'pull_request' && '{"include":[{"arch":"arm64","third_repo":"Liz-Nozomi/openppp2-macos-arm64-environment"}]}' || '{"include":[{"arch":"arm64","third_repo":"Liz-Nozomi/openppp2-macos-arm64-environment"},{"arch":"x86_64","third_repo":"liulilittle/openppp2-macos-amd64-environment"}]}') }}
+      matrix:
+        arch: [arm64, x86_64]
 
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - name: Clone third-party environment
-        run: git clone --depth 1 "https://github.com/${{ matrix.third_repo }}.git" "${{ runner.temp }}/3rd"
+      - name: Install build dependencies
+        run: |
+          brew install autoconf automake libtool
+
+      - name: Set architecture
+        id: arch
+        run: |
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            echo "flags=-arch arm64" >> $GITHUB_OUTPUT
+            echo "b2_props=architecture=arm address-model=64 abi=aapcs" >> $GITHUB_OUTPUT
+          else
+            echo "flags=-arch x86_64" >> $GITHUB_OUTPUT
+            echo "b2_props=architecture=x86 address-model=64 abi=sysv" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Cache third-party libraries
+        id: cache-third
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/third-party
+          key: macos-${{ matrix.arch }}-deps-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+
+      - name: Build Boost
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p third-party && cd third-party
+          curl -L -o boost.tar.bz2 "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION//./_}.tar.bz2"
+          tar -xjf boost.tar.bz2 && rm -rf boost boost.tar.bz2
+          mv boost_* boost
+          cd boost && ./bootstrap.sh && ./b2 cxxflags="-fPIC ${{ steps.arch.outputs.flags }}" linkflags="${{ steps.arch.outputs.flags }}" ${{ steps.arch.outputs.b2_props }} --with-system --with-context --with-coroutine --with-thread --with-filesystem --with-regex --stagedir=stage -j$(sysctl -n hw.logicalcpu)
+          cd ../..
+
+      - name: Build jemalloc
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        run: |
+          cd third-party
+          curl -L -o jemalloc.tar.bz2 "https://github.com/jemalloc/jemalloc/releases/download/${JEMALLOC_VERSION}/jemalloc-${JEMALLOC_VERSION}.tar.bz2"
+          tar -xjf jemalloc.tar.bz2 && rm -rf jemalloc jemalloc.tar.bz2
+          mv jemalloc-* jemalloc
+          cd jemalloc
+          CFLAGS="${{ steps.arch.outputs.flags }}" LDFLAGS="${{ steps.arch.outputs.flags }}" \
+            ./autogen.sh --with-jemalloc-prefix=je_ --disable-shared --enable-static
+          make -j$(sysctl -n hw.logicalcpu)
+          cd ../..
+
+      - name: Build OpenSSL
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        run: |
+          cd third-party
+          curl -L -o openssl.tar.gz "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+          tar -xzf openssl.tar.gz && rm -rf openssl openssl-src openssl.tar.gz
+          mv openssl-* openssl-src
+          cd openssl-src
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            OPENSSL_CONF="darwin64-arm64-cc"
+          else
+            OPENSSL_CONF="darwin64-x86_64-cc"
+          fi
+          CC=/usr/bin/clang RANLIB=/usr/bin/ranlib AR=/usr/bin/ar \
+            ./Configure ${OPENSSL_CONF} \
+            --prefix="$PWD/../openssl" \
+            no-shared no-tests
+          make -j$(sysctl -n hw.logicalcpu) RANLIB=/usr/bin/ranlib AR=/usr/bin/ar
+          make install_sw RANLIB=/usr/bin/ranlib AR=/usr/bin/ar
+          cd ..
+          ln -sf lib/libssl.a openssl/libssl.a
+          ln -sf lib/libcrypto.a openssl/libcrypto.a
+          cd ../..
 
       - name: Compute version label
         id: ver
@@ -43,14 +113,13 @@ jobs:
 
       - name: Build openppp2
         run: |
-          TP="${{ runner.temp }}/3rd"
           mkdir -p build && cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-            -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
+            -DTHIRD_PARTY_LIBRARY_DIR="${{ github.workspace }}/third-party" \
             -DPPP_APPLICATION_VERSION="${{ steps.ver.outputs.label }}"
           make -j$(sysctl -n hw.physicalcpu)
 
@@ -65,5 +134,3 @@ jobs:
           name: ${{ env.ARTIFACT }}
           path: bin/${{ env.ARTIFACT }}
           if-no-files-found: error
-
-  # ── AddressSanitizer diagnostic build (macOS) ──────────────────────
