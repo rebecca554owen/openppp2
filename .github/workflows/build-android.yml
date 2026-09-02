@@ -62,7 +62,7 @@ jobs:
           path: |
             ${{ runner.temp }}/ndk
             ${{ runner.temp }}/third-party
-          key: android-${{ matrix.abi }}-ndk${{ env.NDK_VERSION }}-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-ubuntu-${{ env.CACHE_VERSION }}
+          key: android-${{ matrix.abi }}-ndk${{ env.NDK_VERSION }}-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}
           restore-keys: |
             android-${{ matrix.abi }}-ndk${{ env.NDK_VERSION }}-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-ubuntu-
 

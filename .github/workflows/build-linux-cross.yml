@@ -52,7 +52,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/third-party
-          key: ${{ env.RUNNER_IMAGE }}-cross-${{ matrix.third_dir }}-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+          key: linux-${{ matrix.third_dir }}-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
           restore-keys: |
             ${{ env.RUNNER_IMAGE }}-cross-${{ matrix.third_dir }}-boost${{ env.BOOST_VERSION }}-
 
