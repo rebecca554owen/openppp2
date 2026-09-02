@@ -31,7 +31,8 @@ namespace ppp
 
         public:
             TapDarwin(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& dev, void* tun, uint32_t address, uint32_t gw, uint32_t mask, bool hosted_network) noexcept;
-            
+            virtual ~TapDarwin() noexcept override;
+
         public:
             ppp::vector<boost::asio::ip::address>&          GetDnsAddresses() noexcept { return dns_addresses_; }
             bool&                                           IsPromisc() noexcept       { return promisc_; } 
