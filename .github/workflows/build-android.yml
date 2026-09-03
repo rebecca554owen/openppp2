@@ -17,7 +17,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   ANDROID_API: "21"
-  BOOST_VERSION: "1.86.0"
+  BOOST_VERSION: "1.92.0"
   OPENSSL_VERSION: "4.0.2"
   NDK_VERSION: "r29"
   CACHE_VERSION: "v2.2.0"
@@ -62,9 +62,9 @@ jobs:
           path: |
             ${{ runner.temp }}/ndk
             ${{ runner.temp }}/third-party
-          key: android-${{ matrix.abi }}-ndk${{ env.NDK_VERSION }}-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}
+          key: android-${{ matrix.abi }}-ndk${{ env.NDK_VERSION }}-deps-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}
           restore-keys: |
-            android-${{ matrix.abi }}-ndk${{ env.NDK_VERSION }}-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-ubuntu-
+            android-${{ matrix.abi }}-ndk${{ env.NDK_VERSION }}-deps-v2-
 
       - name: Download NDK ${{ env.NDK_VERSION }}
         if: steps.cache-ndk.outputs.cache-hit != 'true'
@@ -159,8 +159,8 @@ jobs:
               <compileflags>--target=${CLANG_TRIPLE}${ANDROID_API}
               <compileflags>--sysroot=$TOOLCHAIN_DIR/sysroot
               <compileflags>-fPIC
-              <compileflags>-std=c++17
-              <compileflags>-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION
+              <cxxflags>-std=c++17
+              <cxxflags>-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION
               <linkflags>--target=${CLANG_TRIPLE}${ANDROID_API}
               <linkflags>--sysroot=$TOOLCHAIN_DIR/sysroot
           ;
@@ -195,6 +195,9 @@ jobs:
             stage
 
           rm -f "$user_config"
+          # Boost 1.89+ system is header-only; create empty archive for linker compatibility
+          # Must use NDK toolchain tools (not host tools) for Android-compatible object format
+          touch /tmp/empty.c && $TOOLCHAIN_DIR/bin/${CLANG_TRIPLE}${ANDROID_API}-clang -c /tmp/empty.c -o /tmp/empty.o && $TOOLCHAIN_DIR/bin/llvm-ar rcs "$BOOST_OUT_DIR/stage/lib/libboost_system.a" /tmp/empty.o && rm -f /tmp/empty.c /tmp/empty.o
           find "$BOOST_OUT_DIR/stage/lib" -type f -name 'libboost_*.a' -exec cp {} "$BOOST_OUT_DIR/" \;
 
           for lib in system coroutine thread context regex filesystem; do

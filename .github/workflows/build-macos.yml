@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BOOST_VERSION: "1.86.0"
+  BOOST_VERSION: "1.92.0"
   OPENSSL_VERSION: "4.0.2"
   JEMALLOC_VERSION: "5.3.1"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -55,6 +55,8 @@ jobs:
         with:
           path: ${{ github.workspace }}/third-party
           key: macos-${{ matrix.arch }}-deps-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+          restore-keys: |
+            macos-${{ matrix.arch }}-deps-v2-
 
       - name: Build Boost
         if: steps.cache-third.outputs.cache-hit != 'true'
@@ -64,6 +66,8 @@ jobs:
           tar -xjf boost.tar.bz2 && rm -rf boost boost.tar.bz2
           mv boost_* boost
           cd boost && ./bootstrap.sh && ./b2 cxxflags="-fPIC ${{ steps.arch.outputs.flags }}" linkflags="${{ steps.arch.outputs.flags }}" ${{ steps.arch.outputs.b2_props }} --with-system --with-context --with-coroutine --with-thread --with-filesystem --with-regex --stagedir=stage -j$(sysctl -n hw.logicalcpu)
+          # Boost 1.89+ system is header-only; create empty archive for linker compatibility
+          touch /tmp/empty.c && cc -c /tmp/empty.c -o /tmp/empty.o && ar rcs stage/lib/libboost_system.a /tmp/empty.o && rm -f /tmp/empty.c /tmp/empty.o
           cd ../..
 
       - name: Build jemalloc

@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BOOST_VERSION: "1.86.0"
+  BOOST_VERSION: "1.92.0"
   OPENSSL_VERSION: "4.0.2"
   JEMALLOC_VERSION: "5.3.1"
   LIBUNWIND_VERSION: "1.8.1"
@@ -52,9 +52,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/third-party
-          key: linux-${{ matrix.third_dir }}-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+          key: linux-${{ matrix.third_dir }}-deps-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
           restore-keys: |
-            ${{ env.RUNNER_IMAGE }}-cross-${{ matrix.third_dir }}-boost${{ env.BOOST_VERSION }}-
+            linux-${{ matrix.third_dir }}-deps-v2-
 
       - name: Build Boost (cross-compiled)
         if: steps.cache-third.outputs.cache-hit != 'true'
@@ -96,6 +96,9 @@ jobs:
             variant=release \
             --with-system --with-coroutine --with-thread --with-context --with-regex --with-filesystem \
             stage
+          # Boost 1.89+ system is header-only; create empty archive for linker compatibility
+          # Must use cross-toolchain to produce target-compatible object format
+          touch /tmp/empty.c && ${{ matrix.tool_prefix }}gcc -c /tmp/empty.c -o /tmp/empty.o && ${{ matrix.tool_prefix }}ar rcs stage/lib/libboost_system.a /tmp/empty.o && rm -f /tmp/empty.c /tmp/empty.o
 
       - name: Build OpenSSL (cross-compiled)
         if: steps.cache-third.outputs.cache-hit != 'true'
@@ -145,7 +148,7 @@ jobs:
         run: |
           set -euxo pipefail
           TP="${{ github.workspace }}/third-party"
-          grep -Eq "^#define BOOST_VERSION 108600$" "$TP/boost/boost/version.hpp"
+          grep -Eq "^#define BOOST_VERSION 109200$" "$TP/boost/boost/version.hpp"
           test -f "$TP/openssl/libssl.a"
           test -f "$TP/openssl/libcrypto.a"
           test -f "$TP/jemalloc/lib/libjemalloc.a"
