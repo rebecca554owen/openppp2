@@ -171,14 +171,16 @@ namespace ppp {
                 const ContextPtr&                                       context,
                 const StrandPtr&                                        strand,
                 const Int128&                                           id,
-                const std::shared_ptr<boost::asio::ip::tcp::socket>&    socket) noexcept
+                const std::shared_ptr<boost::asio::ip::tcp::socket>&    socket,
+                const ITransmissionStatisticsPtr&                        statistics) noexcept
                 : disposed_(false)
                 , connected_(false)
                 , configuration_(configuration)
                 , context_(context)
                 , strand_(strand)
                 , id_(id)
-                , socket_(socket) {
+                , socket_(socket)
+                , statistics_(statistics) {
 
                 if (NULLPTR != socket) {
 #if defined(_WIN32)
@@ -725,6 +727,11 @@ namespace ppp {
                     return false;
                 }
 
+                // Update traffic statistics: socket -> transmission = outgoing (TX)
+                if (NULLPTR != statistics_) {
+                    statistics_->AddOutgoingTraffic(bytes_transferred);
+                }
+
                 auto self = shared_from_this();
                 return transmission->Write(buffer.get(), bytes_transferred,
                     [self, this, buffer, buffer_size, bytes_transferred](bool ok) noexcept {
@@ -895,6 +902,10 @@ namespace ppp {
                     if (ok) {
                         packets_to_socket++;
                         bytes_to_socket += packet_length;
+                        // Update traffic statistics: transmission -> socket = incoming (RX)
+                        if (NULLPTR != statistics_) {
+                            statistics_->AddIncomingTraffic(packet_length);
+                        }
                         Update();
                     }
                     else {

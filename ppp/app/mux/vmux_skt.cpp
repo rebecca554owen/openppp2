@@ -2,6 +2,7 @@
 #include "vmux_net.h"
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/transmissions/ITransmissionStatistics.h>
 
 /**
  * @file vmux_skt.cpp
@@ -18,7 +19,7 @@ namespace vmux {
      * @param mux Parent vmux multiplexer instance.
      * @param connection_id Non-zero logical connection id.
      */
-    vmux_skt::vmux_skt(const std::shared_ptr<vmux_net>& mux, uint32_t connection_id) noexcept {
+    vmux_skt::vmux_skt(const std::shared_ptr<vmux_net>& mux, uint32_t connection_id, const std::shared_ptr<ppp::transmissions::ITransmissionStatistics>& statistics) noexcept {
         assert(connection_id != 0 && "The connect_id cannot be set to 0.");
 
         vmux_skt* const skt           = this;
@@ -35,10 +36,11 @@ namespace vmux {
         uint64_t now                  = mux->now_tick();
         skt->mux_                     = mux;
         skt->last_                    = now;
-      
+
         skt->connection_id_           = connection_id;
-        skt->tx_strand_               = mux_->strand_;
-        skt->tx_context_              = mux_->context_;
+        skt->tx_strand_               = mux->strand_;
+        skt->tx_context_              = mux->context_;
+        skt->statistics_              = statistics;
     }
 
     /** @brief Finalize vmux socket resources on destruction. */
@@ -552,6 +554,11 @@ namespace vmux {
             }
         }
 
+        // Update traffic statistics: VMUX -> socket = incoming (RX)
+        if (NULLPTR != statistics_) {
+            statistics_->AddIncomingTraffic(payload_size);
+        }
+
         rx_queue_.emplace_back(packet{ buffer,  payload_size });
         if (status_.sending_) {
             return true;
@@ -634,6 +641,11 @@ namespace vmux {
         if (NULLPTR == packet || packet_length < 1) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendYieldInvalidPayload);
             return false;
+        }
+
+        // Update traffic statistics: socket -> VMUX = outgoing (TX)
+        if (NULLPTR != statistics_) {
+            statistics_->AddOutgoingTraffic(packet_length);
         }
 
         std::shared_ptr<vmux_net::atomic_int> status = ppp::make_shared_object<vmux_net::atomic_int>(-1);

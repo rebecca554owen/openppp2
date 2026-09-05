@@ -62,6 +62,7 @@
 #include <ppp/threading/Timer.h>
 #include <ppp/auxiliary/UriAuxiliary.h>
 #include <ppp/transmissions/ITcpipTransmission.h>
+#include <ppp/transmissions/ITransmissionStatistics.h>
 #include <ppp/app/client/ExchangerStaticEchoChannel.h>
 #include <ppp/app/client/ClientKeepAlivePolicy.h>
 #include <ppp/app/client/ClientReconnectionPolicy.h>
