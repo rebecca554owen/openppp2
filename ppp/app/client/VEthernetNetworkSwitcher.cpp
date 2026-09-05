@@ -156,7 +156,8 @@ namespace ppp {
                 , remote_endpoint_loader_(std::make_unique<RemoteEndpointLoader>())
                 , timeout_registry_(std::make_unique<SwitcherTimeoutRegistry>())
                 , information_extensions_(std::make_unique<VirtualEthernetInformationExtensions>())
-                , icmppackets_aid_(0) {
+                , icmppackets_aid_(0)
+                , statistics_(ppp::make_shared_object<ppp::transmissions::ITransmissionStatistics>()) {
 
                 address_manager_->Bind(this);
                 teardown_->Bind(this);
