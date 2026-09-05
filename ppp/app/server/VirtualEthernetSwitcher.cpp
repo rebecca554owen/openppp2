@@ -3891,13 +3891,11 @@ namespace ppp {
                     ITransmissionStatisticsPtr                          owner_;
                 };
 
-                VirtualEthernetManagedServerPtr server = managed_server_;
-                if (NULLPTR == server) {
-                    return statistics_;
-                }
-                else {
-                    return make_shared_object<NetworkStatistics>(statistics_);
-                }
+                // Return the aggregate statistics object directly so that
+                // cumulative counters (updated by VMUX, connections, etc.)
+                // are visible to callers. The per-connection NetworkStatistics
+                // wrapper is only needed for per-connection accounting.
+                return statistics_;
             }
 
             /**

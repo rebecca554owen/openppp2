@@ -35,6 +35,9 @@ namespace ppp {
                     return 1;
                 }
 
+                // Get traffic statistics tracker from switcher
+                std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics = switcher->GetStatistics();
+
                 class VEthernetRinetdConnection final : public RinetdConnection {
                 public:
                     VEthernetRinetdConnection(
@@ -42,8 +45,9 @@ namespace ppp {
                         const std::shared_ptr<ppp::configurations::AppConfiguration>&   configuration,
                         const std::shared_ptr<boost::asio::io_context>&                 context,
                         const ppp::threading::Executors::StrandPtr&                     strand,
-                        const std::shared_ptr<boost::asio::ip::tcp::socket>&            local_socket) noexcept
-                            : RinetdConnection(configuration, context, strand, local_socket)
+                        const std::shared_ptr<boost::asio::ip::tcp::socket>&            local_socket,
+                        const std::shared_ptr<ppp::transmissions::ITransmissionStatistics>& statistics) noexcept
+                            : RinetdConnection(configuration, context, strand, local_socket, statistics)
                             , owner_(owner) {
                     }
                     virtual ~VEthernetRinetdConnection() noexcept {
@@ -73,7 +77,7 @@ namespace ppp {
                 };
 
                 std::shared_ptr<VEthernetRinetdConnection> connection_rinetd =
-                    make_shared_object<VEthernetRinetdConnection>(reference, configuration, context, strand, socket);
+                    make_shared_object<VEthernetRinetdConnection>(reference, configuration, context, strand, socket, statistics);
                 if (NULLPTR == connection_rinetd) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                     return -1;
