@@ -4,9 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag，如 v1.0.0'
+        description: 'Release tag（如 v1.0.0），必填'
         required: true
-        default: 'v2.0.0'
       arch:
         description: '发布架构：amd64（默认）或 all（amd64+arm64）'
         required: false

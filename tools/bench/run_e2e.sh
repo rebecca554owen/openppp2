@@ -18,7 +18,8 @@ CLIENT_MODE="${BENCH_CLIENT_MODE:-proxy}"
 for command in "$PPP_BIN" iperf3; do
     command -v "$command" >/dev/null || { echo "missing $command" >&2; exit 1; }
 done
-if [ "$(id -u)" -ne 0 ]; then
+# Skip root check for proxy mode without TUN (benchmarking)
+if [ "$(id -u)" -ne 0 ] && [[ "$CLIENT_MODE" != "proxy" || "$*" == *"--tun-host=yes"* || "$*" == *"--tun-vnet=yes"* ]]; then
     echo "run_e2e.sh requires root for the VPN processes" >&2
     exit 1
 fi

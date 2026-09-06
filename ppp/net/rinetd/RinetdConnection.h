@@ -7,6 +7,7 @@
 
 #include <ppp/threading/Executors.h>
 #include <ppp/coroutines/YieldContext.h>
+#include <ppp/transmissions/ITransmissionStatistics.h>
 
 #if defined(_WIN32)
 #include <windows/ppp/net/QoSS.h>
@@ -53,8 +54,9 @@ namespace ppp {
                  * @param context I/O context used for async operations.
                  * @param strand Optional strand used to serialize callbacks.
                  * @param local_socket Accepted inbound socket.
+                 * @param statistics Optional traffic statistics tracker.
                  */
-                RinetdConnection(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& local_socket) noexcept;
+                RinetdConnection(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& local_socket, const std::shared_ptr<ppp::transmissions::ITransmissionStatistics>& statistics) noexcept;
 
                 /** @brief Destroys the relay and releases native resources. */
                 virtual ~RinetdConnection() noexcept;
@@ -149,7 +151,7 @@ namespace ppp {
                     bool                                                                disposed_  : 1;
                     bool                                                                connected_ : 7;
                 };
-                UInt64                                                                  timeout_   = 0; 
+                UInt64                                                                  timeout_   = 0;
                 std::shared_ptr<boost::asio::io_context>                                context_;
                 ppp::threading::Executors::StrandPtr                                    strand_;
                 std::shared_ptr<boost::asio::ip::tcp::socket>                           local_socket_;
@@ -157,6 +159,7 @@ namespace ppp {
                 std::shared_ptr<Byte>                                                   local_buffer_;
                 std::shared_ptr<Byte>                                                   remote_buffer_;
                 std::shared_ptr<ppp::configurations::AppConfiguration>                  configuration_;
+                std::shared_ptr<ppp::transmissions::ITransmissionStatistics>          statistics_;
             };
         }
     }

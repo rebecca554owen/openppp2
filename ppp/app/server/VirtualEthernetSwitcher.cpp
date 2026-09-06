@@ -3855,48 +3855,18 @@ namespace ppp {
              * @return Shared statistics collector.
              */
             VirtualEthernetSwitcher::ITransmissionStatisticsPtr VirtualEthernetSwitcher::NewStatistics() noexcept {
-                class NetworkStatistics final : public ppp::transmissions::ITransmissionStatistics {
-                public:
-                    /**
-                     * @brief Constructs per-connection statistics linked to aggregate owner.
-                     * @param owner Aggregate statistics sink.
-                     */
-                    NetworkStatistics(const ITransmissionStatisticsPtr& owner) noexcept
-                        : ITransmissionStatistics()
-                        , owner_(owner) {
-
-                    }
-
-                public:
-                    /**
-                     * @brief Adds inbound traffic to both aggregate and local counters.
-                     * @param incoming_traffic Bytes received.
-                     * @return Updated local inbound total.
-                     */
-                    virtual uint64_t                                    AddIncomingTraffic(uint64_t incoming_traffic) noexcept {
-                        owner_->AddIncomingTraffic(incoming_traffic);
-                        return ITransmissionStatistics::AddIncomingTraffic(incoming_traffic);
-                    }
-                    /**
-                     * @brief Adds outbound traffic to both aggregate and local counters.
-                     * @param outcoming_traffic Bytes sent.
-                     * @return Updated local outbound total.
-                     */
-                    virtual uint64_t                                    AddOutgoingTraffic(uint64_t outcoming_traffic) noexcept {
-                        owner_->AddOutgoingTraffic(outcoming_traffic);
-                        return ITransmissionStatistics::AddOutgoingTraffic(outcoming_traffic);
-                    }
-
-                private:
-                    ITransmissionStatisticsPtr                          owner_;
-                };
-
+                // In managed-server mode, return a per-connection statistics wrapper
+                // so that reading transmission->Statistics yields per-connection totals.
+                // Note: Forwarding to the aggregate owner is intentionally NOT done here
+                // because traffic is already counted once at the ITcpipTransmission layer
+                // (via the aggregate statistics_ object). Forwarding here would cause
+                // double counting.
                 VirtualEthernetManagedServerPtr server = managed_server_;
                 if (NULLPTR == server) {
                     return statistics_;
                 }
                 else {
-                    return make_shared_object<NetworkStatistics>(statistics_);
+                    return make_shared_object<ITransmissionStatistics>();
                 }
             }
 
