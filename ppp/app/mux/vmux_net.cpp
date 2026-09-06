@@ -328,11 +328,12 @@ namespace vmux {
     /**
      * @brief Constructs a vmux network core with runtime mode/capacity settings.
      */
-    vmux_net::vmux_net(const ContextPtr& context, const StrandPtr strand, uint16_t max_connections, bool server_mode, bool acceleration, mux_mode mode) noexcept {
+    vmux_net::vmux_net(const ContextPtr& context, const StrandPtr strand, uint16_t max_connections, bool server_mode, bool acceleration, mux_mode mode, const std::shared_ptr<ppp::transmissions::ITransmissionStatistics>& statistics) noexcept {
         assert(max_connections > 0 && "The value of max_connections must be greater than 0.");
 
         vmux_net* const m             = this;
         m->Vlan                       = 0;
+        m->statistics_                 = statistics;
 
         m->base_.server_or_client_    = server_mode;
         m->base_.disposed_.store(false, std::memory_order_release);
@@ -4114,7 +4115,7 @@ namespace vmux {
                 continue;
             }
 
-            skt = ppp::make_shared_object<vmux_skt>(self, connection_id);
+            skt = ppp::make_shared_object<vmux_skt>(self, connection_id, statistics_);
             if (NULLPTR == skt) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetConnectSocketAllocFailed);
                 return false;

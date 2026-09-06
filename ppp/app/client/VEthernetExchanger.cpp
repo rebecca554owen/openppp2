@@ -2400,7 +2400,7 @@ namespace ppp {
                     }
                     {
                         vmux::vmux_net::mux_mode mux_mode = vmux::vmux_net::parse_mode(configuration->GetEffectiveMuxMode());
-                        mux = make_shared_object<vmux::vmux_net>(vmux_context, vmux_strand, max_connections, false, (switcher_->mux_acceleration_ & PPP_MUX_ACCELERATION_LOCAL) != 0, mux_mode);
+                        mux = make_shared_object<vmux::vmux_net>(vmux_context, vmux_strand, max_connections, false, (switcher_->mux_acceleration_ & PPP_MUX_ACCELERATION_LOCAL) != 0, mux_mode, switcher_->GetStatistics());
                         if (NULLPTR == mux) {
                             break;
                         }
@@ -2586,9 +2586,10 @@ namespace ppp {
                             }
 
                             std::shared_ptr<boost::asio::ip::tcp::socket> default_socket;
+                            std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics = switcher_->GetStatistics();
                             std::shared_ptr<VirtualEthernetTcpipConnection> connection =
                                 make_shared_object<VirtualEthernetTcpipConnection>(
-                                    mux->AppConfiguration, context, strand, GetId(), default_socket);
+                                    mux->AppConfiguration, context, strand, GetId(), default_socket, statistics);
                             if (NULLPTR == connection) {
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                                 break;
@@ -2669,9 +2670,10 @@ namespace ppp {
                             }
 
                             std::shared_ptr<boost::asio::ip::tcp::socket> default_socket;
+                            std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics = switcher_->GetStatistics();
                             std::shared_ptr<VirtualEthernetTcpipConnection> connection =
                                 make_shared_object<VirtualEthernetTcpipConnection>(
-                                    mux->AppConfiguration, context, strand, GetId(), default_socket);
+                                    mux->AppConfiguration, context, strand, GetId(), default_socket, statistics);
                             if (NULLPTR == connection) {
                                 break;
                             }

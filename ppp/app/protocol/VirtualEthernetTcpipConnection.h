@@ -12,6 +12,7 @@
 namespace ppp::configurations { class AppConfiguration; }
 #include <ppp/net/Firewall.h>
 #include <ppp/transmissions/ITransmission.h>
+#include <ppp/transmissions/ITransmissionStatistics.h>
 #include <ppp/app/protocol/VirtualEthernetLogger.h>
 #include <ppp/app/protocol/VirtualEthernetLinklayer.h>
 #include <ppp/app/protocol/VirtualEthernetInformation.h>
@@ -44,6 +45,8 @@ namespace ppp {
                 typedef ppp::coroutines::YieldContext                           YieldContext;
                 typedef ppp::transmissions::ITransmission                       ITransmission;
                 typedef std::shared_ptr<ITransmission>                          ITransmissionPtr;
+                typedef ppp::transmissions::ITransmissionStatistics              ITransmissionStatistics;
+                typedef std::shared_ptr<ITransmissionStatistics>                 ITransmissionStatisticsPtr;
                 typedef ppp::app::protocol::VirtualEthernetLogger               VirtualEthernetLogger;
                 typedef std::shared_ptr<VirtualEthernetLogger>                  VirtualEthernetLoggerPtr;
                 typedef ppp::function<bool(uint32_t, uint32_t, uint32_t)>       AcceptMuxAsynchronousCallback;
@@ -67,6 +70,7 @@ namespace ppp {
                  * @param strand Serialized executor for callbacks.
                  * @param id Logical connection identifier.
                  * @param socket Existing TCP socket instance.
+                 * @param statistics Optional traffic statistics tracker.
                  * @return N/A.
                  * @note The socket can be null for mux-only handshake flows.
                  */
@@ -75,7 +79,8 @@ namespace ppp {
                     const ContextPtr&                                           context,
                     const StrandPtr&                                            strand,
                     const Int128&                                               id,
-                    const std::shared_ptr<boost::asio::ip::tcp::socket>&        socket) noexcept;
+                    const std::shared_ptr<boost::asio::ip::tcp::socket>&        socket,
+                    const ITransmissionStatisticsPtr&                            statistics = NULLPTR) noexcept;
                 /**
                  * @brief Releases connection resources.
                  * @return N/A.
@@ -314,6 +319,7 @@ namespace ppp {
                 Int128                                                          id_        = 0; ///< Logical connection identifier assigned at construction time.
                 std::shared_ptr<boost::asio::ip::tcp::socket>                   socket_;        ///< Local TCP socket bridged to the virtual Ethernet transmission.
                 ITransmissionPtr                                                transmission_; ///< Virtual Ethernet transmission channel used for protocol framing.
+                ITransmissionStatisticsPtr                                      statistics_;  ///< Optional traffic statistics tracker.
 #if defined(_IPHONE) || defined(IPHONE)
                 bool                                                            EnsureNativeUploadWriter() noexcept;
                 bool                                                            RunNativeUploadWriter(YieldContext& y) noexcept;

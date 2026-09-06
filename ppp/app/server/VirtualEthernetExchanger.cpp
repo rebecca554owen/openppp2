@@ -1396,7 +1396,7 @@ namespace ppp {
                     }
 
                     vmux::vmux_net::mux_mode mux_mode = effective_mux_mode;
-                    mux = make_shared_object<vmux::vmux_net>(vmux_context, vmux_strand, max_connections, true, acceleration, mux_mode);
+                    mux = make_shared_object<vmux::vmux_net>(vmux_context, vmux_strand, max_connections, true, acceleration, mux_mode, switcher_->GetStatistics());
                     if (NULLPTR != mux) {
                         mux->Vlan = vlan;
                         mux->SessionEpoch = session_epoch;

@@ -52,8 +52,9 @@ namespace vmux {
          * @brief Construct a vmux socket bound to a parent multiplexer.
          * @param mux Parent multiplexer instance.
          * @param connection_id Non-zero logical connection identifier.
+         * @param statistics Optional traffic statistics tracker.
          */
-        vmux_skt(const std::shared_ptr<vmux_net>& mux, uint32_t connection_id) noexcept;
+        vmux_skt(const std::shared_ptr<vmux_net>& mux, uint32_t connection_id, const std::shared_ptr<ppp::transmissions::ITransmissionStatistics>& statistics = NULLPTR) noexcept;
         /** @brief Destroy the socket and release owned resources. */
         ~vmux_skt() noexcept;
 
@@ -74,6 +75,9 @@ namespace vmux {
          * @return true on success.
          */
         bool                                            send_to_peer_yield(const void* packet, int packet_length, ppp::coroutines::YieldContext& y) noexcept;
+
+    private:
+        std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics_; ///< Optional traffic statistics tracker.
 
     private:
         /** @brief Final shutdown routine; idempotent and noexcept-safe. */

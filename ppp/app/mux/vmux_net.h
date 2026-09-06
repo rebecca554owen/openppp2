@@ -288,7 +288,7 @@ namespace vmux {
          * @param server_mode true for server-side role.
          * @param acceleration true to enable acceleration by default.
          */
-        vmux_net(const ContextPtr& context, const StrandPtr strand, uint16_t max_connections, bool server_mode, bool acceleration, mux_mode mode = mux_mode_compat) noexcept;
+        vmux_net(const ContextPtr& context, const StrandPtr strand, uint16_t max_connections, bool server_mode, bool acceleration, mux_mode mode = mux_mode_compat, const std::shared_ptr<ppp::transmissions::ITransmissionStatistics>& statistics = NULLPTR) noexcept;
         /** @brief Destroy the session and release all managed resources. */
         ~vmux_net() noexcept;
 
@@ -824,6 +824,7 @@ namespace vmux {
         vmux_skt_map                                                                skts_;              ///< Active logical socket map keyed by connection_id.
         ContextPtr                                                                  context_;           ///< ASIO execution context; outlives strand_.
         StrandPtr                                                                   strand_;            ///< Serialized strand for vmux event loop.
+        std::shared_ptr<ppp::transmissions::ITransmissionStatistics>                 statistics_;        ///< Optional traffic statistics tracker.
 
         vmux_tx_flow_map                                                            tx_flows_;          ///< connection_id -> per-flow TX queue + DRR deficit (strand-affine).
         vmux_tx_active_list                                                         active_tx_flows_;   ///< RR ring of cids with non-empty TX queues (strand-affine).
