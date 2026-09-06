@@ -221,11 +221,12 @@ namespace ppp {
                 facts.adapter_open = tap && tap->IsOpen();
 #if defined(_ANDROID) || defined(_IPHONE)
                 facts.route_required = !proxy_only_;
+                facts.dns_required = !proxy_only_;
 #else
                 facts.route_required = !proxy_only_ && tap && tap->IsHostedNetwork();
+                facts.dns_required = !proxy_only_ && tap && tap->IsHostedNetwork();
 #endif
                 facts.route_applied = route_snapshot.applied;
-                facts.dns_required = !proxy_only_;
                 facts.dns_configured = dns_controller_ && dns_controller_->IsConfigured();
                 facts.dns_session_active = dns_controller_ && dns_controller_->HasActiveSession();
                 // INFO is optional for unmanaged compatibility sessions. The
