@@ -445,6 +445,9 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      # NOTE: android-emulator-runner executes each line of `script` in its own
+      # `sh -c` process, so a `cd` on one line does NOT affect the next. The
+      # directory change and the gradle invocation must therefore share a line.
       - name: Run instrumented tests on the x86_64 emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -454,13 +457,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
-            cd android/android || exit 1
-            gradle :app:connectedDebugAndroidTest
-            rc=$?
-            if [ "$rc" -ne 0 ]; then
-              timeout 15s adb logcat -d > "$GITHUB_WORKSPACE/logcat.txt" || true
-            fi
-            exit "$rc"
+            cd "$GITHUB_WORKSPACE/android/android" && gradle :app:connectedDebugAndroidTest || { timeout 15s adb logcat -d > "$GITHUB_WORKSPACE/logcat.txt"; exit 1; }
 
       - name: Upload instrumented test reports
         if: always()
