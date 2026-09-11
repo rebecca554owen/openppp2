@@ -25,9 +25,12 @@ class VmuxReceiveSemanticsCiTests(unittest.TestCase):
         unit_workflow = (ROOT / ".github/workflows/test.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn(
-            "python3 -m unittest tests.tooling.test_vmux_receive_semantics_ci -v",
-            unit_workflow,
+        # Wired either explicitly or through the tooling discovery command.
+        self.assertTrue(
+            "python3 -m unittest tests.tooling.test_vmux_receive_semantics_ci -v"
+            in unit_workflow
+            or "python3 -m unittest discover -s tests/tooling" in unit_workflow,
+            "test_vmux_receive_semantics_ci is not wired into the CI unit workflow",
         )
 
 

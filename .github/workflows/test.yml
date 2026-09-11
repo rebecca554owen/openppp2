@@ -63,16 +63,18 @@ jobs:
 
       - name: Repository architecture checks
         run: |
-          python3 -m unittest tests.tooling.test_repository_layout -v
-          python3 -m unittest tests.tooling.test_ci_workspace_permissions -v
-          python3 -m unittest tests.tooling.test_vmux_transport_boundary -v
-          python3 -m unittest tests.tooling.test_vmux_receive_semantics_ci -v
-          python3 -m unittest tests.tooling.test_proxy_only_static_wiring -v
+          # Run the whole tooling suite instead of a hand-maintained subset.
+          # Previously only 6 of 18 tests were listed here, so 12 of them
+          # (including android server compat fixtures, p2p capability wiring
+          # and the release workflow contract) only ever guarded local runs.
+          # `discover` also picks up newly added tests automatically.
+          python3 -m unittest discover -s tests/tooling -t . -v
           python3 tools/check_repository_layout.py
 
       - name: Documentation governance checks
         run: |
-          python3 -m unittest tests.tooling.test_check_docs -v
+          # `tests.tooling.test_check_docs` is covered by the tooling discovery
+          # step above; this step keeps the standalone governance checker.
           python3 tools/check_docs.py
 
       - name: Linux namespace Route/DNS rollback
