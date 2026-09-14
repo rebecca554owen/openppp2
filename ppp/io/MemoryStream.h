@@ -250,8 +250,21 @@ namespace ppp {
                     return true;
                 }
 
-                int num = this->_position + count;
-                if (num > this->_length) {
+                // Guard against signed-overflow in `_position + count`.  `_position`,
+                // `_length` and `count` are all `int`, so a large `count` (e.g. an
+                // untruncated remote length field) can wrap the sum negative.  The old
+                // `num > _length` test would then be false, EnsureCapacity() would be
+                // skipped, and the memcpy() below would write `count` bytes past the
+                // allocation.  Widen the arithmetic and reject anything that does not
+                // fit in an `int` at all.
+                const int64_t required =
+                    static_cast<int64_t>(this->_position) + static_cast<int64_t>(count);
+                if (required > static_cast<int64_t>(INT_MAX)) {
+                    return false;
+                }
+
+                if (required > static_cast<int64_t>(this->_length)) {
+                    const int num = static_cast<int>(required);
                     if (!this->EnsureCapacity(num)) {
                         return false;
                     }
@@ -260,7 +273,7 @@ namespace ppp {
                 }
 
                 memcpy(this->_buffer.get() + this->_position, (char*)buffer + offset, count);
-                this->_position = num;
+                this->_position = static_cast<int>(required);
                 
                 return true;
             }                                
