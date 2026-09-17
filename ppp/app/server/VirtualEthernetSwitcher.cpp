@@ -3441,7 +3441,12 @@ namespace ppp {
 
                 bool ok = VirtualEthernetPacket::OpenDatagramSocket(static_echo_socket_, interface_ip, bind_port, bind_endpoint);
                 if (!ok) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketOpenFailed);
+                    // The datagram socket has its own wildcard fallback inside
+                    // VirtualEthernetPacket::OpenDatagramSocket(); reaching this
+                    // point means even that fallback failed.  Report a UDP-specific
+                    // code so the operator can tell it apart from the TCP acceptor
+                    // failure that Open() would otherwise collapse everything into.
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::UdpOpenFailed);
                     return false;
                 }
                 else {

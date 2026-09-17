@@ -747,8 +747,16 @@ namespace ppp
                         return true;
                     }
 
-                    ok = Socket::Closesocket(socket);
-                    if (!ok) {
+                    // A failed bind can leave the socket either still open (it
+                    // must be closed before the retry, because Socket::OpenSocket
+                    // rejects an already-open socket) or already closed -- on a
+                    // bind failure Socket::OpenSocket() cleans up after itself.
+                    // So "nothing to close" is the normal state here and must NOT
+                    // abort the wildcard fallback below, which is the whole point
+                    // of this retry: a configured interface address that is not
+                    // present on this host fails the first bind and then has to
+                    // fall back exactly like the TCP acceptor chain does.
+                    if (socket.is_open() && !Socket::Closesocket(socket)) {
                         return false;
                     }
 
