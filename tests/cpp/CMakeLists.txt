@@ -19,9 +19,19 @@ if(EXISTS "${OPENPPP2_LOCAL_BOOST_ROOT}/boost/version.hpp")
     file(STRINGS "${OPENPPP2_LOCAL_BOOST_ROOT}/boost/version.hpp"
         OPENPPP2_BOOST_VERSION_LINE
         REGEX "^#define BOOST_VERSION [0-9]+$")
-    if(NOT OPENPPP2_BOOST_VERSION_LINE MATCHES "BOOST_VERSION 108600$")
+    # The local third-party Boost is the pinned source of truth (see
+    # toys/openppp/BUILD.macos.md).  It was upgraded from 1.86.0 to 1.92.0, so
+    # accept anything at least as new as 1.86.0 instead of pinning one exact
+    # version: pinning silently rejected the upgraded tree and fell back to a
+    # system Boost, which does not link libboost_context on macOS.
+    if(OPENPPP2_BOOST_VERSION_LINE MATCHES "BOOST_VERSION ([0-9]+)$")
+        set(OPENPPP2_BOOST_DETECTED_VERSION "${CMAKE_MATCH_1}")
+    else()
+        set(OPENPPP2_BOOST_DETECTED_VERSION 0)
+    endif()
+    if(OPENPPP2_BOOST_DETECTED_VERSION LESS 108600)
         message(WARNING
-            "Local third-party Boost version mismatch at ${OPENPPP2_LOCAL_BOOST_ROOT} (expected 1.86.0); falling back to system Boost")
+            "Local third-party Boost at ${OPENPPP2_LOCAL_BOOST_ROOT} is older than 1.86.0; falling back to system Boost")
         set(OPENPPP2_BOOST_VERSION_MISMATCH TRUE)
     else()
         set(OPENPPP2_BOOST_VERSION_MISMATCH FALSE)
@@ -29,7 +39,7 @@ if(EXISTS "${OPENPPP2_LOCAL_BOOST_ROOT}/boost/version.hpp")
     if(NOT OPENPPP2_BOOST_VERSION_MISMATCH)
         if(NOT EXISTS "${OPENPPP2_LOCAL_BOOST_CONTEXT}")
             message(FATAL_ERROR
-                "Local Boost 1.86.0 is missing libboost_context.a: "
+                "Local third-party Boost is missing libboost_context.a: "
                 "${OPENPPP2_LOCAL_BOOST_CONTEXT}")
         endif()
     endif()
@@ -41,7 +51,7 @@ if(EXISTS "${OPENPPP2_LOCAL_BOOST_ROOT}/boost/version.hpp")
         INTERFACE_INCLUDE_DIRECTORIES "${OPENPPP2_LOCAL_BOOST_ROOT}")
     set(OPENPPP2_BOOST_CONTEXT_TARGET openppp2_boost_context)
     set(OPENPPP2_BOOST_INCLUDE_DIR "${OPENPPP2_LOCAL_BOOST_ROOT}")
-    message(STATUS "Using local Boost 1.86.0: ${OPENPPP2_LOCAL_BOOST_ROOT}")
+    message(STATUS "Using local third-party Boost: ${OPENPPP2_LOCAL_BOOST_ROOT}")
     endif()
 else()
     find_package(Boost REQUIRED COMPONENTS context)
