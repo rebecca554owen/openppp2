@@ -1,6 +1,6 @@
 [package]
 name = "openppp2-client-desktop"
-version = "2.1.11"
+version = "2.1.14"
 edition = "2021"
 
 [features]
