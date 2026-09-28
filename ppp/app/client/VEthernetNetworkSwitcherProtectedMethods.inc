@@ -1,3 +1,4 @@
+                virtual bool CanConsumeTcpV4Gso() noexcept override;
                 virtual bool OnPacketInput(ppp::net::native::ip_hdr* packet, int packet_length, int header_length, int proto, bool vnet) noexcept override;
                 virtual bool OnPacketInput(Byte* packet, int packet_length, bool vnet) noexcept override;
                 virtual bool OnPacketInput(const std::shared_ptr<IPFrame>& packet) noexcept override;

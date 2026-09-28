@@ -1,5 +1,6 @@
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/VEthernetNetworkTcpipConnection.h>
+#include <ppp/app/client/xtcp/XtcpFirstLegHooks.h>
 #include <ppp/app/client/VEthernetNetworkTcpipForwarding.inl>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
@@ -34,6 +35,13 @@
 namespace ppp {
     namespace app {
         namespace client {
+            namespace {
+                bool XtcpMemoryBridgeEnabled() noexcept {
+                    const char* env = ::getenv("OPENPPP2_XTCP_MEMORY_BRIDGE");
+                    return env != nullptr && env[0] == '1' && env[1] == '\0';
+                }
+            }
+
             /** @brief Initializes session state and marks it active. */
             VEthernetNetworkTcpipConnection::VEthernetNetworkTcpipConnection(
                 const std::shared_ptr<VEthernetExchanger>& exchanger,
@@ -50,13 +58,32 @@ namespace ppp {
                 Update();
             }
 
+            void VEthernetNetworkTcpipConnection::SetExternalFirstLeg(
+                uint64_t runtime_generation,
+                uint64_t flow_generation,
+                const std::weak_ptr<xtcp::XtcpFirstLegHooks>& hooks) noexcept {
+                external_runtime_generation_ = runtime_generation;
+                external_flow_generation_ = flow_generation;
+                external_first_leg_hooks_ = hooks;
+            }
+
             /** @brief Finalizes owned forwarding channels. */
             VEthernetNetworkTcpipConnection::~VEthernetNetworkTcpipConnection() noexcept {
+                if (!external_closed_signaled_.exchange(true, std::memory_order_acq_rel)) {
+                    if (std::shared_ptr<xtcp::XtcpFirstLegHooks> hooks = external_first_leg_hooks_.lock()) {
+                        hooks->OnFirstLegClosed(
+                            external_runtime_generation_, external_flow_generation_);
+                    }
+                }
                 Finalize();
             }
 
             /** @brief Disposes any active VPN/rinetd/vmux connection objects. */
             void VEthernetNetworkTcpipConnection::Finalize() noexcept {
+                {
+                    std::lock_guard<std::mutex> lock(external_direct_sync_);
+                    external_direct_connection_.reset();
+                }
                 std::shared_ptr<VirtualEthernetTcpipConnection> connection = std::move(connection_);
                 std::shared_ptr<RinetdConnection> connection_rinetd = std::move(connection_rinetd_);
                 std::shared_ptr<vmux::vmux_skt> connection_mux = std::move(connection_mux_);
@@ -78,12 +105,76 @@ namespace ppp {
                 }
             }
 
+            xtcp::XtcpDirectResult VEthernetNetworkTcpipConnection::SendToPeer(
+                const std::uint8_t* data, std::uint32_t length,
+                xtcp::XtcpUploadBudget::Reservation&& credit) noexcept {
+                std::shared_ptr<VirtualEthernetTcpipConnection> connection;
+                {
+                    std::lock_guard<std::mutex> lock(external_direct_sync_);
+                    connection = external_direct_connection_.lock();
+                }
+                if (!connection) {
+                    return xtcp::XtcpDirectResult::Closed;
+                }
+                switch (connection->SendDirectToPeer(data, length, std::move(credit))) {
+                case VirtualEthernetTcpipConnection::DirectIoResult::Accepted:
+                    return xtcp::XtcpDirectResult::Accepted;
+                case VirtualEthernetTcpipConnection::DirectIoResult::Backpressured:
+                    return xtcp::XtcpDirectResult::Backpressured;
+                default:
+                    return xtcp::XtcpDirectResult::Closed;
+                }
+            }
+
+            void VEthernetNetworkTcpipConnection::OnDownloadComplete(
+                const xtcp::XtcpDirectReadReservation& reservation,
+                xtcp::XtcpDirectCompletion completion) noexcept {
+                std::shared_ptr<VirtualEthernetTcpipConnection> connection;
+                {
+                    std::lock_guard<std::mutex> lock(external_direct_sync_);
+                    connection = external_direct_connection_.lock();
+                }
+                if (connection) {
+                    connection->CompleteDirectDownload(reservation, completion);
+                }
+            }
+
+            void VEthernetNetworkTcpipConnection::SetDirectQueueTelemetry(
+                const std::shared_ptr<ppp::app::runtime::XtcpDirectQueueTelemetry>& telemetry) noexcept {
+                std::shared_ptr<VirtualEthernetTcpipConnection> connection;
+                {
+                    std::lock_guard<std::mutex> lock(external_direct_sync_);
+                    connection = external_direct_connection_.lock();
+                }
+                if (connection) {
+                    connection->SetDirectQueueTelemetry(telemetry);
+                }
+            }
+
+            void VEthernetNetworkTcpipConnection::ClosePeerSend() noexcept {
+                std::shared_ptr<VirtualEthernetTcpipConnection> connection;
+                {
+                    std::lock_guard<std::mutex> lock(external_direct_sync_);
+                    connection = external_direct_connection_.lock();
+                }
+                if (connection) {
+                    connection->CloseDirectSend();
+                }
+            }
+
             /**
              * @brief Schedules cleanup on the proper executor and disposes the base client.
              */
             void VEthernetNetworkTcpipConnection::Dispose() noexcept {
                 if (IsDisposed()) {
                     return;
+                }
+
+                if (!external_closed_signaled_.exchange(true, std::memory_order_acq_rel)) {
+                    if (std::shared_ptr<xtcp::XtcpFirstLegHooks> hooks = external_first_leg_hooks_.lock()) {
+                        hooks->OnFirstLegClosed(
+                            external_runtime_generation_, external_flow_generation_);
+                    }
                 }
 
                 auto self = shared_from_this();
@@ -499,6 +590,92 @@ namespace ppp {
                         ppp::telemetry::Log(acked ? ppp::telemetry::Level::kDebug : ppp::telemetry::Level::kInfo, "tcpip", "ack accept result=%d remote=%s:%u", acked ? 1 : 0, GetRemoteEndPoint().address().to_string().c_str(), GetRemoteEndPoint().port());
                         return acked;
                     });
+            }
+
+            bool VEthernetNetworkTcpipConnection::AckAccept() noexcept {
+                if (!IsExternal()) {
+                    return TapTcpClient::AckAccept();
+                }
+                if (external_ready_signaled_.exchange(true, std::memory_order_acq_rel)) {
+                    return true;
+                }
+                std::shared_ptr<xtcp::XtcpFirstLegHooks> hooks = external_first_leg_hooks_.lock();
+                if (NULLPTR == hooks) {
+                    return false;
+                }
+                const bool direct_requested = XtcpMemoryBridgeEnabled();
+                const std::shared_ptr<VirtualEthernetTcpipConnection> direct_connection = connection_;
+                if (direct_requested && !domain_sniff_candidate_ && direct_connection &&
+                    direct_connection->IsLinked()) {
+                    const std::weak_ptr<xtcp::XtcpFirstLegHooks> weak_hooks = external_first_leg_hooks_;
+                    const std::uint64_t runtime_generation = external_runtime_generation_;
+                    const std::uint64_t flow_generation = external_flow_generation_;
+                    if (direct_connection->StartDirectBridge(
+                            [weak_hooks, runtime_generation, flow_generation](
+                                xtcp::XtcpDirectReadReservation& reservation,
+                                const std::shared_ptr<Byte>& payload) noexcept {
+                                if (!payload || reservation.length == 0) {
+                                    return VirtualEthernetTcpipConnection::DirectIoResult::Closed;
+                                }
+                                if (reservation.runtime_generation == 0) {
+                                    reservation.runtime_generation = runtime_generation;
+                                }
+                                else if (reservation.runtime_generation != runtime_generation) {
+                                    return VirtualEthernetTcpipConnection::DirectIoResult::Closed;
+                                }
+                                if (reservation.flow_generation == 0) {
+                                    reservation.flow_generation = flow_generation;
+                                }
+                                else if (reservation.flow_generation != flow_generation) {
+                                    return VirtualEthernetTcpipConnection::DirectIoResult::Closed;
+                                }
+                                const std::shared_ptr<xtcp::XtcpFirstLegHooks> active = weak_hooks.lock();
+                                if (!active) {
+                                    return VirtualEthernetTcpipConnection::DirectIoResult::Closed;
+                                }
+                                switch (active->OnSecondLegPayload(reservation, payload)) {
+                                case xtcp::XtcpDirectResult::Accepted:
+                                    return VirtualEthernetTcpipConnection::DirectIoResult::Accepted;
+                                case xtcp::XtcpDirectResult::Backpressured:
+                                    return VirtualEthernetTcpipConnection::DirectIoResult::Backpressured;
+                                default:
+                                    return VirtualEthernetTcpipConnection::DirectIoResult::Closed;
+                                }
+                            },
+                            [weak_hooks, runtime_generation, flow_generation](
+                                xtcp::XtcpDirectCloseReason reason) noexcept {
+                                if (const std::shared_ptr<xtcp::XtcpFirstLegHooks> active = weak_hooks.lock()) {
+                                    if (reason == xtcp::XtcpDirectCloseReason::PeerEof) {
+                                        active->OnSecondLegClosed(runtime_generation, flow_generation);
+                                    }
+                                    else {
+                                        active->OnFirstLegClosed(runtime_generation, flow_generation);
+                                    }
+                                }
+                            },
+                            [weak_hooks, runtime_generation, flow_generation]() noexcept {
+                                if (const std::shared_ptr<xtcp::XtcpFirstLegHooks> active = weak_hooks.lock()) {
+                                    active->OnSecondLegWritable(runtime_generation, flow_generation);
+                                }
+                            })) {
+                        {
+                            std::lock_guard<std::mutex> lock(external_direct_sync_);
+                            external_direct_connection_ = direct_connection;
+                        }
+                        const std::shared_ptr<VEthernetNetworkTcpipConnection> self =
+                            std::static_pointer_cast<VEthernetNetworkTcpipConnection>(shared_from_this());
+                        hooks->OnFirstLegDirectReady(
+                            runtime_generation, flow_generation, self);
+                        return true;
+                    }
+                }
+                if (direct_requested) {
+                    hooks->OnDirectBridgeFallback(
+                        external_runtime_generation_, external_flow_generation_);
+                }
+                hooks->OnFirstLegReady(
+                    external_runtime_generation_, external_flow_generation_);
+                return Establish();
             }
 
             /**

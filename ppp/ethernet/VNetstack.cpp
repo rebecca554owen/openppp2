@@ -2,6 +2,7 @@
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/LinkTelemetry.h>
 #include <ppp/diagnostics/Telemetry.h>
+#include <ppp/diagnostics/DatapathPerfJson.h>
 /**
  * @file VNetstack.cpp
  * @brief Implements virtual TCP NAT mapping, accept bridge, and flow lifecycle.
@@ -391,6 +392,100 @@ namespace ppp {
             return true;
         }
 
+        boost::asio::ip::tcp::endpoint VNetstack::GetLocalListenerEndpoint() noexcept {
+            const int port = listenPort_.load(std::memory_order_acquire);
+            if (port <= IPEndPoint::MinPort || port > IPEndPoint::MaxPort) {
+                return boost::asio::ip::tcp::endpoint();
+            }
+            return boost::asio::ip::tcp::endpoint(
+                boost::asio::ip::address_v4::loopback(), static_cast<uint16_t>(port));
+        }
+
+        bool VNetstack::RegisterExternalClient(uint16_t source_port,
+            uint64_t runtime_generation, uint64_t flow_generation,
+            const std::shared_ptr<TapTcpClient>& client) noexcept {
+            if (source_port <= IPEndPoint::MinPort || runtime_generation == 0 ||
+                flow_generation == 0 || NULLPTR == client || client->IsDisposed()) {
+                return false;
+            }
+            SynchronizedObjectScope scope(syncobj_);
+            if (NULLPTR == acceptor_ || external_clients_.find(source_port) != external_clients_.end()) {
+                return false;
+            }
+            client->external_ = true;
+            ExternalClient entry;
+            entry.runtime_generation = runtime_generation;
+            entry.flow_generation = flow_generation;
+            entry.client = client;
+            return external_clients_.emplace(source_port, std::move(entry)).second;
+        }
+
+        bool VNetstack::CompleteExternalAcceptWithFd(uint16_t source_port,
+            uint64_t runtime_generation, int fd,
+            const boost::asio::ip::tcp::endpoint& natEP) noexcept {
+            if (fd < 0) {
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceOpenFailed);
+            }
+            const auto close_unadopted_fd = [fd]() noexcept {
+                Socket::Closesocket(fd);
+            };
+            std::shared_ptr<TapTcpClient> pcb;
+            bool registered = false;
+            {
+                SynchronizedObjectScope scope(syncobj_);
+                const auto found = external_clients_.find(source_port);
+                if (found != external_clients_.end() &&
+                    found->second.runtime_generation == runtime_generation) {
+                    pcb = std::move(found->second.client);
+                    external_clients_.erase(found);
+                    registered = true;
+                }
+            }
+            if (!registered) {
+                close_unadopted_fd();
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceOpenFailed);
+            }
+            if (NULLPTR == pcb || pcb->IsDisposed()) {
+                close_unadopted_fd();
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceOpenFailed);
+            }
+            std::shared_ptr<boost::asio::ip::tcp::socket> socket = pcb->NewAsynchronousSocket(fd, natEP);
+            if (NULLPTR == socket) {
+                close_unadopted_fd();
+                pcb->Dispose();
+                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::NetworkInterfaceOpenFailed);
+            }
+            bool ok = pcb->EndAccept(socket, natEP);
+            if (ok) {
+                ok = pcb->BeginAccept();
+            }
+            if (!ok) {
+                ppp::telemetry::Count("vnetstack.accept.fail.end_accept", 1);
+                pcb->Dispose();
+                return false;
+            }
+            ppp::telemetry::Count("vnetstack.accept.external_fd", 1);
+            return true;
+        }
+
+        void VNetstack::CancelExternalClient(uint16_t source_port,
+            uint64_t runtime_generation) noexcept {
+            std::shared_ptr<TapTcpClient> client;
+            {
+                SynchronizedObjectScope scope(syncobj_);
+                const auto found = external_clients_.find(source_port);
+                if (found == external_clients_.end() ||
+                    found->second.runtime_generation != runtime_generation) {
+                    return;
+                }
+                client = std::move(found->second.client);
+                external_clients_.erase(found);
+            }
+            if (NULLPTR != client) {
+                client->Dispose();
+            }
+        }
+
         /**
          * @brief Public release entry that frees all resources.
          */
@@ -405,6 +500,7 @@ namespace ppp {
             std::shared_ptr<SocketAcceptor> acceptor;
             WAN2LANTABLE wan2lan;
             LAN2WANTABLE lan2wan;
+            ExternalClientTable external_clients;
 
             for (;;) {
                 SynchronizedObjectScope scope(syncobj_);
@@ -415,6 +511,9 @@ namespace ppp {
 
                 lan2wan = std::move(lan2wan_);
                 lan2wan_.clear();
+
+                external_clients = std::move(external_clients_);
+                external_clients_.clear();
 
                 // Reset these fields INSIDE the lock so that concurrent SSMT Input() threads
                 // that read listenPort_ (lock-free) observe the cleared value only after the
@@ -433,6 +532,12 @@ namespace ppp {
 
             Dictionary::ReleaseAllObjects(wan2lan);
             Dictionary::ReleaseAllObjects(lan2wan);
+            for (auto& entry : external_clients) {
+                if (NULLPTR != entry.second.client) {
+                    entry.second.client->Dispose();
+                }
+            }
+            external_clients.clear();
 
 #ifdef SYSNAT
             if (!sysnat_interface_name_.empty()) {
@@ -451,6 +556,8 @@ namespace ppp {
          * @brief Processes one TCP packet through NAT mapping and state machine.
          */
         bool VNetstack::Input(ip_hdr* ip, tcp_hdr* tcp, int tcp_len) noexcept {
+            // Lab-only JSONL: TCP segment call/byte count and whole-function time.
+            ppp::diagnostics::datapath_perf::VnetInputScope perf_scope(tcp_len);
             if (NULLPTR == ip || NULLPTR == tcp || tcp_len < 1) {
                 ppp::telemetry::Log(Level::kInfo, "vnetstack", "null packet input");
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::VNetstackNullPacketInput);
@@ -919,6 +1026,8 @@ namespace ppp {
          * @brief Recomputes checksums and sends packet to TAP or SYN/ACK cache.
          */
         bool VNetstack::Output(bool lan2wan, ip_hdr* ip, tcp_hdr* tcp, int tcp_len, TapTcpClient* c) noexcept {
+            // Lab-only JSONL: whole Output time; direct is TAP output, cached is SYN/ACK retention.
+            ppp::diagnostics::datapath_perf::VnetOutputScope perf_scope(NULLPTR == c, tcp_len);
             std::shared_ptr<ITap> tap = this->Tap;
             if (NULLPTR == tap) {
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelDeviceMissing);
@@ -947,6 +1056,7 @@ namespace ppp {
             }
 
             int ippkg_len = ((char*)tcp + tcp_len) - (char*)ip;
+            perf_scope.SetBytes(ippkg_len);
             if (NULLPTR == c) {
                 bool ok = tap->Output(ip, ippkg_len);
                 if (!ok) {
@@ -1017,6 +1127,7 @@ namespace ppp {
             std::shared_ptr<TapTcpLink> link;
             std::shared_ptr<TapTcpClient> pcb;
             std::shared_ptr<ITap> tap;
+            bool external = false;
 
             do {
                 tap = this->Tap;
@@ -1029,60 +1140,72 @@ namespace ppp {
 
                 boost::asio::ip::tcp::endpoint natEP = Socket::GetRemoteEndPoint(sockfd);
                 IPEndPoint remoteEP = IPEndPoint::V6ToV4(IPEndPoint::ToEndPoint(natEP));
-                if (lwip_) {
-                    if (remoteEP.GetAddress() != htonl(IPEndPoint::LoopbackAddress)) {
-                        ppp::telemetry::Count("vnetstack.accept.fail.endpoint", 1);
-                        ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: lwip endpoint mismatch nat=%s:%u", natEP.address().to_string().c_str(), natEP.port());
-                        break;
+                const bool loopback = remoteEP.GetAddress() == htonl(IPEndPoint::LoopbackAddress);
+                if (loopback && remoteEP.Port > IPEndPoint::MinPort &&
+                    remoteEP.Port <= IPEndPoint::MaxPort) {
+                    SynchronizedObjectScope scope(syncobj_);
+                    const auto registered = external_clients_.find(static_cast<uint16_t>(remoteEP.Port));
+                    if (registered != external_clients_.end()) {
+                        pcb = std::move(registered->second.client);
+                        external_clients_.erase(registered);
+                        external = NULLPTR != pcb;
                     }
                 }
-                elif(remoteEP.GetAddress() != tap->GatewayServer) {
+
+                if (!external) {
+                    if (lwip_) {
+                        if (!loopback) {
+                            ppp::telemetry::Count("vnetstack.accept.fail.endpoint", 1);
+                            ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: lwip endpoint mismatch nat=%s:%u", natEP.address().to_string().c_str(), natEP.port());
+                            break;
+                        }
+                    }
+                    elif(remoteEP.GetAddress() != tap->GatewayServer) {
 #if defined(_IPHONE) || defined(IPHONE)
-                    if (remoteEP.GetAddress() != htonl(IPEndPoint::LoopbackAddress)) {
+                        if (!loopback) {
 #endif
-                        ppp::telemetry::Count("vnetstack.accept.fail.endpoint", 1);
-                        ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: endpoint mismatch nat=%s:%u", natEP.address().to_string().c_str(), natEP.port());
-                        break;
+                            ppp::telemetry::Count("vnetstack.accept.fail.endpoint", 1);
+                            ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: endpoint mismatch nat=%s:%u", natEP.address().to_string().c_str(), natEP.port());
+                            break;
 #if defined(_IPHONE) || defined(IPHONE)
-                    }
+                        }
 #endif
-                }
+                    }
 
-                if (remoteEP.Port <= IPEndPoint::MinPort || remoteEP.Port > IPEndPoint::MaxPort) {
-                    ppp::telemetry::Count("vnetstack.accept.fail.port", 1);
-                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: invalid port nat=%s:%u", natEP.address().to_string().c_str(), natEP.port());
-                    break;
-                }
-
-                if (lwip_) {
-                    uint32_t srcAddr;
-                    uint32_t dstAddr;
-                    int srcPort;
-                    int dstPort;
-                    if (!lwip::netstack::link(remoteEP.Port, srcAddr, srcPort, dstAddr, dstPort)) {
-                        ppp::telemetry::Count("vnetstack.accept.fail.lwip_link", 1);
-                        ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: lwip link missing nat=%s:%u", natEP.address().to_string().c_str(), natEP.port());
+                    if (remoteEP.Port <= IPEndPoint::MinPort || remoteEP.Port > IPEndPoint::MaxPort) {
+                        ppp::telemetry::Count("vnetstack.accept.fail.port", 1);
+                        ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: invalid port nat=%s:%u", natEP.address().to_string().c_str(), natEP.port());
                         break;
                     }
 
-                    link = this->LwIpAcceptLink(srcAddr, dstAddr, srcPort, dstPort);
-                }
-                else {
-                    link = this->FindTcpLink(remoteEP.Port);
+                    if (lwip_) {
+                        uint32_t srcAddr;
+                        uint32_t dstAddr;
+                        int srcPort;
+                        int dstPort;
+                        if (!lwip::netstack::link(remoteEP.Port, srcAddr, srcPort, dstAddr, dstPort)) {
+                            ppp::telemetry::Count("vnetstack.accept.fail.lwip_link", 1);
+                            ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: lwip link missing nat=%s:%u", natEP.address().to_string().c_str(), natEP.port());
+                            break;
+                        }
+                        link = this->LwIpAcceptLink(srcAddr, dstAddr, srcPort, dstPort);
+                    }
+                    else {
+                        link = this->FindTcpLink(remoteEP.Port);
+                    }
+
+                    if (NULLPTR == link) {
+                        ppp::telemetry::Count("vnetstack.accept.fail.link", 1);
+                        ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: link missing nat=%s:%u", natEP.address().to_string().c_str(), natEP.port());
+                        break;
+                    }
+                    pcb = std::atomic_load(&link->socket);
                 }
 
-                if (NULLPTR == link) {
-                    ppp::telemetry::Count("vnetstack.accept.fail.link", 1);
-                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: link missing nat=%s:%u", natEP.address().to_string().c_str(), natEP.port());
-                    break;
-                }
-
-                pcb = std::atomic_load(&link->socket);
                 if (NULLPTR == pcb) {
-                    if ((TcpState)link->state.load(std::memory_order_relaxed) != TcpState::TCP_STATE_CLOSED) {
+                    if (NULLPTR != link && (TcpState)link->state.load(std::memory_order_relaxed) != TcpState::TCP_STATE_CLOSED) {
                         link->state.store((Byte)TcpState::TCP_STATE_CLOSED, std::memory_order_relaxed);
                     }
-
                     ppp::telemetry::Count("vnetstack.accept.fail.pcb", 1);
                     ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: pcb missing nat=%s:%u", natEP.address().to_string().c_str(), natEP.port());
                     break;
@@ -1096,15 +1219,25 @@ namespace ppp {
                 }
 
                 bool ok = pcb->EndAccept(socket, natEP);
+                if (ok && external) {
+                    ok = pcb->BeginAccept();
+                }
                 if (ok) {
-                    ppp::telemetry::Count("vnetstack.accept", 1);
-                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "socket accepted nat=%s:%u local=%s:%u remote=%s:%u", natEP.address().to_string().c_str(), natEP.port(), pcb->GetLocalEndPoint().address().to_string().c_str(), pcb->GetLocalEndPoint().port(), pcb->GetRemoteEndPoint().address().to_string().c_str(), pcb->GetRemoteEndPoint().port());
-                    link->Update();
+                    ppp::telemetry::Count(external ? "vnetstack.accept.external" : "vnetstack.accept", 1);
+                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "socket accepted external=%d nat=%s:%u local=%s:%u remote=%s:%u", external ? 1 : 0, natEP.address().to_string().c_str(), natEP.port(), pcb->GetLocalEndPoint().address().to_string().c_str(), pcb->GetLocalEndPoint().port(), pcb->GetRemoteEndPoint().address().to_string().c_str(), pcb->GetRemoteEndPoint().port());
+                    if (NULLPTR != link) {
+                        link->Update();
+                    }
                 }
                 else {
                     ppp::telemetry::Count("vnetstack.accept.fail.end_accept", 1);
-                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: end accept failed nat=%s:%u local=%s:%u remote=%s:%u error=%d", natEP.address().to_string().c_str(), natEP.port(), pcb->GetLocalEndPoint().address().to_string().c_str(), pcb->GetLocalEndPoint().port(), pcb->GetRemoteEndPoint().address().to_string().c_str(), pcb->GetRemoteEndPoint().port(), (int)ppp::diagnostics::GetLastErrorCode());
-                    this->CloseTcpLink(link);
+                    ppp::telemetry::Log(Level::kInfo, "vnetstack", "accept failed: end accept failed external=%d nat=%s:%u local=%s:%u remote=%s:%u error=%d", external ? 1 : 0, natEP.address().to_string().c_str(), natEP.port(), pcb->GetLocalEndPoint().address().to_string().c_str(), pcb->GetLocalEndPoint().port(), pcb->GetRemoteEndPoint().address().to_string().c_str(), pcb->GetRemoteEndPoint().port(), (int)ppp::diagnostics::GetLastErrorCode());
+                    if (external) {
+                        pcb->Dispose();
+                    }
+                    else {
+                        this->CloseTcpLink(link);
+                    }
                 }
 
                 return ok;
@@ -1815,6 +1948,9 @@ namespace ppp {
 
             std::shared_ptr<TapTcpLink> link = this->link_;
             if (NULLPTR == link) {
+                if (external_) {
+                    return true;
+                }
                 return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::InternalLogicNullPointer);
             }
 

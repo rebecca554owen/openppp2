@@ -150,8 +150,17 @@ namespace ppp
              * @return true if the packet is dispatched; otherwise false.
              */
             virtual bool                                                    Output(const std::shared_ptr<Byte>& packet, int packet_length) noexcept;
+            /** @brief Returns whether the bound TAP supports explicit TCPv4 GSO output. */
+            bool                                                            SupportsTxGso() noexcept;
+            /** @brief Sends a shared super-packet only through the explicit TAP GSO path. */
+            virtual bool                                                    OutputGso(const std::shared_ptr<Byte>& packet, int packet_length, ppp::tap::TxGsoMetadata metadata) noexcept;
 
         protected:
+            /**
+             * @brief Returns whether this endpoint can synchronously consume a complete TCPv4 GSO frame.
+             * @note The default is false so non-XTCP paths use the TAP backend's per-MSS fallback.
+             */
+            virtual bool                                                    CanConsumeTcpV4Gso() noexcept;
             /**
              * @brief Creates an IP fragment reassembly helper.
              */

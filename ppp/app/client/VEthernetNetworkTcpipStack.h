@@ -14,6 +14,7 @@
 #include <ppp/ethernet/VNetstack.h>
 
 namespace ppp::configurations { class AppConfiguration; }
+namespace ppp::app::client::xtcp { class XtcpFirstLegHooks; }
 
 namespace ppp {
     namespace app {
@@ -65,7 +66,24 @@ namespace ppp {
                  * @details The base class `VNetstack` destructor handles IO context teardown.
                  *          No additional cleanup is required at this level.
                  */
-                virtual ~VEthernetNetworkTcpipStack() noexcept = default; 
+                virtual ~VEthernetNetworkTcpipStack() noexcept = default;
+
+                bool BeginExternalAccept(
+                    const boost::asio::ip::tcp::endpoint& localEP,
+                    const boost::asio::ip::tcp::endpoint& remoteEP,
+                    uint16_t source_port,
+                    uint64_t runtime_generation,
+                    uint64_t flow_generation,
+                    const std::weak_ptr<xtcp::XtcpFirstLegHooks>& hooks) noexcept;
+
+                /** @brief XTCP-VNET-BRIDGE-BYPASS-001: takes ownership of the XTCP-side socketpair fd (fd >= 0), registers it for direct adoption, and falls back to listener pairing when fd < 0. */
+                bool BeginExternalAcceptWithFd(
+                    const boost::asio::ip::tcp::endpoint& localEP,
+                    const boost::asio::ip::tcp::endpoint& remoteEP,
+                    uint16_t source_port,
+                    uint64_t runtime_generation,
+                    uint64_t flow_generation,
+                    const std::weak_ptr<xtcp::XtcpFirstLegHooks>& hooks, int fd) noexcept;
 
             protected:
                 /**

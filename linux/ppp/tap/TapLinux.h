@@ -1,11 +1,14 @@
 #pragma once
 
 #include <ppp/stdafx.h>
+#include <array>
 #include <ppp/tap/ITap.h>
+#include <ppp/tap/TapRuntimeStats.h>
 #include <ppp/net/Ipep.h>
 #include <ppp/net/Socket.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/native/rib.h>
+#include <linux/ppp/tap/TapGsoCoalescer.h>
 
 namespace ppp
 {
@@ -82,10 +85,17 @@ namespace ppp
         public: 
             bool                                                                    Ssmt() noexcept { return tun_ssmt_fds_size_ > 0; }
             bool                                                                    Ssmt(const std::shared_ptr<boost::asio::io_context>& context) noexcept;
+            bool                                                                    GetRuntimeStats(ppp::tap::TapRuntimeStats& stats) const noexcept;
 
         public: 
             virtual bool                                                            Output(const std::shared_ptr<Byte>& packet, int packet_size) noexcept override;
             virtual bool                                                            Output(const void* packet, int packet_size) noexcept override;
+            virtual bool                                                            SupportsTxGso() const noexcept override;
+            virtual bool                                                            OutputGso(const std::shared_ptr<Byte>& packet, int packet_size, TxGsoMetadata metadata) noexcept override;
+
+        protected:
+            virtual void                                                            OnInput(PacketInputEventArgs& e) noexcept override;
+            virtual bool                                                            AsynchronousReadPacketLoops() noexcept override;
 
         public: 
             static bool                                                             GetDefaultGateway(char* ifrName, UInt32* address) noexcept;
@@ -143,14 +153,42 @@ namespace ppp
             static int                                                              OpenDriver(const char* ifrName) noexcept;
             void                                                                    Finalize() noexcept;
             bool                                                                    Ssmt(const std::shared_ptr<boost::asio::io_context>& context, int fd, const std::shared_ptr<Byte>& buffer, const std::shared_ptr<boost::asio::posix::stream_descriptor>& sd) noexcept;
+            ssize_t                                                                 WriteTunFrame(int fd, const uint8_t* frame, size_t frame_size) noexcept;
+            ssize_t                                                                 WriteGsoFrameLocked(const uint8_t* frame, size_t frame_size) noexcept;
+            enum class TunWriteFailureSource : uint8_t { BareWrite, GsoDisableFlush, GsoHoldTimerFlush, GsoOrdinaryWrite, GsoCoalescerPush, DirectGsoWrite };
+            void                                                                    FailTunWrite(TunWriteFailureSource source) noexcept;
+            void                                                                    DisableGsoMergeLocked(int write_fd, TunGsoCoalescer::FlushReason reason = TunGsoCoalescer::FlushReason::Terminate) noexcept;
+            void                                                                    ArmGsoHoldTimerLocked() noexcept;
+            void                                                                    CancelGsoHoldTimerLocked() noexcept;
 
         private:    
             SynchronizedObject                                                      syncobj_;
             bool                                                                    promisc_            = false;
             std::atomic<int>                                                        disposed_           = FALSE; 
+            std::atomic<int>                                                        tun_write_failed_   = FALSE;
             ppp::vector<boost::asio::ip::address>                                   dns_addresses_;
             ppp::vector<std::shared_ptr<boost::asio::posix::stream_descriptor>/**/> tun_ssmt_sds_;
             int                                                                     tun_ssmt_fds_size_  = 0;
+            // Synchronizes only the optional VNET/GSO feature. The bare TUN
+            // output path deliberately does not acquire this mutex.
+            mutable std::mutex                                                      gso_mutex_;
+            int                                                                     gso_write_fd_       = -1;
+            bool                                                                    vnet_header_        = false;
+            bool                                                                    tx_gso_supported_    = false;
+            std::atomic<uint64_t>                                                   direct_gso_packets_{0};
+            std::atomic<uint64_t>                                                   direct_gso_bytes_{0};
+            std::atomic<uint64_t>                                                   direct_gso_rejected_{0};
+            size_t                                                                  vnet_header_size_   = 0;
+            size_t                                                                  read_capacity_      = ITap::Mtu;
+            std::shared_ptr<Byte>                                                   vnet_read_buffer_;
+            bool                                                                    gso_merge_active_   = false;
+            bool                                                                    gso_timer_armed_    = false;
+            bool                                                                    gso_ssmt_disabled_  = false;
+            bool                                                                    gso_observer_hooked_ = false;
+            bool                                                                    gso_push_observation_active_ = false;
+            uint64_t                                                                gso_timer_generation_ = 0;
+            boost::asio::steady_timer                                               gso_hold_timer_;
+            TunGsoCoalescer                                                        gso_coalescer_;
         };
     }
 }

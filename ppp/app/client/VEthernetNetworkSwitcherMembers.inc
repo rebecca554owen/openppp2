@@ -1,5 +1,6 @@
                 std::shared_ptr<VEthernetExchanger>                                 exchanger_;
                 std::shared_ptr<ppp::configurations::AppConfiguration>              configuration_;
+                const ppp::app::TcpStackMode                                        tcp_stack_mode_ = ppp::app::TcpStackMode::Native;
                 ppp::string                                                         requested_ipv6_;
                 std::shared_ptr<ppp::transmissions::ITransmissionQoS>                 qos_;
                 std::shared_ptr<ppp::transmissions::ITransmissionStatistics>          statistics_;
@@ -60,6 +61,7 @@
                 std::atomic<bool>                                                   last_teardown_success_{true};
                 std::unique_ptr<ClientConnectionOpener>                           connection_opener_;
                 std::unique_ptr<ClientPacketDispatchHandler>                        packet_dispatch_;
+                std::shared_ptr<xtcp::XtcpRuntime>                                  xtcp_runtime_;
                 std::unique_ptr<ClientBypassRouteLoader>                          bypass_loader_;
                 std::unique_ptr<PeerPrefixRouteManager>                         peer_prefix_routes_;
                 std::unique_ptr<AggregatorLoader>                               aggregator_loader_;

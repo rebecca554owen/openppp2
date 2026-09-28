@@ -39,6 +39,9 @@
     <ClCompile Include="ppp\app\ApplicationMainLoop.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ppp\app\runtime\DatapathAcceptanceBoundary.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ppp\app\ApplicationNetwork.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -379,6 +382,15 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\app\client\VEthernetNetworkTcpipStack.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\xtcp\XtcpNdiBackend.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\xtcp\XtcpPoolLease.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ppp\app\client\xtcp\XtcpRuntime.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ppp\app\client\VEthernetExchanger.cpp">
@@ -757,6 +769,9 @@
     </ClInclude>
     <ClInclude Include="ppp\tap\ITap.h">
       <Filter>源文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\tap\TxGsoMetadata.h">
+      <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="windows\ppp\tap\TapWindows.h">
       <Filter>源文件</Filter>
@@ -1524,6 +1539,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\app\protocol\VirtualEthernetInformation.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ppp\app\runtime\DatapathAcceptanceBoundary.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ppp\app\PppApplication.h">

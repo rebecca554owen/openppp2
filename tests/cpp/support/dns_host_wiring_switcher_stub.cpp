@@ -100,6 +100,15 @@ bool VEthernet::Output(const std::shared_ptr<ppp::Byte>&, int) noexcept {
     return false;
 }
 
+bool VEthernet::OutputGso(const std::shared_ptr<ppp::Byte>&, int,
+    ppp::tap::TxGsoMetadata) noexcept {
+    return false;
+}
+
+bool VEthernet::CanConsumeTcpV4Gso() noexcept {
+    return false;
+}
+
 std::shared_ptr<ppp::net::packet::IPFragment> VEthernet::NewFragment() noexcept {
     return std::shared_ptr<ppp::net::packet::IPFragment>();
 }
@@ -165,6 +174,10 @@ std::shared_ptr<ppp::threading::BufferswapAllocator> VEthernetNetworkSwitcher::G
 }
 
 bool VEthernetNetworkSwitcher::BlockQUIC(bool) noexcept {
+    return false;
+}
+
+bool VEthernetNetworkSwitcher::CanConsumeTcpV4Gso() noexcept {
     return false;
 }
 

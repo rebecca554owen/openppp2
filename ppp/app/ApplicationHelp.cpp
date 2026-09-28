@@ -96,7 +96,14 @@ void PppApplication::PrintHelpInformation() noexcept {
     ppp::ConsoleWrite("┌──────────────────────────────────────────┬──────────────────────────────────────────────────┬─────────────────────────┐\n");
     ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "OPTION", col_description_width, "DESCRIPTION", col_default_width, "DEFAULT");
     ppp::ConsoleWrite("├──────────────────────────────────────────┼──────────────────────────────────────────────────┼─────────────────────────┤\n");
-    ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--lwip=[yes|no]", col_description_width, "Network protocol stack selection", col_default_width,
+    ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--tcp-stack=[native|lwip|xtcp]", col_description_width, "Select TCP stack (xtcp must be built and wired)", col_default_width,
+#if defined(_WIN32)
+        ppp::tap::TapWindows::IsWintun() ? "native" : "lwip"
+#else
+        "native"
+#endif
+    );
+    ppp::ConsoleFormat("│ %-*s │ %-*s │ %-*s │\n", col_option_width, "--lwip=[yes|no]", col_description_width, "Legacy compatibility TCP stack selection", col_default_width,
 #if defined(_WIN32)
         ppp::tap::TapWindows::IsWintun() ? "no" : "yes"
 #else
