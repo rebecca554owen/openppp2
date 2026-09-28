@@ -402,7 +402,7 @@ namespace ppp
             /** @brief Guards `s_` / `wakeup_pending_` transitions; never held across `jump_fcontext`. */
             std::mutex                                                          syncobj_;
             /** @brief Latched wakeup consumed by the next `Suspend()` (completion-before-suspend). */
-            bool                                                                wakeup_pending_ = false;
+            int                                                                 wakeup_pending_ = 0;
             /** @brief Stored callee (coroutine) context handle; updated on each switch. */
             std::atomic<boost::context::detail::fcontext_t>                     callee_     = NULLPTR;
             /** @brief Stored caller (event loop) context handle; updated on each switch. */

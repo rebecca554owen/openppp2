@@ -74,13 +74,14 @@ namespace ppp
             YieldContext* y = this;
             {
                 std::lock_guard<std::mutex> scope(y->syncobj_);
-                if (y->wakeup_pending_)
+                if (y->wakeup_pending_ > 0)
                 {
                     /**
-                     * @brief A completion was latched before this suspend could park
-                     *        (completion-before-suspend); consume it without blocking.
+                     * @brief One or more completions were latched before this suspend
+                     *        could park (completion-before-suspend); consume exactly
+                     *        one without blocking.
                      */
-                    y->wakeup_pending_ = false;
+                    y->wakeup_pending_ -= 1;
                     return true;
                 }
 
@@ -121,21 +122,22 @@ namespace ppp
                 {
                     y->s_.store(STATUS_RESUMING);
                 }
-                else if (status == STATUS_RESUMED || status == STATUS_SUSPENDING)
+                else if (status == STATUS_RESUMED || status == STATUS_SUSPENDING ||
+                         status == STATUS_RESUMING)
                 {
                     /**
                      * @brief The coroutine has not published its park point yet (it is
-                     *        still running, or is in the middle of the suspend handoff).
-                     *        Latch the wakeup so the pending Suspend() consumes it;
-                     *        dropping it here permanently hangs the coroutine when the
-                     *        io_context is driven by more than one run() thread.
+                     *        still running, mid-handoff, or being re-entered).  Count
+                     *        this wakeup so a later Suspend() consumes it; collapsing
+                     *        concurrent wakeups into a single bool dropped completions
+                     *        and hung the coroutine under multi-runner.
                      */
-                    y->wakeup_pending_ = true;
+                    y->wakeup_pending_ += 1;
                     return true;
                 }
                 else
                 {
-                    /** @brief STATUS_RESUMING (duplicate wakeup) or STATUS_COMPLETED. */
+                    /** @brief STATUS_COMPLETED. */
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                     return false;
                 }
@@ -202,14 +204,14 @@ namespace ppp
                 return true;
             }
 
-            if (y->wakeup_pending_)
+            if (y->wakeup_pending_ > 0)
             {
                 /**
-                 * @brief A wakeup raced the suspend handoff; consume it and tell the
+                 * @brief A wakeup raced the suspend handoff; consume one and tell the
                  *        caller to re-enter the coroutine immediately so the suspend
                  *        never blocks.
                  */
-                y->wakeup_pending_ = false;
+                y->wakeup_pending_ -= 1;
                 y->s_.store(STATUS_RESUMING);
                 return false;
             }

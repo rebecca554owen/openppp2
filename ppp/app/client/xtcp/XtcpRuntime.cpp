@@ -1457,7 +1457,7 @@ public:
             stats_.resume_pending.fetch_sub(1, std::memory_order_relaxed);
         }
         boost::system::error_code ec;
-        flow->resume_timer.cancel(ec);
+        flow->resume_timer.cancel();
         flow->resume_recheck_posted = false;
         flow->resume_retries = 0;
         if (terminal && !flow->resume_terminal) {
@@ -2771,9 +2771,9 @@ private:
             external_cancel_(flow->source_port, Generation());
         }
         boost::system::error_code ec;
-        flow->retry_timer.cancel(ec);
-        flow->connector.cancel(ec);
-        flow->connector.close(ec);
+        flow->retry_timer.cancel();
+        flow->connector.cancel();
+        flow->connector.close();
         Shard& s = shards_[flow->shard];
         if (flow->connection_id != 0) {
             s.connections.erase(flow->connection_id);
@@ -3273,11 +3273,11 @@ private:
             std::uint64_t blocked_bytes = 0;
             std::uint64_t max_current_us = 0;
             bool have_snapshot = false;
-            UInt32 attempt_min = 0, attempt_max = 0;
-            UInt32 pending_min = 0, pending_max = 0;
-            UInt32 inflight_min = 0, inflight_max = 0;
-            UInt32 sndbuf_min = 0, sndbuf_max = 0;
-            UInt32 sndwnd_min = 0, sndwnd_max = 0;
+            uint64_t attempt_min = 0, attempt_max = 0;
+            uint64_t pending_min = 0, pending_max = 0;
+            uint64_t inflight_min = 0, inflight_max = 0;
+            uint64_t sndbuf_min = 0, sndbuf_max = 0;
+            uint64_t sndwnd_min = 0, sndwnd_max = 0;
             UInt64 cwnd_min = 0, cwnd_max = 0;
             UInt64 pacing_due_min = 0, pacing_due_max = 0;
             const std::uint64_t now_us = NowUs();
@@ -3627,7 +3627,7 @@ private:
                 stats_.timer_rearm_attempts.fetch_add(1, std::memory_order_relaxed);
             }
             boost::system::error_code ec;
-            s.poll_timer->cancel(ec);
+            s.poll_timer->cancel();
             SchedulePoll(s, generation_.load(std::memory_order_acquire));
         }
         else if (observe && target < s.poll_timer->expiry()) {
@@ -3687,7 +3687,7 @@ private:
     void DoStopShard(Shard& s) noexcept {
         if (s.poll_timer) {
             boost::system::error_code ec;
-            s.poll_timer->cancel(ec);
+            s.poll_timer->cancel();
             s.poll_timer.reset();
         }
         while (!s.flows.empty()) {
@@ -3705,7 +3705,7 @@ private:
     void DoStopFinalize() noexcept {
         if (perf_dump_timer_) {
             boost::system::error_code ec;
-            perf_dump_timer_->cancel(ec);
+            perf_dump_timer_->cancel();
             perf_dump_timer_.reset();
         }
         if (perf_out_.is_open()) {
