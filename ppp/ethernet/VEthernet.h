@@ -6,6 +6,7 @@
  */
 
 #include <ppp/ethernet/VNetstack.h>
+#include <ppp/tap/TxGsoMetadata.h>
 
 struct pbuf;
 

@@ -7,9 +7,12 @@
 #endif
 
                 std::shared_ptr<ppp::configurations::AppConfiguration> GetConfiguration() noexcept;
+                ppp::app::TcpStackMode GetTcpStackMode() const noexcept;
                 std::shared_ptr<const routing::HumanRoutingRules> GetHumanRoutingRulesSnapshot() const noexcept;
                 std::shared_ptr<VEthernetExchanger> GetExchanger() noexcept;
                 ppp::app::runtime::RuntimeReadiness GetRuntimeReadiness() noexcept;
+                bool GetTapRuntimeStats(ppp::tap::TapRuntimeStats& stats) noexcept;
+                bool GetXtcpRuntimeStats(ppp::app::runtime::RuntimeXtcpStats& stats) noexcept;
                 bool WasTeardownSuccessful() const noexcept { return last_teardown_success_.load(std::memory_order_acquire); }
                 void Dispose(ppp::function<void(bool)> completion) noexcept;
                 void RequestedIPv6(const ppp::string& value) noexcept;

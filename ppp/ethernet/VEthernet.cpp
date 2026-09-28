@@ -1100,5 +1100,21 @@ namespace ppp
 
             return tap->Output(packet, packet_length);
         }
+
+        /**
+         * @brief GSO variant of Output; falls back to standard path in base class.
+         */
+        bool VEthernet::OutputGso(const std::shared_ptr<Byte>& packet, int packet_length, ppp::tap::TxGsoMetadata) noexcept
+        {
+            return Output(packet, packet_length);
+        }
+
+        /**
+         * @brief Whether this endpoint can consume native TCPv4 GSO segments.
+         */
+        bool VEthernet::CanConsumeTcpV4Gso() noexcept
+        {
+            return false;
+        }
     }
 }

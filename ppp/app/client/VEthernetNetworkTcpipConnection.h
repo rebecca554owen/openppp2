@@ -37,6 +37,7 @@
 #include <ppp/diagnostics/Error.h>
 
 #include <ppp/app/client/VEthernetExchanger.h>
+#include <ppp/app/client/xtcp/XtcpFirstLegHooks.h>
 #include <ppp/app/client/routing/TcpRoutingSelector.h>
 
 #include <ppp/app/protocol/VirtualEthernetLinklayer.h>
@@ -46,7 +47,6 @@
 #include <ppp/app/mux/vmux_skt.h>
 
 namespace ppp::configurations { class AppConfiguration; }
-
 namespace ppp {
     namespace app {
         namespace client {
@@ -71,7 +71,9 @@ namespace ppp {
              * One instance is created per accepted TCP flow. Instances are short-lived and
              * self-dispose when the forwarding path closes.
              */
-            class VEthernetNetworkTcpipConnection : public ppp::ethernet::VNetstack::TapTcpClient {
+            class VEthernetNetworkTcpipConnection :
+                public ppp::ethernet::VNetstack::TapTcpClient,
+                public xtcp::XtcpSecondLegHooks {
             public:
                 /** @brief VPN TCP/IP connection type alias. */
                 typedef ppp::app::protocol::VirtualEthernetTcpipConnection  VirtualEthernetTcpipConnection;
@@ -120,6 +122,18 @@ namespace ppp {
                  *       Delegates to all active forwarding channels' Dispose() methods.
                  */
                 virtual void                                                Dispose() noexcept override;
+                virtual xtcp::XtcpDirectResult                              SendToPeer(const std::uint8_t* data, std::uint32_t length,
+                    xtcp::XtcpUploadBudget::Reservation&& credit) noexcept override;
+                virtual void                                                OnDownloadComplete(
+                    const xtcp::XtcpDirectReadReservation& reservation,
+                    xtcp::XtcpDirectCompletion completion) noexcept override;
+                virtual void                                                SetDirectQueueTelemetry(
+                    const std::shared_ptr<ppp::app::runtime::XtcpDirectQueueTelemetry>& telemetry) noexcept override;
+                virtual void                                                ClosePeerSend() noexcept override;
+                void                                                        SetExternalFirstLeg(
+                    uint64_t runtime_generation,
+                    uint64_t flow_generation,
+                    const std::weak_ptr<xtcp::XtcpFirstLegHooks>& hooks) noexcept;
 
             public:
                 /**
@@ -194,6 +208,7 @@ namespace ppp {
                  * @note The non-candidate coroutine preserves the original ConnectToPeer/AckAccept order.
                  */
                 virtual bool                                                BeginAccept() noexcept override;
+                virtual bool                                                AckAccept() noexcept override;
 
                 /**
                  * @brief Applies accepted-socket options before final accept handling.
@@ -267,6 +282,13 @@ namespace ppp {
                 std::shared_ptr<RinetdConnection>                           connection_rinetd_;
                 /** @brief Active VMUX sub-channel socket; null if not using mux path. */
                 std::shared_ptr<vmux::vmux_skt>                             connection_mux_;
+                std::weak_ptr<xtcp::XtcpFirstLegHooks>                     external_first_leg_hooks_;
+                uint64_t                                                    external_runtime_generation_ = 0;
+                uint64_t                                                    external_flow_generation_ = 0;
+                std::atomic<bool>                                           external_ready_signaled_{false};
+                std::atomic<bool>                                           external_closed_signaled_{false};
+                std::mutex                                                  external_direct_sync_;
+                std::weak_ptr<VirtualEthernetTcpipConnection>               external_direct_connection_;
 #if defined(_IPHONE) || defined(IPHONE)
                 /** @brief Tracks iOS per-flow server TCP slot held for mux=0 VPN path. */
                 bool                                                        ios_child_transmission_slot_held_ = false;

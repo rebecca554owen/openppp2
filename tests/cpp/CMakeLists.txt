@@ -627,6 +627,7 @@ openppp2_add_cpp_test(route_coordinator_test SOURCES
     "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
 target_compile_definitions(route_coordinator_test PRIVATE
     OPENPPP2_ROUTE_TEST_MOBILE)
+if(NOT APPLE)
 openppp2_add_cpp_test(linux_route_platform_contract_test SOURCES
     linux_route_platform_contract_test.cpp
     support/linux_route_platform_stubs.cpp
@@ -637,6 +638,7 @@ target_compile_definitions(linux_route_platform_contract_test PRIVATE
 openppp2_add_cpp_test(linux_ipv6_contract_test SOURCES
     linux_ipv6_contract_test.cpp)
 target_link_libraries(linux_ipv6_contract_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+endif()
 openppp2_add_cpp_test(windows_ipv6_route_transaction_test SOURCES
     windows_ipv6_route_transaction_test.cpp
     "${OPENPPP2_ROOT}/ppp/ipv6/IPv6RouteTransaction.cpp")

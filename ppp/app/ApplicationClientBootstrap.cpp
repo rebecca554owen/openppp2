@@ -73,7 +73,7 @@ bool PrepareClientLoopbackEnvironment(
             break;
         }
 
-        ethernet = ppp::make_shared_object<client::VEthernetNetworkSwitcher>(context, network_interface->Lwip, network_interface->VNet, configuration->concurrent > 1, configuration, network_interface->TcpStackMode == ppp::app::NetworkInterface::TcpStack::Xtcp);
+        ethernet = ppp::make_shared_object<client::VEthernetNetworkSwitcher>(context, network_interface->TcpStack, network_interface->VNet, configuration->concurrent > 1, configuration);
         if (NULLPTR == ethernet) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
             break;

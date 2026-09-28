@@ -7,6 +7,7 @@
 #include <ppp/app/client/ClientConnectionTeardown.h>
 #include <ppp/app/client/ClientConnectionOpener.h>
 #include <ppp/app/client/ClientPacketDispatchHandler.h>
+#include <ppp/app/client/xtcp/XtcpRuntime.h>
 #include <ppp/app/client/ClientBypassRouteLoader.h>
 #include <ppp/app/client/QuicRejectRateLimiter.h>
 #include <ppp/app/client/PeerPrefixRouteManager.h>
@@ -138,10 +139,15 @@ using ppp::telemetry::Level;
 namespace ppp {
     namespace app {
         namespace client {
-            /** @brief Constructs network switcher and initializes baseline state flags. */
-            VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, bool xtcp) noexcept
-                : VEthernet(context, lwip, vnet, mta, xtcp)
+            VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept
+                : VEthernetNetworkSwitcher(context, lwip ? ppp::app::TcpStackMode::Lwip : ppp::app::TcpStackMode::Native, vnet, mta, configuration) {
+            }
+
+            /** @brief Constructs network switcher and freezes the selected TCP stack mode. */
+            VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, ppp::app::TcpStackMode tcp_stack_mode, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept
+                : VEthernet(context, tcp_stack_mode == ppp::app::TcpStackMode::Lwip, vnet, mta)
                 , configuration_(configuration)
+                , tcp_stack_mode_(tcp_stack_mode)
                 , dns_controller_(std::make_shared<dns::DnsController>(
                     std::make_unique<dns::DnsInterceptor>(), nullptr))
                 , route_coordinator_(std::make_unique<route::RouteCoordinator>(nullptr))
@@ -202,6 +208,10 @@ namespace ppp {
                 return configuration_;
             }
 
+            ppp::app::TcpStackMode VEthernetNetworkSwitcher::GetTcpStackMode() const noexcept {
+                return tcp_stack_mode_;
+            }
+
             std::shared_ptr<const routing::HumanRoutingRules> VEthernetNetworkSwitcher::GetHumanRoutingRulesSnapshot() const noexcept {
                 std::shared_ptr<dns::DnsController> controller = dns_controller_;
                 return controller ? controller->GetHumanRoutingRules() : nullptr;
@@ -209,6 +219,29 @@ namespace ppp {
 
             std::shared_ptr<VEthernetExchanger> VEthernetNetworkSwitcher::GetExchanger() noexcept {
                 return exchanger_;
+            }
+
+            bool VEthernetNetworkSwitcher::GetTapRuntimeStats(ppp::tap::TapRuntimeStats& stats) noexcept {
+#if defined(_LINUX)
+                const std::shared_ptr<ppp::tap::ITap> tap = GetTap();
+                const auto* linux_tap = dynamic_cast<ppp::tap::TapLinux*>(tap.get());
+                return linux_tap != NULLPTR && linux_tap->GetRuntimeStats(stats);
+#else
+                (void)stats;
+                return false;
+#endif
+            }
+
+            bool VEthernetNetworkSwitcher::GetXtcpRuntimeStats(ppp::app::runtime::RuntimeXtcpStats& stats) noexcept {
+                if (tcp_stack_mode_ != ppp::app::TcpStackMode::Xtcp) {
+                    return false;
+                }
+                const std::shared_ptr<xtcp::XtcpRuntime> runtime = xtcp_runtime_;
+                if (NULLPTR == runtime) {
+                    return false;
+                }
+                stats = runtime->SnapshotStats();
+                return true;
             }
 
             ppp::app::runtime::RuntimeReadiness VEthernetNetworkSwitcher::GetRuntimeReadiness() noexcept {
@@ -221,18 +254,23 @@ namespace ppp {
                 facts.adapter_open = tap && tap->IsOpen();
 #if defined(_ANDROID) || defined(_IPHONE)
                 facts.route_required = !proxy_only_;
-                facts.dns_required = !proxy_only_;
 #else
                 facts.route_required = !proxy_only_ && tap && tap->IsHostedNetwork();
-                facts.dns_required = !proxy_only_ && tap && tap->IsHostedNetwork();
 #endif
                 facts.route_applied = route_snapshot.applied;
+                facts.dns_required = !proxy_only_;
                 facts.dns_configured = dns_controller_ && dns_controller_->IsConfigured();
                 facts.dns_session_active = dns_controller_ && dns_controller_->HasActiveSession();
                 // INFO is optional for unmanaged compatibility sessions. The
                 // switcher is published only after Open() has applied policy.
                 facts.policy_negotiated = facts.session_established;
-                return ppp::app::runtime::BuildClientRuntimeReadiness(facts);
+                ppp::app::runtime::RuntimeReadiness readiness =
+                    ppp::app::runtime::BuildClientRuntimeReadiness(facts);
+                if (tcp_stack_mode_ == ppp::app::TcpStackMode::Xtcp) {
+                    const std::shared_ptr<xtcp::XtcpRuntime> runtime = xtcp_runtime_;
+                    readiness.policy = readiness.policy && runtime && runtime->IsReady();
+                }
+                return readiness;
             }
 
             void VEthernetNetworkSwitcher::RequestedIPv6(const ppp::string& value) noexcept {
@@ -521,9 +559,30 @@ namespace ppp {
                 return true;
             }
 
+            /** @brief Allows complete TCPv4 GSO delivery only while the XTCP runtime is ready. */
+            bool VEthernetNetworkSwitcher::CanConsumeTcpV4Gso() noexcept {
+                if (tcp_stack_mode_ != ppp::app::TcpStackMode::Xtcp) {
+                    return false;
+                }
+                const std::shared_ptr<xtcp::XtcpRuntime> runtime = xtcp_runtime_;
+                return runtime && runtime->IsReady();
+            }
+
             /** @brief Handles native IPv4 packet input and forwards eligible NAT traffic. */
             bool VEthernetNetworkSwitcher::OnPacketInput(ppp::net::native::ip_hdr* packet, int packet_length, int header_length, int proto, bool vnet) noexcept {
-                return packet_dispatch_->OnPacketInput(packet, packet_length, header_length, proto, vnet);
+                if (packet_dispatch_->OnPacketInput(
+                        packet, packet_length, header_length, proto, vnet)) {
+                    return true;
+                }
+                if (tcp_stack_mode_ == ppp::app::TcpStackMode::Xtcp &&
+                    proto == ppp::net::native::ip_hdr::IP_PROTO_TCP) {
+                    const std::shared_ptr<xtcp::XtcpRuntime> runtime = xtcp_runtime_;
+                    if (NULLPTR != runtime) {
+                        runtime->SubmitIPv4Tcp(packet, packet_length);
+                    }
+                    return true;
+                }
+                return false;
             }
 
             /** @brief Handles raw IPv6 packet input and forwards approved traffic. */

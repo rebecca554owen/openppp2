@@ -126,9 +126,8 @@ VEthernetNetworkSwitcher::VEthernetNetworkSwitcher(
     bool lwip,
     bool vnet,
     bool mta,
-    const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
-    bool xtcp) noexcept
-    : VEthernet(context, lwip, vnet, mta, xtcp)
+    const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept
+    : VEthernet(context, lwip, vnet, mta)
     , configuration_(configuration)
     , timeout_registry_(std::make_unique<SwitcherTimeoutRegistry>())
     , aggregator_loader_(std::make_unique<AggregatorLoader>()) {

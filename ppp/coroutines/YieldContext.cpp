@@ -299,7 +299,23 @@ namespace ppp
 
                 if (h)
                 {
+                    try
+                    {
                     h(*y);
+                    }
+                    catch (const std::exception&)
+                    {
+                        /* An exception escaping the handler would cross the fcontext
+                         * boundary below (undefined behaviour per Boost.Context). Catch
+                         * every exception here and convert it into an error code so the
+                         * coroutine terminates gracefully instead of crashing. */
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineHandlerException);
+                    }
+                    catch (...)
+                    {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeCoroutineHandlerException);
+                    }
+
                     h = NULLPTR;
                 }
 

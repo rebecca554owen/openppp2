@@ -20,8 +20,11 @@ namespace ppp::net::packet { class UdpFrame; class BufferSegment; }
 
 #include <ppp/net/packet/IPFrame.h>
 #include <ppp/ethernet/VEthernet.h>
+#include <ppp/app/TcpStackMode.h>
 #include <ppp/app/client/route/RouteState.h>
 #include <ppp/app/runtime/RuntimeReadiness.h>
+#include <ppp/app/runtime/RuntimeXtcpStats.h>
+#include <ppp/tap/TapRuntimeStats.h>
 #include <ppp/app/protocol/VirtualEthernetInformationFwd.h>
 #include <ppp/app/client/ClientNetworkInterface.h>
 #include <ppp/net/native/rib_fwd.h>
@@ -49,6 +52,7 @@ namespace ppp {
             class RemoteEndpointLoader;
             class SwitcherTimeoutRegistry;
             class VEthernetNetworkSwitcher;
+            namespace xtcp { class XtcpRuntime; }
 
             namespace dns {
                 class DnsResponseHandler;
@@ -105,7 +109,8 @@ namespace ppp {
 
                 VEthernetTickEventHandler TickEvent;
 
-                VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, bool xtcp = false) noexcept;
+                VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, ppp::app::TcpStackMode tcp_stack_mode, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept;
+                VEthernetNetworkSwitcher(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration) noexcept;
                 VEthernetNetworkSwitcher(const VEthernetNetworkSwitcher&) = delete;
                 VEthernetNetworkSwitcher& operator=(const VEthernetNetworkSwitcher&) = delete;
                 VEthernetNetworkSwitcher(VEthernetNetworkSwitcher&&) noexcept = delete;

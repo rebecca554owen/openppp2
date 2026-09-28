@@ -159,6 +159,13 @@ namespace ppp {
             const StrandPtr&                                                                        GetStrand() const noexcept { return strand_; }
             /** @brief Reports whether the authenticated OpenPPP2 handshake completed. */
             virtual bool                                                                            IsHandshakeComplete() const noexcept { return handshaked_.load(std::memory_order_acquire); }
+
+            /** @brief True when this transmission can half-close its send side. */
+            virtual bool                                                                            SupportsSendHalfClose() const noexcept { return false; }
+            /** @brief Half-closes the send side when supported. @return True on success or already shut down. */
+            virtual bool                                                                            ShutdownSend() noexcept { return false; }
+            /** @brief True when the peer has closed its send side / receive path is finished. */
+            virtual bool                                                                            IsReceiveClosed() const noexcept { return false; }
             /**
              * @brief Installs the v2.2.0 AEAD record protectors for both directions.
              * @param material Derived record key material (HKDF, see RecordKeyDerivation).

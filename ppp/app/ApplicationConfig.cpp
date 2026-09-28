@@ -431,12 +431,37 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
     std::shared_ptr<NetworkInterface> ni = ppp::make_shared_object<NetworkInterface>();
     if (NULLPTR != ni) {
 #if defined(_WIN32)
-        ni->Lwip = ppp::ToBoolean(ppp::GetCommandArgument("--lwip", argc, argv, ppp::tap::TapWindows::IsWintun() ? ppp::string() : "y").data());
+        const bool platform_default_lwip = !ppp::tap::TapWindows::IsWintun();
 #else
-        ni->Lwip = ppp::ToBoolean(ppp::GetCommandArgument("--lwip", argc, argv).data());
-        ppp::string tcpip = ppp::LTrim(ppp::RTrim(ppp::GetCommandArgument("--tun-tcpip", argc, argv)));
-        ni->TcpStackMode = (tcpip == "xtcp") ? NetworkInterface::TcpStack::Xtcp : NetworkInterface::TcpStack::Lwip;
+        const bool platform_default_lwip = false;
 #endif
+#if defined(PPP_ENABLE_XTCP) && defined(PPP_XTCP_RUNTIME_WIRED)
+        const bool xtcp_available = true;
+#else
+        const bool xtcp_available = false;
+#endif
+        const bool tcp_stack_specified = ppp::HasCommandArgument("--tcp-stack", argc, argv);
+        const bool legacy_lwip_specified = ppp::HasCommandArgument("--lwip", argc, argv);
+        const ppp::string tcp_stack_value = ppp::GetCommandArgument("--tcp-stack", argc, argv);
+        const ppp::string legacy_lwip_value = ppp::GetCommandArgument("--lwip", argc, argv);
+        const TcpStackModeResult tcp_stack = ResolveTcpStackMode({
+            platform_default_lwip,
+            tcp_stack_specified,
+            tcp_stack_value,
+            legacy_lwip_specified,
+            ppp::ToBoolean(legacy_lwip_value.data()),
+            xtcp_available,
+        });
+        if (tcp_stack.Status != TcpStackModeStatus::Success) {
+            const ppp::diagnostics::ErrorCode error = tcp_stack.Status == TcpStackModeStatus::XtcpUnavailable
+                ? ppp::diagnostics::ErrorCode::NetworkProtocolUnsupported
+                : ppp::diagnostics::ErrorCode::ConfigFieldInvalid;
+            ppp::diagnostics::SetLastErrorCode(error);
+            return NULLPTR;
+        }
+
+        ni->TcpStack = tcp_stack.Mode;
+        ni->Lwip = ni->TcpStack == TcpStackMode::Lwip;
         ni->Nic = ppp::RTrim(ppp::LTrim(ppp::GetCommandArgument("--nic", argc, argv)));
         ni->BlockQUIC = ppp::ToBoolean(ppp::GetCommandArgument("--block-quic", argc, argv).data());
 
