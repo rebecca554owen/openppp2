@@ -9,6 +9,7 @@
 #include <ppp/net/native/ip.h>
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/threading/BufferswapAllocator.h>
+#include <ppp/tap/TxGsoMetadata.h>
 
 namespace ppp
 {
@@ -136,6 +137,20 @@ namespace ppp
              * @return true if packet is queued for asynchronous write.
              */
             virtual bool                                                    Output(const void* packet, int packet_size) noexcept;
+            /**
+             * @brief Whether this adapter can transmit TCPv4 GSO (generic segmentation
+             *        offload) segments natively.  Default: false (callers must fall
+             *        back to plain Output()).
+             */
+            virtual bool                                                    SupportsTxGso() const noexcept { return false; }
+            /**
+             * @brief GSO variant of Output(); default forwards to the plain path.
+             * @param packet Packet payload pointer.
+             * @param packet_size Packet payload length in bytes.
+             * @param metadata Per-segment GSO metadata (TSO/GSO sizing hints).
+             * @return true if packet is queued for asynchronous write.
+             */
+            virtual bool                                                    OutputGso(const std::shared_ptr<Byte>& packet, int packet_size, TxGsoMetadata metadata) noexcept;
 
         public:
             /** @brief Returns the device identifier string. */

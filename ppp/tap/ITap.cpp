@@ -642,5 +642,11 @@ namespace ppp
         {
             return WritePacketToKernelNio::Invoke(this, packet, packet_size);
         }
+
+        bool ITap::OutputGso(const std::shared_ptr<Byte>& packet, int packet_size, TxGsoMetadata) noexcept
+        {
+            /** @brief Default fallback: plain Output() path (no native GSO). */
+            return Output(packet, packet_size);
+        }
     }
 }
