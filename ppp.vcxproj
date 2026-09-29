@@ -504,6 +504,10 @@
     <ClCompile Include="ppp\app\mux\MuxCoordinator.cpp" />
     <ClCompile Include="ppp\app\mux\vmux_net.cpp" />
     <ClCompile Include="ppp\app\mux\vmux_skt.cpp" />
+    <ClCompile Include="ppp\app\client\xtcp\XtcpNdiBackend.cpp" />
+    <ClCompile Include="ppp\app\client\xtcp\XtcpPoolLease.cpp" />
+    <ClCompile Include="ppp\app\client\xtcp\XtcpRuntime.cpp" />
+    <ClCompile Include="ppp\app\runtime\DatapathAcceptanceBoundary.cpp" />
     <ClCompile Include="ppp\app\protocol\VirtualEthernetLogger.cpp" />
     <ClCompile Include="ppp\app\protocol\VirtualEthernetMappingPort.cpp" />
     <ClCompile Include="ppp\app\protocol\VirtualEthernetPacket.cpp" />

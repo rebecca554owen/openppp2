@@ -187,8 +187,6 @@ namespace ppp
             bool                                                                    gso_observer_hooked_ = false;
             bool                                                                    gso_push_observation_active_ = false;
             uint64_t                                                                gso_timer_generation_ = 0;
-            boost::asio::steady_timer                                               gso_hold_timer_;
-            TunGsoCoalescer                                                        gso_coalescer_;
         };
     }
 }
