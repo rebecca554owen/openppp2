@@ -1,5 +1,9 @@
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/diagnostics/Error.h>
+
+#include <cstdio>
+#include <cstdlib>
+
 #if defined(PPP_COROUTINES_TSAN_ENABLED)
 #include <sanitizer/tsan_interface.h>
 #endif
@@ -23,6 +27,28 @@ namespace ppp
         static constexpr int STATUS_RESUMING   = -1;
         /** @brief State: coroutine handler returned; the context is being reclaimed. */
         static constexpr int STATUS_COMPLETED  = 3;
+
+        /**
+         * @brief Diagnostic counters for lost-wakeup forensics (env: OPENPPP2_YIELD_DIAG=1).
+         *        All counters are process-global atomics; dumped by DumpYieldDiag().
+         */
+        struct YieldDiag {
+            std::atomic<uint64_t> resume_latch{0};        /**< Resume() latched (coroutine still running) */
+            std::atomic<uint64_t> resume_jump{0};         /**< Resume() jumped back into parked coroutine */
+            std::atomic<uint64_t> suspend_consume{0};     /**< Suspend() consumed a latch at entry */
+            std::atomic<uint64_t> suspend_park{0};        /**< Suspend() jumped out (will park) */
+            std::atomic<uint64_t> switch_consume{0};      /**< Switch() consumed a latch racing the handoff */
+            std::atomic<uint64_t> switch_park{0};         /**< Switch() published STATUS_SUSPEND */
+            std::atomic<uint64_t> reenter{0};             /**< Switch() re-entered coroutine after latch consume */
+        };
+        static YieldDiag& Diag() noexcept {
+            static YieldDiag d;
+            return d;
+        }
+        static const bool diag_enabled_ = []() noexcept {
+            const char* v = std::getenv("OPENPPP2_YIELD_DIAG");
+            return v && v[0] == '1';
+        }();
 
         /**
          * @brief Constructs a coroutine context and allocates stack memory.
@@ -82,6 +108,7 @@ namespace ppp
                      *        one without blocking.
                      */
                     y->wakeup_pending_ -= 1;
+                    if (diag_enabled_) { Diag().suspend_consume.fetch_add(1, std::memory_order_relaxed); }
                     return true;
                 }
 
@@ -93,6 +120,8 @@ namespace ppp
 
                 y->s_.store(STATUS_SUSPENDING);
             }
+
+            if (diag_enabled_) { Diag().suspend_park.fetch_add(1, std::memory_order_relaxed); }
 
             /** @brief The mutex is released before jumping; never hold it across fcontext switches. */
 #if defined(PPP_COROUTINES_TSAN_ENABLED)
@@ -133,6 +162,7 @@ namespace ppp
                      *        and hung the coroutine under multi-runner.
                      */
                     y->wakeup_pending_ += 1;
+                    if (diag_enabled_) { Diag().resume_latch.fetch_add(1, std::memory_order_relaxed); }
                     return true;
                 }
                 else
@@ -147,6 +177,7 @@ namespace ppp
             y->sanitizer_caller_fiber_ = __tsan_get_current_fiber();
             __tsan_switch_to_fiber(y->sanitizer_fiber_, 0);
 #endif
+            if (diag_enabled_) { Diag().resume_jump.fetch_add(1, std::memory_order_relaxed); }
             return Switch(
                 boost::context::detail::jump_fcontext(
                     y->callee_.exchange(NULLPTR), y), y);
@@ -213,10 +244,12 @@ namespace ppp
                  */
                 y->wakeup_pending_ -= 1;
                 y->s_.store(STATUS_RESUMING);
+                if (diag_enabled_) { Diag().switch_consume.fetch_add(1, std::memory_order_relaxed); }
                 return false;
             }
 
             y->s_.store(STATUS_SUSPEND);
+            if (diag_enabled_) { Diag().switch_park.fetch_add(1, std::memory_order_relaxed); }
             return true;
         }
 
@@ -233,6 +266,15 @@ namespace ppp
                     y->s_.store(STATUS_COMPLETED);
                 }
 
+                /**
+                 * @brief KNOWN ISSUE (upstream parity): completions latched as
+                 *        fast-path wakeups can leave `Resume` handlers for this
+                 *        context still queued when the handler returns.  Inline
+                 *        release then hands those handlers freed memory.  A full
+                 *        fix needs shared lifetime (shared_ptr) for YieldContext;
+                 *        tracked separately.  Inline release kept for upstream
+                 *        behaviour parity.
+                 */
                 YieldContext::Release(y);
                 return true;
             }
@@ -244,6 +286,7 @@ namespace ppp
                  * @brief A wakeup was latched while the coroutine was parking; re-enter
                  *        it immediately so the suspend is never allowed to block.
                  */
+                if (diag_enabled_) { Diag().reenter.fetch_add(1, std::memory_order_relaxed); }
 #if defined(PPP_COROUTINES_TSAN_ENABLED)
                 y->sanitizer_caller_fiber_ = __tsan_get_current_fiber();
                 __tsan_switch_to_fiber(y->sanitizer_fiber_, 0);
@@ -329,9 +372,9 @@ namespace ppp
                 // If execution reaches here the coroutine was resumed after completion.
                 // This is a programming error (caller-side bug) that we cannot repair.
                 // Clear the stale callee reference to prevent a second invalid jump,
-                // then release the context so its memory is reclaimed.
-                // We must NOT throw: propagating an exception across an fcontext
-                // boundary is undefined behaviour per Boost.Context documentation.
+                // then defer the release so any in-flight resume handlers still see
+                // valid memory.  We must NOT throw: propagating an exception across an
+                // fcontext boundary is undefined behaviour per Boost.Context docs.
                 y->callee_.exchange(NULLPTR);
                 YieldContext::Release(y);
             }
@@ -384,6 +427,21 @@ namespace ppp
             }
 
             return true;
+        }
+
+        void YieldContext::DumpYieldDiag() noexcept
+        {
+            YieldDiag& d = Diag();
+            std::fprintf(stderr,
+                "[yield-diag] latch=%llu jump=%llu susp_consume=%llu susp_park=%llu "
+                "sw_consume=%llu sw_park=%llu reenter=%llu\n",
+                (unsigned long long)d.resume_latch.load(std::memory_order_relaxed),
+                (unsigned long long)d.resume_jump.load(std::memory_order_relaxed),
+                (unsigned long long)d.suspend_consume.load(std::memory_order_relaxed),
+                (unsigned long long)d.suspend_park.load(std::memory_order_relaxed),
+                (unsigned long long)d.switch_consume.load(std::memory_order_relaxed),
+                (unsigned long long)d.switch_park.load(std::memory_order_relaxed),
+                (unsigned long long)d.reenter.load(std::memory_order_relaxed));
         }
 
         /**

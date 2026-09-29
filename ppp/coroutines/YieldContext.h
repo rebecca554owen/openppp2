@@ -262,6 +262,22 @@ namespace ppp
              */
             static bool                                                         Spawn(ppp::threading::BufferswapAllocator* allocator, boost::asio::io_context& context, boost::asio::strand<boost::asio::io_context::executor_type>* strand, SpawnHander&& spawn, int stack_size) noexcept;
 
+            /**
+             * @brief Dumps lost-wakeup forensic counters to stderr (env OPENPPP2_YIELD_DIAG=1).
+             *        Diagnostic aid for the multi-runner flake; counters always valid.
+             */
+            static void                                                         DumpYieldDiag() noexcept;
+
+            /**
+             * @brief Snapshot of `s_` and `wakeup_pending_` for hang forensics.
+             *        Diagnostic only; reads without locking (values may tear).
+             */
+            void                                                                DebugState(int& status, int& wakeup_pending) noexcept
+            {
+                status = s_.load(std::memory_order_relaxed);
+                wakeup_pending = wakeup_pending_;
+            }
+
         private:
             /**
              * @brief Allocates the coroutine stack and performs the initial context switch.
