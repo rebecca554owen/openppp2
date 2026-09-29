@@ -419,6 +419,20 @@ namespace ppp
             std::mutex                                                          syncobj_;
             /** @brief Latched wakeup consumed by the next `Suspend()` (completion-before-suspend). */
             int                                                                 wakeup_pending_ = 0;
+            /**
+             * @brief In-flight `R()`-posted resume handlers that may still touch this object.
+             *        Incremented before each `R()` post, decremented after the handler's
+             *        `Resume()` returns.  The completion fence (see `FenceRelease()`)
+             *        hands reclamation to the last handler when this is non-zero at
+             *        completion, so a queued handler never touches freed memory.
+             */
+            std::atomic<int>                                                    pending_resumes_ = 0;
+            /**
+             * @brief Reclamation ownership flag (guarded by `syncobj_`).
+             *        Exactly one of {completion path, last drained handler} may
+             *        run `Release()`; this flag hands out that right once.
+             */
+            bool                                                                reclaimed_ = false;
             /** @brief Stored callee (coroutine) context handle; updated on each switch. */
             std::atomic<boost::context::detail::fcontext_t>                     callee_     = NULLPTR;
             /** @brief Stored caller (event loop) context handle; updated on each switch. */

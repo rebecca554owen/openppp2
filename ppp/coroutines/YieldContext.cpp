@@ -260,22 +260,33 @@ namespace ppp
         {
             if (!t.data)
             {
-                /** @brief Coroutine handler returned; mark completed and reclaim. */
+                /**
+                 * @brief Coroutine handler returned; mark completed and reclaim.
+                 *
+                 * Fast-path wakeups can leave this context's `R()` handlers still
+                 * queued when the handler returns.  The completion fence hands
+                 * reclamation to the last drained handler when any are pending, so
+                 * a queued handler never touches freed memory.
+                 */
+                bool release_now = false;
                 {
                     std::lock_guard<std::mutex> scope(y->syncobj_);
                     y->s_.store(STATUS_COMPLETED);
+                    // Single-winner reclamation: the completion path and the last
+                    // drained handler can both observe COMPLETED + pending==0;
+                    // `reclaimed_` guarantees exactly one of them releases.
+                    if (!y->reclaimed_ &&
+                        y->pending_resumes_.load(std::memory_order_acquire) == 0)
+                    {
+                        y->reclaimed_ = true;
+                        release_now   = true;
+                    }
                 }
 
-                /**
-                 * @brief KNOWN ISSUE (upstream parity): completions latched as
-                 *        fast-path wakeups can leave `Resume` handlers for this
-                 *        context still queued when the handler returns.  Inline
-                 *        release then hands those handlers freed memory.  A full
-                 *        fix needs shared lifetime (shared_ptr) for YieldContext;
-                 *        tracked separately.  Inline release kept for upstream
-                 *        behaviour parity.
-                 */
-                YieldContext::Release(y);
+                if (release_now)
+                {
+                    YieldContext::Release(y);
+                }
                 return true;
             }
 
@@ -297,12 +308,25 @@ namespace ppp
 
                 if (!r.data)
                 {
+                    /** @brief Completion inside the re-enter loop: same fence as the
+                     *        primary completion path — the last drained R() handler
+                     *        reclaims when this path cannot. */
+                    bool release_now = false;
                     {
                         std::lock_guard<std::mutex> scope(y->syncobj_);
                         y->s_.store(STATUS_COMPLETED);
+                        if (!y->reclaimed_ &&
+                            y->pending_resumes_.load(std::memory_order_acquire) == 0)
+                        {
+                            y->reclaimed_ = true;
+                            release_now   = true;
+                        }
                     }
 
-                    YieldContext::Release(y);
+                    if (release_now)
+                    {
+                        YieldContext::Release(y);
+                    }
                     return true;
                 }
 
@@ -372,11 +396,26 @@ namespace ppp
                 // If execution reaches here the coroutine was resumed after completion.
                 // This is a programming error (caller-side bug) that we cannot repair.
                 // Clear the stale callee reference to prevent a second invalid jump,
-                // then defer the release so any in-flight resume handlers still see
-                // valid memory.  We must NOT throw: propagating an exception across an
-                // fcontext boundary is undefined behaviour per Boost.Context docs.
+                // then reclaim through the completion fence so any in-flight resume
+                // handlers still see valid memory.  We must NOT throw: propagating an
+                // exception across an fcontext boundary is undefined behaviour per
+                // Boost.Context docs.
                 y->callee_.exchange(NULLPTR);
-                YieldContext::Release(y);
+                bool release_now = false;
+                {
+                    std::lock_guard<std::mutex> scope(y->syncobj_);
+                    y->s_.store(STATUS_COMPLETED);
+                    if (!y->reclaimed_ &&
+                        y->pending_resumes_.load(std::memory_order_acquire) == 0)
+                    {
+                        y->reclaimed_ = true;
+                        release_now   = true;
+                    }
+                }
+                if (release_now)
+                {
+                    YieldContext::Release(y);
+                }
             }
         }
  
@@ -454,6 +493,17 @@ namespace ppp
         bool YieldContext::R() noexcept
         {
             YieldContext* y = this;
+            {
+                /** @brief Refuse and fence out: never queue a handler against a completed context. */
+                std::lock_guard<std::mutex> scope(y->syncobj_);
+                if (y->s_.load(std::memory_order_acquire) == STATUS_COMPLETED)
+                {
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
+                    return false;
+                }
+                y->pending_resumes_.fetch_add(1, std::memory_order_acq_rel);
+            }
+
             auto invoked =
                 [y]() noexcept -> void
                 {
@@ -462,12 +512,31 @@ namespace ppp
                     {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                     }
+
+                    /** @brief Completion fence: the last drained handler reclaims. */
+                    bool release_now = false;
+                    {
+                        std::lock_guard<std::mutex> scope(y->syncobj_);
+                        if (!y->reclaimed_ &&
+                            y->pending_resumes_.fetch_sub(1, std::memory_order_acq_rel) == 1 &&
+                            y->s_.load(std::memory_order_acquire) == STATUS_COMPLETED)
+                        {
+                            y->reclaimed_ = true;
+                            release_now   = true;
+                        }
+                    }
+                    if (release_now)
+                    {
+                        YieldContext::Release(y);
+                    }
                 };
 
             boost::asio::io_context* context = &y->context_;
             bool ok = ppp::threading::Executors::Post(context, y->strand_, invoked);
             if (!ok)
             {
+                /** @brief Post failed: undo the fence count (no handler will run). */
+                y->pending_resumes_.fetch_sub(1, std::memory_order_acq_rel);
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
             }
 
