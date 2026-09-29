@@ -745,6 +745,35 @@ namespace ppp {
 
         }
 
+        bool TapLinux::GetRuntimeStats(ppp::tap::TapRuntimeStats& stats) const noexcept
+        {
+            /** @brief Linux TAP has no extra runtime counters beyond the base. */
+            stats = ppp::tap::TapRuntimeStats();
+            return true;
+        }
+
+        bool TapLinux::SupportsTxGso() const noexcept
+        {
+            /** @brief No native TCPv4 GSO transmit path on Linux TAP. */
+            return false;
+        }
+
+        bool TapLinux::OutputGso(const std::shared_ptr<Byte>& packet, int packet_size, TxGsoMetadata) noexcept
+        {
+            /** @brief Fallback: plain Output() path (no native GSO). */
+            return Output(packet, packet_size);
+        }
+
+        void TapLinux::OnInput(PacketInputEventArgs& e) noexcept
+        {
+            ITap::OnInput(e);
+        }
+
+        bool TapLinux::AsynchronousReadPacketLoops() noexcept
+        {
+            return ITap::AsynchronousReadPacketLoops();
+        }
+
         TapLinux::~TapLinux() noexcept {
             Finalize();
         }

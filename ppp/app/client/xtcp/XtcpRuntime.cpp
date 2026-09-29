@@ -3278,7 +3278,7 @@ private:
             uint64_t inflight_min = 0, inflight_max = 0;
             uint64_t sndbuf_min = 0, sndbuf_max = 0;
             uint64_t sndwnd_min = 0, sndwnd_max = 0;
-            UInt64 cwnd_min = 0, cwnd_max = 0;
+            uint64_t cwnd_min = 0, cwnd_max = 0;
             UInt64 pacing_due_min = 0, pacing_due_max = 0;
             const std::uint64_t now_us = NowUs();
             for (const auto& entry : s0.flows) {
