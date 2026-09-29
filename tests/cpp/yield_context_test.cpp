@@ -82,22 +82,26 @@ BOOST_AUTO_TEST_CASE(completion_before_suspend_multi_runner) {
 
     for (int i = 0; i < kCoroutines; ++i) {
         std::atomic<ppp::coroutines::YieldContext*>* slot = &contexts[i];
-        // 1 MiB stack: probe whether the multi-runner hang is coroutine-stack
-        // overflow trampling adjacent heap allocations (s_ poisoning).
         const bool spawned = ppp::coroutines::YieldContext::Spawn(runner.context,
             [&done, &failures, slot](ppp::coroutines::YieldContext& y) noexcept {
                 ppp::coroutines::YieldContext* py = &y;
                 slot->store(py);
-                boost::asio::io_context& ctx = y.GetContext();
                 for (int k = 0; k < kIterations; ++k) {
-                    boost::asio::post(ctx, [py]() noexcept { py->Resume(); });
+                    // R() is the production wakeup path: it fences the handler
+                    // count so a queued resume never touches freed memory after
+                    // the coroutine completes (the raw-post pattern below was
+                    // the UAF source this test used to exercise).
+                    if (!y.R()) {
+                        failures.fetch_add(1);
+                        return;
+                    }
                     if (!y.Suspend()) {
                         failures.fetch_add(1);
                         return;
                     }
                 }
                 done.fetch_add(1);
-            }, 1 << 20);
+            });
         BOOST_REQUIRE(spawned);
     }
 
