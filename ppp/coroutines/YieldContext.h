@@ -262,6 +262,22 @@ namespace ppp
              */
             static bool                                                         Spawn(ppp::threading::BufferswapAllocator* allocator, boost::asio::io_context& context, boost::asio::strand<boost::asio::io_context::executor_type>* strand, SpawnHander&& spawn, int stack_size) noexcept;
 
+            /**
+             * @brief Dumps lost-wakeup forensic counters to stderr (env OPENPPP2_YIELD_DIAG=1).
+             *        Diagnostic aid for the multi-runner flake; counters always valid.
+             */
+            static void                                                         DumpYieldDiag() noexcept;
+
+            /**
+             * @brief Snapshot of `s_` and `wakeup_pending_` for hang forensics.
+             *        Diagnostic only; reads without locking (values may tear).
+             */
+            void                                                                DebugState(int& status, int& wakeup_pending) noexcept
+            {
+                status = s_.load(std::memory_order_relaxed);
+                wakeup_pending = wakeup_pending_;
+            }
+
         private:
             /**
              * @brief Allocates the coroutine stack and performs the initial context switch.
@@ -402,7 +418,21 @@ namespace ppp
             /** @brief Guards `s_` / `wakeup_pending_` transitions; never held across `jump_fcontext`. */
             std::mutex                                                          syncobj_;
             /** @brief Latched wakeup consumed by the next `Suspend()` (completion-before-suspend). */
-            bool                                                                wakeup_pending_ = false;
+            int                                                                 wakeup_pending_ = 0;
+            /**
+             * @brief In-flight `R()`-posted resume handlers that may still touch this object.
+             *        Incremented before each `R()` post, decremented after the handler's
+             *        `Resume()` returns.  The completion fence (see `FenceRelease()`)
+             *        hands reclamation to the last handler when this is non-zero at
+             *        completion, so a queued handler never touches freed memory.
+             */
+            std::atomic<int>                                                    pending_resumes_ = 0;
+            /**
+             * @brief Reclamation ownership flag (guarded by `syncobj_`).
+             *        Exactly one of {completion path, last drained handler} may
+             *        run `Release()`; this flag hands out that right once.
+             */
+            bool                                                                reclaimed_ = false;
             /** @brief Stored callee (coroutine) context handle; updated on each switch. */
             std::atomic<boost::context::detail::fcontext_t>                     callee_     = NULLPTR;
             /** @brief Stored caller (event loop) context handle; updated on each switch. */

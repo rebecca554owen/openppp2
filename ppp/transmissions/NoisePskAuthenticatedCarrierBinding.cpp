@@ -33,6 +33,14 @@ bool ResolvePurpose(const char* label, BindingPurpose& purpose,
         required_context_length = ppp::p2p::P2PExporterContext{}.size();
         return true;
     }
+    if (std::strcmp(label,
+            ppp::cryptography::noise::RecordProtectorExporterLabel) == 0) {
+        purpose = BindingPurpose::RecordProtector;
+        // Variable-length context: version(1)||ivv(16)||carrier(1)||
+        // key_id_len(1)||key_id; validated structurally in Export().
+        required_context_length = 0;
+        return true;
+    }
     return false;
 }
 
@@ -72,6 +80,17 @@ bool NoisePskAuthenticatedCarrierBinding::IsAvailable(
     return IsValid() && IsOwnerExecutor(context, strand);
 }
 
+bool NoisePskAuthenticatedCarrierBinding::GetTransportAuthKeyId(
+    const std::uint8_t*& key_id, std::size_t& key_id_length) const noexcept {
+    key_id = nullptr;
+    key_id_length = 0;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!valid_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    return result_.GetTransportAuthKeyId(key_id, key_id_length);
+}
+
 bool NoisePskAuthenticatedCarrierBinding::Export(
     const ContextPtr& context,
     const StrandPtr& strand,
@@ -82,16 +101,29 @@ bool NoisePskAuthenticatedCarrierBinding::Export(
     std::size_t output_length) noexcept {
     BindingPurpose purpose{};
     std::size_t required_context_length = 0;
-    if (!IsAvailable(context, strand) ||
-        !ResolvePurpose(label, purpose, required_context_length) ||
-        exporter_context == nullptr || context_length != required_context_length ||
+    const bool purpose_resolved = ResolvePurpose(label, purpose, required_context_length);
+    bool context_valid = false;
+    if (purpose_resolved && exporter_context != nullptr) {
+        if (purpose == BindingPurpose::RecordProtector) {
+            // Variable-length explicit layout; both ends must parse it strictly.
+            context_valid =
+                ppp::cryptography::noise::IsValidRecordProtectorBindingContext(
+                    exporter_context, context_length);
+        } else {
+            context_valid = context_length == required_context_length;
+        }
+    }
+    if (!IsValid() ||
+        context == nullptr || strand == nullptr ||
+        context != context_ || strand != strand_ ||
+        context->stopped() ||
+        !purpose_resolved || !context_valid ||
         output == nullptr || output_length != 32) {
         return false;
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!valid_.load(std::memory_order_acquire) ||
-        !IsOwnerExecutor(context, strand)) {
+    if (!valid_.load(std::memory_order_acquire)) {
         return false;
     }
 

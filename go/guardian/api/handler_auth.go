@@ -14,6 +14,9 @@ type loginRequest struct {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	/* Limit request body size to prevent memory exhaustion */
+	const MAX_BODY_SIZE = 2 * 1024 * 1024
+	r.Body = http.MaxBytesReader(w, r.Body, MAX_BODY_SIZE)
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		Error(w, http.StatusBadRequest, "invalid request body")
@@ -80,6 +83,8 @@ type changePasswordRequest struct {
 }
 
 func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	/* Limit request body size to prevent memory exhaustion */
+	r.Body = http.MaxBytesReader(w, r.Body, 2*1024*1024)
 	var req changePasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		Error(w, http.StatusBadRequest, "invalid request body")

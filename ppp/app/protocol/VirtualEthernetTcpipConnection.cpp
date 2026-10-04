@@ -247,14 +247,16 @@ namespace ppp {
                 const ContextPtr&                                       context,
                 const StrandPtr&                                        strand,
                 const Int128&                                           id,
-                const std::shared_ptr<boost::asio::ip::tcp::socket>&    socket) noexcept
+                const std::shared_ptr<boost::asio::ip::tcp::socket>&    socket,
+                const ITransmissionStatisticsPtr&                       statistics) noexcept
                 : disposed_(false)
                 , connected_(false)
                 , configuration_(configuration)
                 , context_(context)
                 , strand_(strand)
                 , id_(id)
-                , socket_(socket) {
+                , socket_(socket)
+                , statistics_(statistics) {
 
                 if (NULLPTR != socket) {
 #if defined(_WIN32)

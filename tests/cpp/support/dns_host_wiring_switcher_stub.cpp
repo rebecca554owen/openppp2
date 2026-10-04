@@ -40,7 +40,8 @@ VEthernet::VEthernet(
     const std::shared_ptr<boost::asio::io_context>& context,
     bool lwip,
     bool vnet,
-    bool mta) noexcept
+    bool mta,
+    bool xtcp) noexcept
     : disposed_(false)
     , lwip_(lwip)
     , vnet_(vnet)

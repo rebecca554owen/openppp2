@@ -2015,7 +2015,6 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env
 
     auto work = boost::asio::make_work_guard(*context);
     __android_log_print(ANDROID_LOG_INFO, "libopenppp2", "run() work guard created, about to call context->run()");
-    boost::system::error_code ec;
     context->restart();
 
     // boost::asio handlers may throw (e.g. boost::system::system_error on
@@ -2024,9 +2023,10 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env
     // process. We catch and log here, then continue running the io_context
     // until normal completion or stop. This matches the recommended pattern
     // in boost::asio docs (basic_io_context overview - exception handling).
+    // Note: Boost 1.92.0 removed the run(error_code) overload; use run() only.
     for (;;) {
         try {
-            context->run(ec);
+            context->run();
             break;
         } catch (const std::exception& e) {
             __android_log_print(ANDROID_LOG_ERROR, "libopenppp2",
@@ -2036,7 +2036,7 @@ __LIBOPENPPP2__(jint) Java_supersocksr_ppp_android_c_libopenppp2_run(JNIEnv* env
                 "run() handler exception: <unknown>");
         }
     }
-    __android_log_print(ANDROID_LOG_INFO, "libopenppp2", "run() context->run() returned, ec=%d", ec.value());
+    __android_log_print(ANDROID_LOG_INFO, "libopenppp2", "run() context->run() returned");
 
     return libopenppp2_set_last_error_for_result(err);
 }

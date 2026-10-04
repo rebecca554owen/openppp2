@@ -1,8 +1,8 @@
-CMAKE_MINIMUM_REQUIRED(VERSION 3.0.0) 
+CMAKE_MINIMUM_REQUIRED(VERSION 3.5.0)
 
 # Define the solutions name.
 SET(NAME ppp)
-PROJECT(${NAME} VERSION 2.1.6.0 LANGUAGES C CXX)# CMAKE_CURRENT_SOURCE_DIR
+PROJECT(${NAME} VERSION 2.1.16.0 LANGUAGES C CXX)# CMAKE_CURRENT_SOURCE_DIR
 
 # C/CXX compiler configurations.
 IF(MSVC)
@@ -49,6 +49,12 @@ ELSE()
     SET(CMAKE_C_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-implicit-function-declaration")
     SET(CMAKE_CXX_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-inconsistent-missing-override -Wno-pointer-bool-conversion -Wno-unsequenced -Wno-null-dereference -Wno-gnu-variable-sized-type-not-at-end -Wno-tautological-undefined-compare -Wno-deprecated-declarations -Wno-shift-count-overflow")
 ENDIF()
+# Allow CI to inject a concrete version label (e.g. v2.2.0-<short sha>).
+# Overrides the hardcoded PPP_APPLICATION_VERSION default in ppp/stdafx.h.
+IF(DEFINED PPP_APPLICATION_VERSION)
+    ADD_DEFINITIONS(-DPPP_APPLICATION_VERSION="${PPP_APPLICATION_VERSION}")
+ENDIF()
+
 
 # Configure predefined compilation macros.
 # ADD_DEFINITIONS(-DANCIL_FD_BUFFER_STRUCT)
@@ -181,15 +187,8 @@ ELSE()
     CHECK_CXX_COMPILER_FLAG("-std=c++1z" COMPILER_SUPPORTS_CXX1Z)
 ENDIF()
 
-# AES-NI is safe to compile into x86_64 binaries: the EVP wrapper checks CPUID
-# before attaching the accelerated backend and transparently falls back to
-# OpenSSL when unavailable. Other architectures default off; x86_64 remains
-# explicitly opt-out with -DENABLE_SIMD=OFF for generic builds.
-SET(ENABLE_SIMD_DEFAULT OFF)
-IF(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|X86_64|amd64|AMD64)$")
-    SET(ENABLE_SIMD_DEFAULT ON)
-ENDIF()
-OPTION(ENABLE_SIMD "Enable x86/x64 SIMD AES-NI implementation" ${ENABLE_SIMD_DEFAULT})
+# If the current compiler environment is detected to support AES.
+OPTION(ENABLE_SIMD "Enable x86/x64 SIMD AES-NI implementation" OFF)
 
 # Enable SSEA SIMD acceleration (SSSE3/SSE4.1/SSE4.2/AVX/AVX2) for the
 # ssea-simd codec/transform suite.  Requires ENABLE_SIMD=ON as a prerequisite.
@@ -209,31 +208,8 @@ OPTION(ENABLE_TESTS "Build unit tests (GTest)" OFF)
 OPTION(ENABLE_VMUX_CHURN_TEST "Build the root-linked VMUX carrier churn test" OFF)
 OPTION(ENABLE_VMUX_RECEIVE_SEMANTICS_TEST "Build the root-linked VMUX receive-semantics test" OFF)
 OPTION(ENABLE_COVERAGE "Enable LLVM source coverage instrumentation" OFF)
-OPTION(ENABLE_XTCP "Build with the pinned XTCP userspace TCP/IP stack (Linux desktop only)" OFF)
-SET(XTCP_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/xtcp" CACHE PATH "Path to the pinned XTCP source tree")
 IF(ENABLE_COVERAGE AND NOT MSVC)
     INCLUDE(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Coverage.cmake)
-ENDIF()
-
-IF(ENABLE_XTCP)
-    IF(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR ANDROID)
-        MESSAGE(FATAL_ERROR "ENABLE_XTCP is supported only for Linux desktop builds.")
-    ENDIF()
-    IF(NOT EXISTS "${XTCP_SOURCE_DIR}/CMakeLists.txt")
-        MESSAGE(FATAL_ERROR "XTCP source tree not found at ${XTCP_SOURCE_DIR}; run tools/prepare_xtcp.sh first.")
-    ENDIF()
-
-    SET(XTCP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    SET(XTCP_BUILD_BENCH OFF CACHE BOOL "" FORCE)
-    SET(XTCP_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
-    SET(XTCP_BUILD_PLUGINS OFF CACHE BOOL "" FORCE)
-    SET(XTCP_BUILD_LWIP OFF CACHE BOOL "" FORCE)
-    SET(XTCP_BUILD_CC_PLUGINS ON CACHE BOOL "" FORCE)
-    SET(XTCP_CHECKSUM_VALIDATE ON CACHE BOOL "" FORCE)
-    ADD_SUBDIRECTORY("${XTCP_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/third-party/xtcp" EXCLUDE_FROM_ALL)
-    IF(NOT TARGET xtcp_static)
-        MESSAGE(FATAL_ERROR "XTCP source tree did not define the required xtcp_static target.")
-    ENDIF()
 ENDIF()
 
 SET(PLATFORM_ARCH_X86 FALSE)
@@ -441,6 +417,7 @@ FILE(GLOB_RECURSE SOURCE_FILES
     ${PROJECT_SOURCE_DIR}/common/chnroutes2/*.cpp 
     ${PROJECT_SOURCE_DIR}/common/json/src/*.cpp 
     ${PROJECT_SOURCE_DIR}/common/libtcpip/*.cpp 
+    ${PROJECT_SOURCE_DIR}/common/xtcp/*.cpp 
     ${PROJECT_SOURCE_DIR}/common/dnslib/*.cpp 
     ${PROJECT_SOURCE_DIR}/common/aesni/aes.cpp
 
@@ -475,6 +452,20 @@ IF(ENABLE_SYSNAT)
         ${PROJECT_SOURCE_DIR}/linux/ppp/tap/openppp2_sysnat.c)
 ENDIF()
 
+# -- XTCP userspace TCP/IP stack (optional) ------------------------------
+# MIMT-mode adapter integration: third_party/xtcp (fork of liulilittle/xtcp).
+# Enabled by default; set XTCP_ENABLED=OFF to compile without it (lwIP path
+# remains the default runtime stack).
+OPTION(XTCP_ENABLED "Build the XTCP user-space TCP/IP stack" ON)
+IF(XTCP_ENABLED AND EXISTS ${PROJECT_SOURCE_DIR}/third_party/xtcp/CMakeLists.txt)
+    SET(XTCP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    SET(XTCP_BUILD_BENCH OFF CACHE BOOL "" FORCE)
+    SET(XTCP_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+    SET(XTCP_BUILD_PLUGINS OFF CACHE BOOL "" FORCE)
+    SET(XTCP_BUILD_LWIP OFF CACHE BOOL "" FORCE)
+    ADD_SUBDIRECTORY(third_party/xtcp)
+ENDIF()
+
 SET(PPP_MAIN_SOURCE ${PROJECT_SOURCE_DIR}/main.cpp)
 SET(PPP_LIBRARY_SOURCES ${SOURCE_FILES} ${PLATFORM_SOURCE_FILES})
 LIST(REMOVE_ITEM PPP_LIBRARY_SOURCES ${PPP_MAIN_SOURCE})
@@ -483,13 +474,13 @@ IF(PLATFORM_SYSTEM_WINDOWS)
 ENDIF()
 
 ADD_LIBRARY(openppp2_lib STATIC ${PPP_LIBRARY_SOURCES})
-IF(ENABLE_XTCP)
-    TARGET_LINK_LIBRARIES(openppp2_lib xtcp_static)
-    TARGET_COMPILE_DEFINITIONS(openppp2_lib PRIVATE
-        PPP_ENABLE_XTCP=1
-        PPP_XTCP_RUNTIME_WIRED=1
-        PPP_XTCP_HAS_TIMER_DEADLINE=1)
+
+IF(XTCP_ENABLED AND TARGET xtcp_static)
+    TARGET_INCLUDE_DIRECTORIES(openppp2_lib PUBLIC ${PROJECT_SOURCE_DIR}/third_party/xtcp/include)
+    TARGET_COMPILE_DEFINITIONS(openppp2_lib PUBLIC PPP_ENABLE_XTCP PPP_XTCP_RUNTIME_WIRED)
 ENDIF()
+
+
 
 SET(PPP_EXECUTABLE_SOURCES ${PPP_MAIN_SOURCE})
 IF(PLATFORM_SYSTEM_WINDOWS)
@@ -499,14 +490,14 @@ ENDIF()
 ADD_EXECUTABLE(${NAME} ${PPP_EXECUTABLE_SOURCES})
 
 # Set the compilation output files path.
-IF(NOT PPP_OUTPUT_DIR)
-    IF(PLATFORM_SYSTEM_WINDOWS)
+IF(PLATFORM_SYSTEM_WINDOWS)
+    IF(NOT PPP_OUTPUT_DIR)
         SET(PPP_OUTPUT_DIR ${PROJECT_SOURCE_DIR}/bin/${CMAKE_BUILD_TYPE})
-    ELSE()
-        SET(PPP_OUTPUT_DIR ${PROJECT_SOURCE_DIR}/bin)
     ENDIF()
+    SET(EXECUTABLE_OUTPUT_PATH ${PPP_OUTPUT_DIR})
+ELSE()
+    SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
 ENDIF()
-SET(EXECUTABLE_OUTPUT_PATH ${PPP_OUTPUT_DIR})
 
 # Set up library connections to dependent libraries.
 IF(PLATFORM_SYSTEM_WINDOWS)
@@ -564,7 +555,8 @@ ELSEIF(PLATFORM_SYSTEM_DARWIN)
         ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_regex.a 
         ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_filesystem.a
         "-framework Security"
-        "-framework CoreFoundation")
+        "-framework CoreFoundation"
+        $<$<BOOL:${XTCP_ENABLED}>:xtcp_static>)
 
     TARGET_LINK_LIBRARIES(${NAME} openppp2_lib)
 ELSEIF(PLATFORM_COMPILER_CLANG)
@@ -585,7 +577,6 @@ ELSEIF(PLATFORM_COMPILER_CLANG)
     IF(NOT ENABLE_ASAN AND NOT ENABLE_UBSAN)
         LIST(APPEND PPP_CLANG_LINK_LIBS libjemalloc.a)
     ENDIF()
-    LIST(APPEND PPP_CLANG_LINK_LIBS z zstd)
     IF(ENABLE_IO_URING)
         LIST(APPEND PPP_CLANG_LINK_LIBS uring)
     ENDIF()
@@ -640,8 +631,14 @@ ELSEIF(NOT MSVC)
     IF(ENABLE_SYSNAT)
         LIST(APPEND PPP_LINUX_LINK_LIBS bpf)
     ENDIF()
-    TARGET_LINK_LIBRARIES(openppp2_lib ${PPP_LINUX_LINK_LIBS} z zstd)
+    TARGET_LINK_LIBRARIES(openppp2_lib ${PPP_LINUX_LINK_LIBS})
     TARGET_LINK_LIBRARIES(${NAME} openppp2_lib)
+ENDIF()
+
+# openppp2_lib references xtcp:: symbols on every platform (XtcpNetstackAdapter,
+# VEthernet); every link line needs xtcp_static or the ppp executable fails to link.
+IF(XTCP_ENABLED AND TARGET xtcp_static)
+    TARGET_LINK_LIBRARIES(openppp2_lib $<$<BOOL:${XTCP_ENABLED}>:xtcp_static>)
 ENDIF()
 
 IF(ENABLE_VMUX_CHURN_TEST)

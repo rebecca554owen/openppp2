@@ -1,5 +1,8 @@
 # Copyright  : Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.
 # Description: PPP PRIVATE NETWORK(TM) 2 – Linux cross-compilation builds.
+#              All third-party libraries (Boost/OpenSSL/jemalloc/libunwind)
+#              are source-built for the target architecture — no prebuilt
+#              3rd-party environment clone (liulilittle/openppp2-ubuntu-3rd-environment).
 # Author     : OpenCode.
 # Date-Time  : 2026/05/03
 
@@ -7,9 +10,7 @@ name: Build · Linux Cross
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main, codex/runtime-ui-lifecycle-integration]
+    tags: ['v*']
   workflow_dispatch:
 
 concurrency:
@@ -17,88 +18,165 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  BOOST_VERSION: "1.92.0"
+  OPENSSL_VERSION: "4.0.2"
+  JEMALLOC_VERSION: "5.3.1"
+  LIBUNWIND_VERSION: "1.8.1"
+  RUNNER_IMAGE: "ubuntu-22.04"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
     name: Linux ${{ matrix.third_dir }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(github.event_name == 'pull_request' && '{"include":[{"platform":"linux/aarch64","cc":"aarch64-linux-gnu-gcc","cxx":"aarch64-linux-gnu-g++","apt_pkg":"aarch64-linux-gnu","debian_arch":"arm64","third_dir":"aarch64"}]}' || '{"include":[{"platform":"linux/aarch64","cc":"aarch64-linux-gnu-gcc","cxx":"aarch64-linux-gnu-g++","apt_pkg":"aarch64-linux-gnu","debian_arch":"arm64","third_dir":"aarch64"},{"platform":"linux/armv7l","cc":"arm-linux-gnueabihf-gcc","cxx":"arm-linux-gnueabihf-g++","apt_pkg":"arm-linux-gnueabihf","debian_arch":"armhf","third_dir":"armv7l"},{"platform":"linux/riscv64","cc":"riscv64-linux-gnu-gcc","cxx":"riscv64-linux-gnu-g++","apt_pkg":"riscv64-linux-gnu","debian_arch":"riscv64","third_dir":"riscv64"},{"platform":"linux/ppc64el","cc":"powerpc64le-linux-gnu-gcc","cxx":"powerpc64le-linux-gnu-g++","apt_pkg":"powerpc64le-linux-gnu","debian_arch":"ppc64el","third_dir":"ppc64el"},{"platform":"linux/s390x","cc":"s390x-linux-gnu-gcc","cxx":"s390x-linux-gnu-g++","apt_pkg":"s390x-linux-gnu","debian_arch":"s390x","third_dir":"s390x"},{"platform":"linux/mipsel","cc":"mipsel-linux-gnu-gcc","cxx":"mipsel-linux-gnu-g++","apt_pkg":"mipsel-linux-gnu","debian_arch":"mipsel","third_dir":"mipsel"}]}') }}
+      matrix: ${{ fromJSON(github.event_name == 'pull_request' && '{"include":[{"platform":"linux/aarch64","cc":"aarch64-linux-gnu-gcc","cxx":"aarch64-linux-gnu-g++","apt_pkg":"aarch64-linux-gnu","debian_arch":"arm64","third_dir":"aarch64","tool_prefix":"aarch64-linux-gnu-","archiver":"aarch64-linux-gnu-ar","ranlib":"aarch64-linux-gnu-ranlib","boost_arch":"arm","boost_model":"64","boost_abi":"aapcs","openssl_target":"linux-aarch64","readelf_hint":"AArch64","boost_extra":""}]}' || '{"include":[{"platform":"linux/aarch64","cc":"aarch64-linux-gnu-gcc","cxx":"aarch64-linux-gnu-g++","apt_pkg":"aarch64-linux-gnu","debian_arch":"arm64","third_dir":"aarch64","tool_prefix":"aarch64-linux-gnu-","archiver":"aarch64-linux-gnu-ar","ranlib":"aarch64-linux-gnu-ranlib","boost_arch":"arm","boost_model":"64","boost_abi":"aapcs","openssl_target":"linux-aarch64","readelf_hint":"AArch64","boost_extra":""}]}') }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
-      - name: Clone third-party environment
-        run: git clone --depth 1 https://github.com/liulilittle/openppp2-ubuntu-3rd-environment.git "${{ runner.temp }}/3rd"
-
-      - name: Install cross-compiler
+      - name: Install cross-compiler and build tools
         run: |
-          if [[ "${{ matrix.debian_arch }}" != "mipsel" ]]; then
-            sudo sed -i '/^Types: deb$/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
-            sudo dpkg --add-architecture ${{ matrix.debian_arch }}
-            for suite in noble noble-updates noble-backports noble-security; do
-              printf 'deb [arch=%s] https://ports.ubuntu.com/ubuntu-ports %s main universe\n' \
-                "${{ matrix.debian_arch }}" "$suite"
-            done | sudo tee /etc/apt/sources.list.d/ubuntu-ports.list
-          fi
           sudo apt-get update -y
-          if [[ "${{ matrix.debian_arch }}" == "mipsel" ]]; then
-            sudo apt-get install -y --no-install-recommends \
-              build-essential cmake zip unzip \
-              gcc-${{ matrix.apt_pkg }} g++-${{ matrix.apt_pkg }}
-          else
-            sudo apt-get install -y --no-install-recommends \
-              build-essential cmake zip unzip \
-              gcc-${{ matrix.apt_pkg }} g++-${{ matrix.apt_pkg }} \
-              zlib1g-dev:${{ matrix.debian_arch }} libzstd-dev:${{ matrix.debian_arch }}
-          fi
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake git zip unzip curl wget \
+            autoconf automake libtool \
+            gcc-${{ matrix.apt_pkg }} g++-${{ matrix.apt_pkg }} \
+            binutils-${{ matrix.apt_pkg }}
 
-      - name: Build libunwind for target
+      - name: Cache third-party libraries (source-built)
+        id: cache-third
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/third-party
+          key: linux-${{ matrix.third_dir }}-deps-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+          restore-keys: |
+            linux-${{ matrix.third_dir }}-deps-v2-
+
+      - name: Build Boost (cross-compiled)
+        if: steps.cache-third.outputs.cache-hit != 'true'
         run: |
-          cd /tmp
-          wget -q https://github.com/libunwind/libunwind/releases/download/v1.8.1/libunwind-1.8.1.tar.gz
-          tar xf libunwind-1.8.1.tar.gz
-          cd libunwind-1.8.1
-          ./configure --host=${{ matrix.apt_pkg }} --prefix=${{ runner.temp }}/libunwind --disable-shared --enable-static
-          make -j$(nproc)
+          set -euxo pipefail
+          boost_version_underscore="${BOOST_VERSION//./_}"
+          boost_root="$GITHUB_WORKSPACE/third-party/boost"
+          archive="$RUNNER_TEMP/boost_${boost_version_underscore}.tar.bz2"
+          mkdir -p "$GITHUB_WORKSPACE/third-party"
+          wget -q "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${boost_version_underscore}.tar.bz2" -O "$archive"
+          rm -rf "$boost_root" "$RUNNER_TEMP/boost_${boost_version_underscore}"
+          tar jxf "$archive" -C "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP/boost_${boost_version_underscore}" "$boost_root"
+
+          user_config="$RUNNER_TEMP/boost-user-config.jam"
+          cat > "$user_config" <<'EOF'
+          using gcc : ${{ matrix.third_dir }} : ${{ matrix.cxx }} :
+              <archiver>${{ matrix.archiver }}
+              <ranlib>${{ matrix.ranlib }}
+          ;
+          EOF
+
+          cd "$boost_root"
+          ./bootstrap.sh
+          ./b2 -j"$(nproc)" \
+            --user-config="$user_config" \
+            --layout=system \
+            toolset=gcc-${{ matrix.third_dir }} \
+            target-os=linux \
+            binary-format=elf \
+            architecture=${{ matrix.boost_arch }} \
+            address-model=${{ matrix.boost_model }} \
+            abi=${{ matrix.boost_abi }} \
+            context-impl=fcontext \
+            compileflags="-fPIC ${{ matrix.boost_extra }}" \
+            link=static \
+            runtime-link=static \
+            threading=multi \
+            variant=release \
+            --with-system --with-coroutine --with-thread --with-context --with-regex --with-filesystem \
+            stage
+          # Boost 1.89+ system is header-only; create empty archive for linker compatibility
+          # Must use cross-toolchain to produce target-compatible object format
+          touch /tmp/empty.c && ${{ matrix.tool_prefix }}gcc -c /tmp/empty.c -o /tmp/empty.o && ${{ matrix.tool_prefix }}ar rcs stage/lib/libboost_system.a /tmp/empty.o && rm -f /tmp/empty.c /tmp/empty.o
+
+      - name: Build OpenSSL (cross-compiled)
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          openssl_root="$GITHUB_WORKSPACE/third-party/openssl"
+          archive="$RUNNER_TEMP/openssl-${OPENSSL_VERSION}.tar.gz"
+          mkdir -p "$GITHUB_WORKSPACE/third-party"
+          wget -q "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz" -O "$archive"
+          rm -rf "$openssl_root" "$RUNNER_TEMP/openssl-${OPENSSL_VERSION}"
+          tar zxf "$archive" -C "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP/openssl-${OPENSSL_VERSION}" "$openssl_root"
+          cd "$openssl_root"
+          ./Configure ${{ matrix.openssl_target }} --cross-compile-prefix=${{ matrix.tool_prefix }} no-shared
+          make -j"$(nproc)"
+
+      - name: Build jemalloc (cross-compiled)
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          jemalloc_root="$GITHUB_WORKSPACE/third-party/jemalloc"
+          archive="$RUNNER_TEMP/jemalloc-${JEMALLOC_VERSION}.tar.bz2"
+          mkdir -p "$GITHUB_WORKSPACE/third-party"
+          wget -q "https://github.com/jemalloc/jemalloc/releases/download/${JEMALLOC_VERSION}/jemalloc-${JEMALLOC_VERSION}.tar.bz2" -O "$archive"
+          rm -rf "$jemalloc_root" "$RUNNER_TEMP/jemalloc-${JEMALLOC_VERSION}"
+          tar jxf "$archive" -C "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP/jemalloc-${JEMALLOC_VERSION}" "$jemalloc_root"
+          cd "$jemalloc_root"
+          ./autogen.sh --host=${{ matrix.apt_pkg }} --with-jemalloc-prefix=je_
+          make -j"$(nproc)"
+
+      - name: Build libunwind (cross-compiled)
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          cd "$RUNNER_TEMP"
+          wget -q "https://github.com/libunwind/libunwind/releases/download/v${LIBUNWIND_VERSION}/libunwind-${LIBUNWIND_VERSION}.tar.gz"
+          tar xf "libunwind-${LIBUNWIND_VERSION}.tar.gz"
+          cd "libunwind-${LIBUNWIND_VERSION}"
+          ./configure --host=${{ matrix.apt_pkg }} \
+            --prefix=${{ github.workspace }}/third-party/libunwind \
+            --disable-shared --enable-static
+          make -j"$(nproc)"
           make install
 
-      - name: Build compression libraries for target
+      - name: Verify cross-compiled libraries
         run: |
-          PREFIX="${{ runner.temp }}/cross-compression/${{ matrix.debian_arch }}"
-          CC="${{ matrix.cc }}"
-          AR="${{ matrix.apt_pkg }}-ar"
-          RANLIB="${{ matrix.apt_pkg }}-ranlib"
-          mkdir -p "$PREFIX"
+          set -euxo pipefail
+          TP="${{ github.workspace }}/third-party"
+          grep -Eq "^#define BOOST_VERSION 109200$" "$TP/boost/boost/version.hpp"
+          test -f "$TP/openssl/libssl.a"
+          test -f "$TP/openssl/libcrypto.a"
+          test -f "$TP/jemalloc/lib/libjemalloc.a"
+          test -f "$TP/libunwind/lib/libunwind.a"
+          for lib in system coroutine thread context regex filesystem; do
+            test -s "$TP/boost/stage/lib/libboost_${lib}.a"
+          done
+          # Machine check via readelf on one object from each static archive
+          for a in "openssl/libcrypto.a" "jemalloc/lib/libjemalloc.a" "boost/stage/lib/libboost_context.a"; do
+            obj="$(${{ matrix.tool_prefix }}ar t "$TP/$a" | head -1)"
+            d="$(mktemp -d)"
+            (cd "$d" && ${{ matrix.tool_prefix }}ar x "$TP/$a" "$obj")
+            ${{ matrix.tool_prefix }}readelf -h "$d/$obj" | grep -q "Machine:.*${{ matrix.readelf_hint }}"
+            rm -rf "$d"
+          done
 
-          cd /tmp
-          curl -fsSLO https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.xz
-          echo "38ef96b8dfe510d42707d9c781877914792541133e1870841463bfa73f883e32  zlib-1.3.1.tar.xz" | sha256sum --check --status
-          tar xf zlib-1.3.1.tar.xz
-          cd zlib-1.3.1
-          CC="$CC" AR="$AR" RANLIB="$RANLIB" ./configure --static --prefix="$PREFIX"
-          make -j"$(nproc)" CC="$CC" AR="$AR" RANLIB="$RANLIB"
-          make install
-
-          cd /tmp
-          curl -fsSLO https://github.com/facebook/zstd/releases/download/v1.5.5/zstd-1.5.5.tar.gz
-          tar xf zstd-1.5.5.tar.gz
-          make -C zstd-1.5.5/lib -j"$(nproc)" libzstd.a CC="$CC" AR="$AR" RANLIB="$RANLIB"
-          install -d "$PREFIX/lib" "$PREFIX/include"
-          install -m 644 zstd-1.5.5/lib/libzstd.a "$PREFIX/lib/"
-          install -m 644 zstd-1.5.5/lib/zstd.h zstd-1.5.5/lib/zstd_errors.h "$PREFIX/include/"
-          echo "CROSS_COMPRESSION_PREFIX=$PREFIX" >> "$GITHUB_ENV"
+      - name: Compute version label
+        id: ver
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch --tags --force 2>/dev/null || true
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "label=${TAG}-${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Build openppp2
         run: |
-          TP="${{ runner.temp }}/3rd/${{ matrix.third_dir }}"
-          TARGET_PROCESSOR="${{ matrix.platform }}"
-          TARGET_PROCESSOR="${TARGET_PROCESSOR#linux/}"
-          if [ "$TARGET_PROCESSOR" = "ppc64el" ]; then TARGET_PROCESSOR=ppc64le; fi
-          LINK_FLAGS="-L${{ runner.temp }}/libunwind/lib -L${CROSS_COMPRESSION_PREFIX}/lib"
-          CPP_FLAGS="-DOPENSSL_API_COMPAT=0x10100000L -I${CROSS_COMPRESSION_PREFIX}/include"
+          TP="${{ github.workspace }}/third-party"
           mkdir -p build && cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
@@ -106,8 +184,9 @@ jobs:
             -DCMAKE_SYSTEM_PROCESSOR="$TARGET_PROCESSOR" \
             -DCMAKE_C_COMPILER=${{ matrix.cc }} \
             -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
-            -DCMAKE_EXE_LINKER_FLAGS="$LINK_FLAGS" \
-            -DCMAKE_CXX_FLAGS="$CPP_FLAGS" \
+            -DCMAKE_EXE_LINKER_FLAGS="-L${{ github.workspace }}/third-party/libunwind/lib" \
+            -DCMAKE_CXX_FLAGS="-DOPENSSL_API_COMPAT=0x10100000L" \
+            -DPPP_APPLICATION_VERSION="${{ steps.ver.outputs.label }}" \
             -DTHIRD_PARTY_LIBRARY_DIR="$TP"
           make -j$(nproc)
 
@@ -115,11 +194,11 @@ jobs:
         run: |
           PLATFORM_SAFE="${{ matrix.platform }}"
           PLATFORM_SAFE="${PLATFORM_SAFE//\//-}"
-          ARTIFACT="openppp2-${PLATFORM_SAFE}-cross.zip"
+          ARTIFACT="openppp2-${PLATFORM_SAFE}.zip"
           echo "ARTIFACT=$ARTIFACT" >> $GITHUB_ENV
           cd bin && zip -r "$ARTIFACT" ppp
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.ARTIFACT }}
           path: bin/${{ env.ARTIFACT }}

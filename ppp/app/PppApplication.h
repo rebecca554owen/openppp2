@@ -33,7 +33,6 @@
 
 #include <ppp/stdafx.h>
 #include <ppp/app/ApplicationMode.h>
-#include <ppp/app/runtime/DatapathAcceptanceBoundary.h>
 #include <ppp/app/runtime/RuntimeLifecycle.h>
 #include <ppp/app/runtime/RuntimeSnapshotJson.h>
 #include <ppp/diagnostics/PreventReturn.h>
@@ -399,7 +398,6 @@ private:
     std::shared_ptr<ppp::app::client::VEthernetNetworkSwitcher>             client_;                      ///< Client runtime (null in server mode).
     ppp::string                                                             configuration_path_;          ///< Resolved path of the loaded configuration file.
     ppp::string                                                             stats_json_path_;              ///< Optional local NDJSON statistics destination.
-    ppp::app::runtime::DatapathAcceptanceBoundary                           acceptance_boundary_;          ///< Optional local stats/ack acceptance gate.
     std::shared_ptr<NetworkInterface>                                       network_interface_;           ///< Physical network interface descriptor.
     std::shared_ptr<ppp::threading::Timer>                                  timeout_ = 0;                 ///< Global maintenance timer.
     ppp::diagnostics::Stopwatch                                             stopwatch_;                   ///< Elapsed-time tracker for uptime display.

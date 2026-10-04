@@ -48,7 +48,7 @@ func (my *ManagedServer) websocket_api_on_echo(ws *io.WebSocket, packet *_Packet
 }
 
 func (my *ManagedServer) websocket_api_on_connect(ws *io.WebSocket, packet *_Packet) bool {
-	if packet.Data != my.configuration.Key {
+	if my.configuration.Key == "" || packet.Data != my.configuration.Key {
 		return false
 	}
 
@@ -115,7 +115,7 @@ func (my *ManagedServer) http_api_send_response(w http.ResponseWriter, code int,
 // The server interfaces return node records carrying protocol and transport
 // keys, so they require the same shared key the consumer interfaces do.
 func (my *ManagedServer) http_api_require_key(w http.ResponseWriter, r *http.Request) bool {
-	if io.HttpQuery(r.URL.Query(), "key") == my.configuration.Key {
+	if my.configuration.Key != "" && io.HttpQuery(r.URL.Query(), "key") == my.configuration.Key {
 		return true
 	}
 
@@ -192,7 +192,7 @@ func (my *ManagedServer) http_api_consumer_set_or_new(w http.ResponseWriter, r *
 	q := r.URL.Query()
 	key := io.HttpQuery(q, "key")
 
-	if key != my.configuration.Key {
+	if my.configuration.Key == "" || key != my.configuration.Key {
 		my.http_api_send_response(w, _ERROR_ARG_KEY, "", "")
 		return false
 	}
@@ -267,7 +267,7 @@ func (my *ManagedServer) http_api_consumer_load(w http.ResponseWriter, r *http.R
 	q := r.URL.Query()
 	key := io.HttpQuery(q, "key")
 
-	if key != my.configuration.Key {
+	if my.configuration.Key == "" || key != my.configuration.Key {
 		my.http_api_send_response(w, _ERROR_ARG_KEY, "", "")
 		return false
 	}

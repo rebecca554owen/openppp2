@@ -80,7 +80,7 @@ static void BM_RtxAck(benchmark::State& state) {
         }
         std::vector<std::uint64_t> fast_candidates;
         std::uint64_t rtt = rtx.Ack(0, static_cast<std::uint32_t>(n - 1), ranges,
-                                    1000, 3, 0, fast_candidates);
+                                    1000, 3, fast_candidates);
         benchmark::DoNotOptimize(rtt);
         benchmark::DoNotOptimize(rtx.size());
         benchmark::ClobberMemory();
@@ -111,7 +111,7 @@ static void BM_RtxCollectExpired(benchmark::State& state) {
 
     for (auto _ : state) {
         expired.clear();
-        rtx.CollectExpired(10000, 5000, 60000, static_cast<std::size_t>(n), expired);
+        rtx.CollectExpired(10000, 5000, static_cast<std::size_t>(n), expired);
         benchmark::DoNotOptimize(expired.size());
         benchmark::ClobberMemory();
     }

@@ -7,7 +7,7 @@
     "kf": 154543927,
     "protocol": "aes-128-cfb",
     "protocol-key": "N6HMzdUs7IUnYHwq",
-    "transport": "aes-256-cfb",
+    "transport": "aes-256-gcm",
     "transport-key": "HWFweXu2g5RVMEpy"
   },
   "tcp": {
@@ -27,10 +27,23 @@
     "mode": "compat",
     "turbo": false
   },
+  "transport-auth": {
+    "handshake-timeout-ms": 5000,
+    "keys": [
+      {
+        "id": "primary",
+        "secret-file": "./secrets/transport.key",
+        "state": "active"
+      }
+    ]
+  },
   "server": {
     "subnet": true,
     "mapping": true,
     "log": "",
+    "transport-auth": {
+      "enabled": true
+    },
     "ipv4-pool": {
       "network": "10.254.0.0",
       "mask": "255.255.0.0"

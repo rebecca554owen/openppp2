@@ -231,12 +231,49 @@ void PppApplication::ClearTickAlwaysTimeout() noexcept {
     }
 }
 
+        /**
+         * @brief Writes a fresh transport-auth secret to the given path.
+         *
+         * Delegates to GenerateTransportAuthSecretFile (32 random bytes stored as
+         * canonical lowercase hex -- exactly 64 bytes, owner-only 0600) and read-back
+         * verifies the file through LoadTransportAuthSecretFile so a corrupt result
+         * fails generation instead of the first handshake.
+         */
+        static bool WriteTransportAuthKeyFile(const ppp::string& path) noexcept {
+            if (path.empty()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkAddressInvalid);
+                return false;
+            }
+
+            std::string error;
+            const bool ok = ppp::configurations::GenerateTransportAuthSecretFile(path.c_str(), &error);
+            if (!ok) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::FileWriteFailed);
+            }
+            return ok;
+        }
+
 int RunPreparedApplication(const std::shared_ptr<PppApplication>& app, int prepared_status, int argc, const char* argv[]) noexcept {
     if (ppp::HasCommandArgument("--pull-iplist", argc, argv)) {
         app->PullIPList(ppp::GetCommandArgument("--pull-iplist", argc, argv), false);
         int rc = ppp::diagnostics::GetLastErrorCode() == ppp::diagnostics::ErrorCode::Success ? 0 : -1;
         Executors::Exit();
         return rc;
+    }
+
+    if (ppp::HasCommandArgument("--transport-auth-key", argc, argv)) {
+        const ppp::string path = ppp::GetCommandArgument("--transport-auth-key", argc, argv);
+        const bool ok = WriteTransportAuthKeyFile(path);
+        if (ok) {
+            ppp::ConsoleWrite("transport-auth key written: ");
+            ppp::ConsoleWrite(path.data());
+            ppp::ConsoleWrite("\n");
+        }
+        else {
+            ppp::ConsoleWrite("transport-auth key generation failed\n");
+        }
+        Executors::Exit();
+        return ok ? 0 : -1;
     }
 
 #if defined(_WIN32)

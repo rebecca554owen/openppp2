@@ -38,8 +38,6 @@ struct MuxRtxEntry final {
     std::uint64_t                 last_sent_tick = 0;  ///< Tick of the most recent (re)transmission.
     std::uint32_t                 attempts = 0;   ///< Retransmissions already performed.
     std::uint32_t                 fast_rtx_mark = 0;   ///< largest-acked value at the last fast retransmit (dedup).
-    std::uint16_t                 orig_link_id = 0;  ///< Carrier link the frame was FIRST sent on (for per-link RTT attribution).
-    std::uint16_t                 last_link_id = 0;  ///< Carrier link the frame was most recently (re)sent on (for per-link PTO).
     std::list<std::uint64_t>::iterator order;     ///< Position in the insertion-ordered list (stable iterator).
 };
 
@@ -64,8 +62,7 @@ public:
         const std::shared_ptr<std::uint8_t>& buffer,
         int length,
         std::uint64_t now,
-        std::size_t byte_cap,
-        std::uint16_t link_id = 0) {
+        std::size_t byte_cap) {
         const std::uint64_t key = Key(connection_id, sequence);
         if (entries_.find(key) != entries_.end()) {
             return true; // Already tracked (defensive; sends are unique per key).
@@ -80,8 +77,6 @@ public:
         entry.length = length;
         entry.first_sent_tick = now;
         entry.last_sent_tick = now;
-        entry.orig_link_id = link_id;
-        entry.last_link_id = link_id;
         entry.order = (--order_.end());
         entries_.emplace(key, std::move(entry));
         bytes_ += static_cast<std::size_t>(length);
@@ -92,9 +87,8 @@ public:
      * Release every entry of @p connection_id covered by the ACK ranges and
      * collect fast-retransmit candidates: entries whose sequence sits at least
      * @p fast_threshold below @p largest (approximating "N later frames were
-     * acked above the hole", the QUIC dup-ACK rule) AND whose first_sent_tick
-     * is at least @p fast_time_threshold ago (QUIC time threshold ≈ SRTT/4).
-     * A candidate is reported at most once per advancing @p largest.
+     * acked above the hole", the QUIC dup-ACK rule). A candidate is reported at
+     * most once per advancing @p largest.
      * @return RTT sample in ms from the first newly-acked entry that was never
      *         retransmitted (Karn's rule); 0 when no usable sample exists.
      */
@@ -104,24 +98,35 @@ public:
         const std::vector<MuxAckRange>& ranges,
         std::uint64_t now,
         std::uint32_t fast_threshold,
-        std::uint64_t fast_time_threshold,
-        std::vector<std::uint64_t>& fast_candidates,
-        std::uint16_t* out_link_id = nullptr) {
+        std::vector<std::uint64_t>& fast_candidates) {
         std::uint64_t rtt_sample = 0;
-        if (nullptr != out_link_id) {
-            *out_link_id = 0;
-        }
 
         // Collect keys first: erasing while iterating the map is fine, but the
         // candidate scan below walks the whole map anyway, so do one pass.
+        // Cumulative release: the receiver delivers data strictly in order, so
+        // every sequence at or below the reported largest has been consumed —
+        // even if its SACK range was lost or dropped by the peer's tracker
+        // wrap reset. Ranges then cover any sparse holes above largest.
         std::vector<std::uint64_t> acked;
         for (auto it = entries_.begin(); it != entries_.end(); ++it) {
             if (KeyCid(it->first) != connection_id) {
                 continue;
             }
             const std::uint32_t seq = static_cast<std::uint32_t>(it->first & 0xFFFFFFFFu);
+            const std::int32_t behind = static_cast<std::int32_t>(largest - seq);
+            if (behind >= 0) {
+                acked.push_back(it->first);
+                continue;
+            }
             for (const MuxAckRange& range : ranges) {
-                if (seq >= range.start && seq <= range.end) {
+                // Wrap-safe membership: signed 32-bit distance from range start
+                // to seq must be non-negative and within the range length. Plain
+                // unsigned comparisons break when either endpoint wrapped past
+                // 2^32 (ftt random baselines land near the top of the space),
+                // which stranded rtx entries until attempts were exhausted.
+                const std::int32_t offset = static_cast<std::int32_t>(seq - range.start);
+                const std::uint32_t span = range.end - range.start;
+                if (offset >= 0 && static_cast<std::uint32_t>(offset) <= span) {
                     acked.push_back(it->first);
                     break;
                 }
@@ -135,9 +140,6 @@ public:
             }
             if (rtt_sample == 0 && it->second.attempts == 0 && now >= it->second.first_sent_tick) {
                 rtt_sample = now - it->second.first_sent_tick;
-                if (nullptr != out_link_id) {
-                    *out_link_id = it->second.orig_link_id;
-                }
             }
             bytes_ -= static_cast<std::size_t>(it->second.length);
             order_.erase(it->second.order);
@@ -145,28 +147,25 @@ public:
         }
 
         // Fast-retransmit candidates: unacked entries of this space with at
-        // least fast_threshold acked sequences above them.
+        // least fast_threshold acked sequences above them. Wrap-safe: the
+        // signed distance from seq up to largest must exceed fast_threshold;
+        // plain unsigned comparison misjudges every entry once largest has
+        // wrapped past 2^32 while older entries still sit below it.
         for (auto& kv : entries_) {
             if (KeyCid(kv.first) != connection_id) {
                 continue;
             }
             const std::uint32_t seq = static_cast<std::uint32_t>(kv.first & 0xFFFFFFFFu);
-            if (!(largest > seq)) {
-                continue;
+            const std::int32_t ahead = static_cast<std::int32_t>(largest - seq);
+            if (ahead <= 0) {
+                continue; // Not acked-past this entry (or identical).
             }
-            if (static_cast<std::uint32_t>(largest - seq) < fast_threshold) {
+            if (ahead < static_cast<std::int32_t>(fast_threshold)) {
                 continue;
             }
             MuxRtxEntry& entry = kv.second;
             if (entry.fast_rtx_mark == largest) {
                 continue; // Already fast-retransmitted for this largest.
-            }
-            // Time threshold (QUIC ≈ SRTT/4): skip entries that were sent
-            // too recently — the gap might just be normal reordering on a
-            // heterogeneous multi-path link. 0 disables the time gate.
-            if (fast_time_threshold > 0 && now >= entry.first_sent_tick &&
-                (now - entry.first_sent_tick) < fast_time_threshold) {
-                continue;
             }
             entry.fast_rtx_mark = largest;
             fast_candidates.push_back(kv.first);
@@ -176,39 +175,17 @@ public:
     }
 
     /**
-     * Collect keys whose last (re)transmission is older than the per-entry
-     * exponential-backoff PTO, oldest first, bounded by @p max_count.
-     *
-     * Each entry's timeout is  base_pto << min(attempts, 5)  using saturating
-     * shift-left (so it never overflows to zero), then clamped to @p pto_max.
-     * This prevents the 8 retransmissions from firing in a flat 8*PTO burst
-     * and instead follows the QUIC/RFC 6298 exponential backoff principle.
+     * Collect keys whose last (re)transmission is older than @p pto, oldest
+     * first, bounded by @p max_count.
      */
-    void CollectExpired(std::uint64_t now, std::uint64_t base_pto,
-        std::uint64_t pto_max, std::size_t max_count,
+    void CollectExpired(std::uint64_t now, std::uint64_t pto, std::size_t max_count,
         std::vector<std::uint64_t>& expired) const {
         for (const auto& kv : entries_) {
             if (expired.size() >= max_count) {
                 break;
             }
             const MuxRtxEntry& entry = kv.second;
-            if (now < entry.last_sent_tick) {
-                continue;
-            }
-            // Saturating shift-left: base_pto << shift, clamped to UINT64_MAX.
-            const std::uint32_t shift = entry.attempts > 5 ? 5 : entry.attempts;
-            std::uint64_t effective = base_pto;
-            for (std::uint32_t s = 0; s < shift; ++s) {
-                if (effective > (UINT64_MAX >> 1)) {
-                    effective = UINT64_MAX;
-                    break;
-                }
-                effective <<= 1;
-            }
-            if (effective > pto_max) {
-                effective = pto_max;
-            }
-            if ((now - entry.last_sent_tick) >= effective) {
+            if (now >= entry.last_sent_tick && (now - entry.last_sent_tick) >= pto) {
                 expired.push_back(kv.first);
             }
         }
@@ -219,14 +196,12 @@ public:
         return it == entries_.end() ? nullptr : &it->second;
     }
 
-    /** Account one retransmission of @p key on @p link_id. */
-    void MarkRetransmitted(std::uint64_t key, std::uint64_t now,
-        std::uint16_t link_id = 0) noexcept {
+    /** Account one retransmission of @p key. */
+    void MarkRetransmitted(std::uint64_t key, std::uint64_t now) noexcept {
         MuxRtxEntry* entry = Find(key);
         if (nullptr != entry) {
             entry->attempts++;
             entry->last_sent_tick = now;
-            entry->last_link_id = link_id;
         }
     }
 
@@ -242,6 +217,28 @@ public:
                 ++it;
             }
         }
+    }
+
+    /**
+     * Evict the oldest retained frame (insertion order). Used to keep the
+     * buffer within its byte cap under slow ACKs without killing the session.
+     * @return bytes freed, 0 when the buffer was already empty.
+     */
+    std::size_t EvictOldest() {
+        if (order_.empty()) {
+            return 0;
+        }
+        const std::uint64_t key = order_.front();
+        auto it = entries_.find(key);
+        if (it == entries_.end()) {
+            order_.pop_front();
+            return 0;
+        }
+        const std::size_t freed = static_cast<std::size_t>(it->second.length);
+        bytes_ -= freed;
+        order_.pop_front();
+        entries_.erase(it);
+        return freed;
     }
 
     void Clear() noexcept {

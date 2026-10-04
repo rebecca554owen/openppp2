@@ -27,65 +27,6 @@ namespace ppp {
 
             }
 
-            bool VEthernetNetworkTcpipStack::BeginExternalAccept(
-                const boost::asio::ip::tcp::endpoint& localEP,
-                const boost::asio::ip::tcp::endpoint& remoteEP,
-                uint16_t source_port,
-                uint64_t runtime_generation,
-                uint64_t flow_generation,
-                const std::weak_ptr<xtcp::XtcpFirstLegHooks>& hooks) noexcept {
-                std::shared_ptr<TapTcpClient> base = BeginAcceptClient(localEP, remoteEP);
-                std::shared_ptr<VEthernetNetworkTcpipConnection> connection =
-                    std::dynamic_pointer_cast<VEthernetNetworkTcpipConnection>(base);
-                if (NULLPTR == connection) {
-                    return false;
-                }
-                connection->SetExternalFirstLeg(
-                    runtime_generation, flow_generation, hooks);
-                if (!RegisterExternalClient(source_port, runtime_generation,
-                        flow_generation, connection)) {
-                    connection->Dispose();
-                    return false;
-                }
-                return true;
-            }
-
-            bool VEthernetNetworkTcpipStack::BeginExternalAcceptWithFd(
-                const boost::asio::ip::tcp::endpoint& localEP,
-                const boost::asio::ip::tcp::endpoint& remoteEP,
-                uint16_t source_port,
-                uint64_t runtime_generation,
-                uint64_t flow_generation,
-                const std::weak_ptr<xtcp::XtcpFirstLegHooks>& hooks, int fd) noexcept {
-                if (fd < 0) {
-                    return BeginExternalAccept(localEP, remoteEP, source_port,
-                        runtime_generation, flow_generation, hooks);
-                }
-                // XTCP-VNET-BRIDGE-BYPASS-001: 注册后直接采纳 XTCP 侧 socketpair
-                // fd, 跳过 listener accept + 内核 loopback TCP 配对。
-                std::shared_ptr<TapTcpClient> base = BeginAcceptClient(localEP, remoteEP);
-                std::shared_ptr<VEthernetNetworkTcpipConnection> connection =
-                    std::dynamic_pointer_cast<VEthernetNetworkTcpipConnection>(base);
-                if (NULLPTR == connection) {
-                    ::close(fd);
-                    return false;
-                }
-                connection->SetExternalFirstLeg(
-                    runtime_generation, flow_generation, hooks);
-                if (!RegisterExternalClient(source_port, runtime_generation,
-                        flow_generation, connection)) {
-                    connection->Dispose();
-                    ::close(fd);
-                    return false;
-                }
-                const boost::asio::ip::tcp::endpoint natEP(
-                    boost::asio::ip::address_v4::loopback(), source_port);
-                // CompleteExternalAcceptWithFd consumes fd and closes it before
-                // adoption or disposes its Asio owner after adoption.
-                return CompleteExternalAcceptWithFd(
-                    source_port, runtime_generation, fd, natEP);
-            }
-
             /**
              * @brief Creates a connection handler when exchanger state is established.
              */

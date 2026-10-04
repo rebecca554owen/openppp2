@@ -8,10 +8,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
-#include <ppp/diagnostics/DatapathPerfJson.h>
-#include "TapGsoLedger.h"
-#include "TapGsoMergeabilityAnalyzer.h"
-#include "TapVnetCodec.h"
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
 
@@ -740,68 +736,46 @@ namespace ppp {
         };
 
         static thread_local SsmtThreadLocalTls  ssmt_tls_;
-        static thread_local bool                tun_gso_force_bare_ = false;
         static bool                             ifc_ctl_sock_compatible_route = false;
-
-        static bool TapGsoMergeDisableRequested() noexcept {
-            // Environment is process-start configuration, not an externally
-            // mutable runtime control. Cache the value because OutputInternal
-            // consults this guard for every packet on the GSO path.
-            static const bool disabled = []() noexcept {
-                const char* disable = std::getenv("OPENPPP2_TAP_GSO_MERGE_DISABLE");
-                return disable != NULLPTR && *disable == '1';
-            }();
-            return disabled;
-        }
-
-        static bool TapGsoMergeRequested() noexcept {
-            if (TapGsoMergeDisableRequested()) return false;
-            const char* enable = std::getenv("OPENPPP2_TAP_GSO_MERGE");
-            return enable != NULLPTR && *enable == '1';
-        }
-
-        static bool TapNdiTsoRequested() noexcept {
-            const char* enable = std::getenv("OPENPPP2_XTCP_NDI_TSO_TX");
-            return enable != NULLPTR && enable[0] == '1' && enable[1] == '\0';
-        }
-
-        static bool TapGsoPshBoundaryRequested() noexcept {
-            const char* enable = std::getenv("OPENPPP2_TAP_GSO_PSH_BOUNDARY");
-            return enable != NULLPTR && enable[0] == '1' && enable[1] == '\0';
-        }
-
-        static bool TapGsoRetainedWritevRequested() noexcept {
-            const char* disable = std::getenv("OPENPPP2_TAP_GSO_RETAINED_WRITEV_DISABLE");
-            return disable == NULLPTR || disable[0] != '1' || disable[1] != '\0';
-        }
 
         TapLinux::TapLinux(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& dev, void* tun, uint32_t address, uint32_t gw, uint32_t mask, bool hosted_network)
             : ITap(context, dev, tun, address, gw, mask, hosted_network)
             , promisc_(false)
-            , disposed_(FALSE)
-            , gso_hold_timer_(*context)
-            , gso_coalescer_([this](const uint8_t* frame, size_t frame_size) noexcept { return WriteGsoFrameLocked(frame, frame_size); }, {},
-                [this](const iovec* iovecs, int count, size_t frame_size) noexcept {
-                    return WriteGsoIovLocked(iovecs, count, frame_size);
-                }, TapGsoPshBoundaryRequested(), TapGsoRetainedWritevRequested()) {
+            , disposed_(FALSE) {
 
+        }
+
+        bool TapLinux::GetRuntimeStats(ppp::tap::TapRuntimeStats& stats) const noexcept
+        {
+            /** @brief Linux TAP has no extra runtime counters beyond the base. */
+            stats = ppp::tap::TapRuntimeStats();
+            return true;
+        }
+
+        bool TapLinux::SupportsTxGso() const noexcept
+        {
+            /** @brief No native TCPv4 GSO transmit path on Linux TAP. */
+            return false;
+        }
+
+        bool TapLinux::OutputGso(const std::shared_ptr<Byte>& packet, int packet_size, TxGsoMetadata) noexcept
+        {
+            /** @brief Fallback: plain Output() path (no native GSO). */
+            return Output(packet, packet_size);
+        }
+
+        void TapLinux::OnInput(PacketInputEventArgs& e) noexcept
+        {
+            ITap::OnInput(e);
+        }
+
+        bool TapLinux::AsynchronousReadPacketLoops() noexcept
+        {
+            return ITap::AsynchronousReadPacketLoops();
         }
 
         TapLinux::~TapLinux() noexcept {
             Finalize();
-        }
-
-        bool TapLinux::GetRuntimeStats(ppp::tap::TapRuntimeStats& stats) const noexcept {
-            std::lock_guard<std::mutex> lock(gso_mutex_);
-            stats.vnet_header = vnet_header_;
-            stats.gso_merge_active = gso_merge_active_;
-            stats.tx_gso_supported = disposed_.load(std::memory_order_acquire) == FALSE &&
-                tun_write_failed_.load(std::memory_order_acquire) == FALSE &&
-                vnet_header_ && tx_gso_supported_ && !gso_ssmt_disabled_;
-            stats.direct_gso_packets = direct_gso_packets_.load(std::memory_order_relaxed);
-            stats.direct_gso_bytes = direct_gso_bytes_.load(std::memory_order_relaxed);
-            stats.direct_gso_rejected = direct_gso_rejected_.load(std::memory_order_relaxed);
-            return true;
         }
 
         int TapLinux::OpenDriver(const char* ifrName) noexcept {
@@ -834,13 +808,6 @@ namespace ppp {
             // https://www.kernel.org/doc/Documentation/networking/tuntap.txt
             strncpy(ifr.ifr_name, ifrName, IFNAMSIZ);
 
-            bool request_gso = !tun_gso_force_bare_ &&
-                (TapGsoMergeRequested() || TapNdiTsoRequested());
-            if (request_gso) {
-                unsigned int features = 0;
-                request_gso = ioctl(tun, TUNGETFEATURES, &features) == 0 && (features & IFF_VNET_HDR) != 0;
-            }
-
             bool fails = false;
 #if defined(IFF_MULTI_QUEUE)
 #if defined(IFF_ATTACH_QUEUE)
@@ -848,46 +815,24 @@ namespace ppp {
             ioctl(tun, TUNSETQUEUE, &ifr);
 #endif
 
-            ifr.ifr_flags = IFF_TUN | IFF_NO_PI | IFF_MULTI_QUEUE | (request_gso ? IFF_VNET_HDR : 0);
+            ifr.ifr_flags = IFF_TUN | IFF_NO_PI | IFF_MULTI_QUEUE;
             fails = ioctl(tun, TUNSETIFF, &ifr) < 0;
 
             if (fails) {
-                ifr.ifr_flags = IFF_TUN | IFF_NO_PI | (request_gso ? IFF_VNET_HDR : 0);
+                ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
                 fails = ioctl(tun, TUNSETIFF, &ifr) < 0;
             }
 #else
-            ifr.ifr_flags = IFF_TUN | IFF_NO_PI | (request_gso ? IFF_VNET_HDR : 0);
+            ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
             fails = ioctl(tun, TUNSETIFF, &ifr) < 0;
 #endif
 
             if (fails) {
                 ::close(tun);
-                if (request_gso) {
-                    tun_gso_force_bare_ = true;
-                    const int bare_tun = OpenDriver(ifrName);
-                    tun_gso_force_bare_ = false;
-                    return bare_tun;
-                }
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed);
                 return -1;
             }
             else {
-                if (request_gso) {
-                    int header_size = static_cast<int>(sizeof(virtio_net_hdr));
-                    int header_readback = 0;
-                    const bool configured =
-                        ioctl(tun, TUNSETVNETHDRSZ, &header_size) == 0 &&
-                        ioctl(tun, TUNGETVNETHDRSZ, &header_readback) == 0 &&
-                        header_readback == static_cast<int>(sizeof(virtio_net_hdr)) &&
-                        ioctl(tun, TUNSETOFFLOAD, TUN_F_CSUM | TUN_F_TSO4) == 0;
-                    if (!configured) {
-                        ::close(tun);
-                        tun_gso_force_bare_ = true;
-                        const int bare_tun = OpenDriver(ifrName);
-                        tun_gso_force_bare_ = false;
-                        return bare_tun;
-                    }
-                }
 #if defined(IFF_ATTACH_QUEUE)
                 ifr.ifr_flags = IFF_ATTACH_QUEUE; /* IFF_DETACH_QUEUE */
                 ioctl(tun, TUNSETQUEUE, &ifr);
@@ -1790,10 +1735,10 @@ namespace ppp {
             }
 
             memcpy(ifr.ifr_name, oldName.data(), oldName.size());
-            ifr.ifr_name[oldName.size() + 1] = '\x0';
+            ifr.ifr_name[oldName.size()] = '\x0';
 
             memcpy(ifr.ifr_newname, ifrName.data(), ifrName.size());
-            ifr.ifr_name[ifrName.size() + 1] = '\x0';
+            ifr.ifr_newname[ifrName.size()] = '\x0';
 
             bool ok = ioctl(dev_handle, SIOCSIFNAME, &ifr) == 0;
             if (!ok) {
@@ -1810,8 +1755,6 @@ namespace ppp {
             return TapLinux::DeleteRoute(this->GetId(), address, prefix, gw);
         }
 
-        namespace { void RecordTunFinalizeDiagnostic() noexcept; }
-
         void TapLinux::Dispose() noexcept {
             std::shared_ptr<ITap> self = shared_from_this();
             std::shared_ptr<boost::asio::io_context> context = GetContext();
@@ -1824,18 +1767,8 @@ namespace ppp {
         }
 
         void TapLinux::Finalize() noexcept {
-            RecordTunFinalizeDiagnostic();
             int disposed = disposed_.exchange(TRUE);
             if (disposed != TRUE) {
-                {
-                    std::lock_guard<std::mutex> lock(gso_mutex_);
-                    gso_ssmt_disabled_ = true;
-                    if (gso_merge_active_) {
-                        DisableGsoMergeLocked(static_cast<int>(reinterpret_cast<std::intptr_t>(GetHandle())));
-                    } else {
-                        CancelGsoHoldTimerLocked();
-                    }
-                }
                 ppp::telemetry::Log(Level::kInfo, "tap", "TUN device closing");
                 ppp::telemetry::Count("tap.close", 1);
                 SetNetifUp(false);
@@ -1857,535 +1790,23 @@ namespace ppp {
             }
         }
 
-        namespace {
-            struct GsoMergeabilityTelemetry {
-                bool enabled = false;
-                bool ledger_enabled = false;
-                bool tun_output_diagnostics_enabled = false;
-                bool measurement_window_closed = false;
-                std::atomic<uint64_t> tun_output_invalid{0};
-                std::atomic<uint64_t> tun_output_disposed{0};
-                std::atomic<uint64_t> tun_output_write_failed{0};
-                std::atomic<uint64_t> tun_write_latch_bare{0};
-                std::atomic<uint64_t> tun_write_latch_gso_disable_flush{0};
-                std::atomic<uint64_t> tun_write_latch_gso_hold_timer_flush{0};
-                std::atomic<uint64_t> tun_write_latch_gso_ordinary_write{0};
-                std::atomic<uint64_t> tun_write_latch_gso_coalescer_push{0};
-                std::atomic<uint64_t> tun_vnet_input_close{0};
-                std::atomic<uint64_t> tun_finalize{0};
-                std::atomic<uint64_t> first_push_returned_false_ns{0};
-                std::atomic<uint64_t> first_fail_tun_write_latch_ns{0};
-                std::atomic<uint64_t> first_dispose_from_tun_write_latch_ns{0};
-                std::atomic<uint64_t> push_false_without_terminal{0};
-                std::sig_atomic_t applied_boundary = 0;
-                ppp::tap::TunGsoMergeabilityAnalyzer analyzer;
-                ppp::tap::TunGsoLedger ledger;
-                ppp::tap::TunGsoFirstPushFailure first_push_failure;
-
-                void SynchronizeMeasurementBoundary() noexcept {
-                    const std::sig_atomic_t boundary = ppp::diagnostics::datapath_perf::MeasurementBoundaryRequest();
-                    if (boundary == 0 || boundary == applied_boundary) return;
-                    applied_boundary = boundary;
-                    if (boundary == 1) {
-                        measurement_window_closed = false;
-                        if (enabled) analyzer.ResetWindow();
-                        if (ledger_enabled) ledger.ResetWindow();
-                    } else if (boundary == 2) {
-                        measurement_window_closed = true;
-                        if (enabled) analyzer.FinalizeOpenRun();
-                        if (ledger_enabled) ledger.FinalizeWindow();
-                    }
-                }
-
-                void CountTunOutputInvalid() noexcept {
-                    if (tun_output_diagnostics_enabled) tun_output_invalid.fetch_add(1, std::memory_order_relaxed);
-                }
-
-                void CountTunOutputDisposed() noexcept {
-                    if (tun_output_diagnostics_enabled) tun_output_disposed.fetch_add(1, std::memory_order_relaxed);
-                }
-
-                void CountTunOutputWriteFailed() noexcept {
-                    if (tun_output_diagnostics_enabled) tun_output_write_failed.fetch_add(1, std::memory_order_relaxed);
-                }
-
-                void CountTunWriteLatch(unsigned source) noexcept {
-                    if (!tun_output_diagnostics_enabled) return;
-                    switch (source) {
-                        case 0: tun_write_latch_bare.fetch_add(1, std::memory_order_relaxed); break;
-                        case 1: tun_write_latch_gso_disable_flush.fetch_add(1, std::memory_order_relaxed); break;
-                        case 2: tun_write_latch_gso_hold_timer_flush.fetch_add(1, std::memory_order_relaxed); break;
-                        case 3: tun_write_latch_gso_ordinary_write.fetch_add(1, std::memory_order_relaxed); break;
-                        case 4: tun_write_latch_gso_coalescer_push.fetch_add(1, std::memory_order_relaxed); break;
-                        default: break;
-                    }
-                }
-
-                void CountTunVnetInputClose() noexcept {
-                    if (tun_output_diagnostics_enabled) tun_vnet_input_close.fetch_add(1, std::memory_order_relaxed);
-                }
-
-                void CountTunFinalize() noexcept {
-                    if (tun_output_diagnostics_enabled) tun_finalize.fetch_add(1, std::memory_order_relaxed);
-                }
-
-                static void RecordFirstTimestamp(std::atomic<uint64_t>& destination,
-                    uint64_t timestamp_ns) noexcept {
-                    uint64_t expected = 0;
-                    (void)destination.compare_exchange_strong(expected, timestamp_ns,
-                        std::memory_order_relaxed);
-                }
-
-                void RecordPushReturnedFalse(uint64_t timestamp_ns) noexcept {
-                    if (tun_output_diagnostics_enabled) {
-                        RecordFirstTimestamp(first_push_returned_false_ns, timestamp_ns);
-                    }
-                }
-
-                void RecordFailTunWriteLatch() noexcept {
-                    if (tun_output_diagnostics_enabled) {
-                        RecordFirstTimestamp(first_fail_tun_write_latch_ns, TunGsoCoalescer::NowNs());
-                    }
-                }
-
-                void RecordDisposeFromTunWriteLatch() noexcept {
-                    if (tun_output_diagnostics_enabled) {
-                        RecordFirstTimestamp(first_dispose_from_tun_write_latch_ns, TunGsoCoalescer::NowNs());
-                    }
-                }
-
-                void CountPushFalseWithoutTerminal() noexcept {
-                    if (tun_output_diagnostics_enabled) {
-                        push_false_without_terminal.fetch_add(1, std::memory_order_relaxed);
-                    }
-                }
-
-                static const char* FirstPushFailureKindName(ppp::tap::TunGsoFirstPushFailure::Kind kind) noexcept {
-                    switch (kind) {
-                    case ppp::tap::TunGsoFirstPushFailure::Kind::Ordinary: return "ordinary";
-                    case ppp::tap::TunGsoFirstPushFailure::Kind::Gso: return "gso";
-                    case ppp::tap::TunGsoFirstPushFailure::Kind::None: return "none";
-                    }
-                    return "none";
-                }
-
-                static const char* WriteOutcomeName(TunGsoCoalescer::WriteOutcome outcome) noexcept {
-                    switch (outcome) {
-                    case TunGsoCoalescer::WriteOutcome::NegativeFailure: return "negative";
-                    case TunGsoCoalescer::WriteOutcome::PartialDelivery: return "partial";
-                    case TunGsoCoalescer::WriteOutcome::Complete: return "complete";
-                    case TunGsoCoalescer::WriteOutcome::None: return "none";
-                    }
-                    return "none";
-                }
-
-                static const char* RejectionReasonName(TunGsoCoalescer::RejectionReason reason) noexcept {
-                    switch (reason) {
-                    case TunGsoCoalescer::RejectionReason::Incompatible: return "incompatible";
-                    case TunGsoCoalescer::RejectionReason::Psh: return "psh";
-                    case TunGsoCoalescer::RejectionReason::Control: return "control";
-                    case TunGsoCoalescer::RejectionReason::Mtu: return "mtu";
-                    case TunGsoCoalescer::RejectionReason::None: return "none";
-                    }
-                    return "none";
-                }
-
-                static const char* FlushReasonName(TunGsoCoalescer::FlushReason reason, bool captured) noexcept {
-                    if (!captured) return "none";
-                    switch (reason) {
-                    case TunGsoCoalescer::FlushReason::Explicit: return "explicit";
-                    case TunGsoCoalescer::FlushReason::Cap: return "cap";
-                    case TunGsoCoalescer::FlushReason::Timeout: return "timeout";
-                    case TunGsoCoalescer::FlushReason::Incompatible: return "incompatible";
-                    case TunGsoCoalescer::FlushReason::ShortTail: return "short_tail";
-                    case TunGsoCoalescer::FlushReason::Psh: return "psh";
-                    case TunGsoCoalescer::FlushReason::Control: return "control";
-                    case TunGsoCoalescer::FlushReason::Ssmt: return "ssmt";
-                    case TunGsoCoalescer::FlushReason::Terminate: return "terminate";
-                    }
-                    return "none";
-                }
-
-                void RenderTunOutputJson(std::ostream& output) const {
-                    const ppp::tap::TunGsoFirstPushFailure::Snapshot first = first_push_failure.GetSnapshot();
-                    const bool captured = first.kind != ppp::tap::TunGsoFirstPushFailure::Kind::None;
-                    const bool mtu_terminal = captured && first.rejection == TunGsoCoalescer::RejectionReason::Mtu;
-                    const ppp::tap::TunGsoCoalescer::PacketShape empty_packet_shape;
-                    const ppp::tap::TunGsoCoalescer::PacketShape& packet_shape =
-                        mtu_terminal ? first.packet_shape : empty_packet_shape;
-                    const ppp::tap::TunGsoFirstPushFailure::Precursor& precursor = first.precursor;
-                    output << ",\"tun_output\":{\"invalid\":"
-                        << tun_output_invalid.load(std::memory_order_relaxed)
-                        << ",\"disposed\":" << tun_output_disposed.load(std::memory_order_relaxed)
-                        << ",\"already_tun_write_failed\":" << tun_output_write_failed.load(std::memory_order_relaxed)
-                        << ",\"first_latch\":{\"bare_write\":" << tun_write_latch_bare.load(std::memory_order_relaxed)
-                        << ",\"gso_disable_flush\":" << tun_write_latch_gso_disable_flush.load(std::memory_order_relaxed)
-                        << ",\"gso_hold_timer_flush\":" << tun_write_latch_gso_hold_timer_flush.load(std::memory_order_relaxed)
-                        << ",\"gso_ordinary_write\":" << tun_write_latch_gso_ordinary_write.load(std::memory_order_relaxed)
-                        << ",\"gso_coalescer_push\":" << tun_write_latch_gso_coalescer_push.load(std::memory_order_relaxed)
-                        << "},\"first_push_failure\":{\"semantic\":\"terminal\",\"terminal\":{\"stage\":\"terminal\",\"kind\":\""
-                        << FirstPushFailureKindName(first.kind)
-                        << "\",\"outcome\":\"" << (captured ? WriteOutcomeName(first.outcome) : "none")
-                        << "\",\"flush_reason\":\"" << FlushReasonName(first.flush_reason, captured)
-                        << "\",\"rejection_reason\":\"" << (captured ? RejectionReasonName(first.rejection) : "none")
-                        << "\",\"original_packet_bytes\":" << first.packet_bytes
-                        << ",\"requested_vnet_frame_bytes\":" << first.frame_bytes
-                        << ",\"written_bytes\":" << first.written_bytes
-                        << ",\"error_number\":" << first.error_number
-                        << ",\"segments\":" << first.segments
-                        << ",\"hold_ns\":" << first.hold_ns
-                        << ",\"monotonic_ns\":" << first.monotonic_ns
-                        << ",\"negative_fallback\":" << (first.negative_fallback ? "true" : "false")
-                        << ",\"packet_shape\":{\"parsed\":" << (packet_shape.parsed ? "true" : "false")
-                        << ",\"supplied_bytes\":" << packet_shape.supplied_bytes
-                        << ",\"ipv4_total_length\":" << packet_shape.ipv4_total_length
-                        << ",\"ipv4_ihl_bytes\":" << packet_shape.ipv4_ihl_bytes
-                        << ",\"tcp_data_offset_bytes\":" << packet_shape.tcp_data_offset_bytes
-                        << ",\"tcp_payload_bytes\":" << packet_shape.tcp_payload_bytes
-                        << ",\"ipv4_version\":" << static_cast<unsigned>(packet_shape.ipv4_version)
-                        << ",\"ipv4_protocol\":" << static_cast<unsigned>(packet_shape.ipv4_protocol)
-                        << ",\"ipv4_fragment_flags\":" << packet_shape.ipv4_fragment_flags
-                        << ",\"ipv4_df\":" << (packet_shape.ipv4_df ? "true" : "false")
-                        << ",\"tcp_flags\":" << static_cast<unsigned>(packet_shape.tcp_flags)
-                        << ",\"fixed_max_guard_bytes\":" << packet_shape.max_guard_bytes
-                        << ",\"excess_bytes\":" << packet_shape.excess_bytes
-                        << "}},\"precursor\":{\"stage\":\"" << (precursor.present ? "gso_negative" : "none")
-                        << "\",\"kind\":\"" << (precursor.present ? "gso" : "none")
-                        << "\",\"requested_vnet_frame_bytes\":" << precursor.requested_bytes
-                        << ",\"written_bytes\":" << precursor.written_bytes
-                        << ",\"error_number\":" << precursor.error_number
-                        << ",\"monotonic_ns\":" << precursor.monotonic_ns
-                        << "}},\"failure_timeline\":{\"push_returned_false_ns\":"
-                        << first_push_returned_false_ns.load(std::memory_order_relaxed)
-                        << ",\"fail_tun_write_latch_ns\":"
-                        << first_fail_tun_write_latch_ns.load(std::memory_order_relaxed)
-                        << ",\"dispose_from_tun_write_latch_ns\":"
-                        << first_dispose_from_tun_write_latch_ns.load(std::memory_order_relaxed)
-                        << ",\"push_false_without_terminal\":"
-                        << push_false_without_terminal.load(std::memory_order_relaxed)
-                        << "},\"vnet_input_close\":" << tun_vnet_input_close.load(std::memory_order_relaxed)
-                        << ",\"finalize\":" << tun_finalize.load(std::memory_order_relaxed) << '}';
-                }
-
-                static bool Initialize(GsoMergeabilityTelemetry& result) noexcept {
-                    const char* mergeability_flag = std::getenv("OPENPPP2_DATAPATH_GSO_MERGEABILITY");
-                    result.enabled = mergeability_flag != nullptr && *mergeability_flag == '1';
-                    const char* ledger_flag = std::getenv("OPENPPP2_DATAPATH_GSO_LEDGER");
-                    result.ledger_enabled = ledger_flag != nullptr && *ledger_flag == '1';
-                    const char* tun_output_flag = std::getenv("OPENPPP2_DATAPATH_TUN_OUTPUT_DIAGNOSTICS");
-                    result.tun_output_diagnostics_enabled = tun_output_flag != nullptr && *tun_output_flag == '1';
-                    if (result.tun_output_diagnostics_enabled) {
-                        ppp::diagnostics::datapath_perf::SetTunOutputRender(
-                            [](std::ostream& output) { Instance().RenderTunOutputJson(output); });
-                    }
-                    if (result.enabled) {
-                        ppp::diagnostics::datapath_perf::SetMergeabilityRender(
-                            [](std::ostream& output, const char*) {
-                                output << ",\"tun_gso_mergeability\":" << Instance().analyzer.RenderWindowJson();
-                            });
-                    }
-                    if (result.ledger_enabled) {
-                        ppp::diagnostics::datapath_perf::SetGsoLedgerRender(
-                            [](std::ostream& output, const char*) {
-                                output << ",\"tun_gso_ledger\":" << Instance().ledger.RenderWindowJson();
-                            });
-                    }
-                    return true;
-                }
-
-                static GsoMergeabilityTelemetry& Instance() {
-                    static GsoMergeabilityTelemetry instance;
-                    static const bool initialized = Initialize(instance);
-                    (void)initialized;
-                    return instance;
-                }
-            };
-
-            void RecordTunFinalizeDiagnostic() noexcept {
-                GsoMergeabilityTelemetry::Instance().CountTunFinalize();
-            }
-        }
-        ssize_t TapLinux::WriteTunFrame(int fd, const uint8_t* frame, size_t frame_size) noexcept {
-            ppp::diagnostics::datapath_perf::Scope write_scope;
-            const bool direct_write_accounting = ppp::diagnostics::datapath_perf::BeginTunDirectWrite();
-            const ssize_t bytes_transferred = ::write(fd, frame, frame_size);
-            ppp::diagnostics::datapath_perf::EndTunDirectWrite(direct_write_accounting);
-            ppp::diagnostics::datapath_perf::RecordTunDirectWrite(static_cast<int>(frame_size),
-                static_cast<int>(bytes_transferred), write_scope.Elapsed());
-            return bytes_transferred;
-        }
-
-        ssize_t TapLinux::WriteGsoFrameLocked(const uint8_t* frame, size_t frame_size) noexcept {
-            return WriteTunFrame(gso_write_fd_, frame, frame_size);
-        }
-
-        ssize_t TapLinux::WriteGsoIovLocked(const iovec* iovecs, int count, size_t frame_size) noexcept {
-            ppp::diagnostics::datapath_perf::Scope write_scope;
-            const bool direct_write_accounting = ppp::diagnostics::datapath_perf::BeginTunDirectWrite();
-            const ssize_t written = ::writev(gso_write_fd_, iovecs, count);
-            ppp::diagnostics::datapath_perf::EndTunDirectWrite(direct_write_accounting);
-            ppp::diagnostics::datapath_perf::RecordTunDirectWrite(static_cast<int>(frame_size),
-                static_cast<int>(written), write_scope.Elapsed());
-            return written;
-        }
-
-        void TapLinux::FailTunWrite(TunWriteFailureSource source) noexcept {
-            if (tun_write_failed_.exchange(TRUE) == FALSE) {
-                GsoMergeabilityTelemetry& telemetry = GsoMergeabilityTelemetry::Instance();
-                telemetry.RecordFailTunWriteLatch();
-                telemetry.CountTunWriteLatch(static_cast<unsigned>(source));
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelWriteFailed);
-                telemetry.RecordDisposeFromTunWriteLatch();
-                Dispose();
-            }
-        }
-
-        void TapLinux::DisableGsoMergeLocked(int write_fd, TunGsoCoalescer::FlushReason reason) noexcept {
-            CancelGsoHoldTimerLocked();
-            gso_write_fd_ = write_fd;
-            const bool flushed = gso_coalescer_.DisableAndFlush(reason);
-            gso_merge_active_ = false;
-            if (!flushed) {
-                FailTunWrite(TunWriteFailureSource::GsoDisableFlush);
-            }
-        }
-
-        void TapLinux::ArmGsoHoldTimerLocked() noexcept {
-            if (gso_timer_armed_ || !gso_merge_active_ || gso_ssmt_disabled_) return;
-            gso_timer_armed_ = true;
-            const uint64_t generation = ++gso_timer_generation_;
-            gso_hold_timer_.expires_after(std::chrono::nanoseconds(gso_coalescer_.hold_ns()));
-            std::shared_ptr<ITap> self = shared_from_this();
-            gso_hold_timer_.async_wait([self, this, generation](const boost::system::error_code& ec) noexcept {
-                std::lock_guard<std::mutex> lock(gso_mutex_);
-                if (generation != gso_timer_generation_) return;
-                gso_timer_armed_ = false;
-                if (ec || !gso_merge_active_ || gso_ssmt_disabled_ || disposed_.load() != FALSE) return;
-                gso_write_fd_ = static_cast<int>(reinterpret_cast<std::intptr_t>(GetHandle()));
-                if (!gso_coalescer_.FlushExpired()) {
-                    gso_merge_active_ = false;
-                    FailTunWrite(TunWriteFailureSource::GsoHoldTimerFlush);
-                }
-            });
-        }
-
-        void TapLinux::CancelGsoHoldTimerLocked() noexcept {
-            if (!gso_timer_armed_) return;
-            gso_timer_armed_ = false;
-            ++gso_timer_generation_;
-            boost::system::error_code ec;
-            gso_hold_timer_.cancel(ec);
-        }
-
-        void TapLinux::OnInput(PacketInputEventArgs& e) noexcept {
-            if (!vnet_header_) {
-                ITap::OnInput(e);
-                return;
-            }
-            auto fail_vnet_input = [this](const char* message) noexcept {
-                GsoMergeabilityTelemetry::Instance().CountTunVnetInputClose();
-                ppp::telemetry::Log(Level::kInfo, "tap", "%s", message);
-                {
-                    std::lock_guard<std::mutex> lock(gso_mutex_);
-                    DisableGsoMergeLocked(static_cast<int>(reinterpret_cast<std::intptr_t>(GetHandle())));
-                }
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelReadFailed);
-                Dispose();
-            };
-            if (e.Packet == NULLPTR || e.PacketLength <= 0 || !vnet::IsStandardHeaderSize(vnet_header_size_)) {
-                fail_vnet_input("malformed VNET frame received; closing TUN");
-                return;
-            }
-
-            uint8_t* frame = static_cast<uint8_t*>(e.Packet);
-            const size_t frame_size = static_cast<size_t>(e.PacketLength);
-            virtio_net_hdr virtio{};
-            if (!vnet::ReadHeader(frame, frame_size, vnet_header_size_, virtio)) {
-                fail_vnet_input("malformed VNET frame received; closing TUN");
-                return;
-            }
-
-            if (virtio.gso_type == VIRTIO_NET_HDR_GSO_NONE) {
-                if (virtio.flags == 0 && le16toh(virtio.hdr_len) == 0 && le16toh(virtio.gso_size) == 0 &&
-                    le16toh(virtio.csum_start) == 0 && le16toh(virtio.csum_offset) == 0) {
-                    const size_t packet_size = frame_size - vnet_header_size_;
-                    // Input is borrowed until this callback returns; the read
-                    // loop keeps the original allocation for its next read.
-                    e.Packet = frame + vnet_header_size_;
-                    e.PacketLength = static_cast<int>(packet_size);
-                    ITap::OnInput(e);
-                    return;
-                }
-                if (!vnet::CompleteChecksumOnlyTcpV4(frame, frame_size, vnet_header_size_)) {
-                    fail_vnet_input("unsupported or malformed inbound VNET checksum-only frame; closing TUN");
-                    return;
-                }
-                const size_t packet_size = frame_size - vnet_header_size_;
-                e.Packet = frame + vnet_header_size_;
-                e.PacketLength = static_cast<int>(packet_size);
-                ITap::OnInput(e);
-                return;
-            }
-
-            vnet::TcpV4GsoFrame gso;
-            if (!vnet::ParseTcpV4Gso(frame, frame_size, vnet_header_size_, ITap::Mtu, gso)) {
-                fail_vnet_input("unsupported or malformed inbound VNET GSO frame; closing TUN");
-                return;
-            }
-
-            if (!vnet::CompleteTcpV4GsoChecksums(gso)) {
-                fail_vnet_input("failed to complete inbound TCPv4 GSO checksums; closing TUN");
-                return;
-            }
-            PacketInputEventArgs gso_event{
-                gso.ip, static_cast<int>(gso.packet_size), true
-            };
-            PacketInputEventHandler handler = GetPacketInput();
-            if (handler && handler(this, gso_event)) {
-                return;
-            }
-
-            for (size_t offset = 0; offset < gso.payload_size; offset += gso.gso_size) {
-                std::array<Byte, ITap::Mtu> segment{};
-                size_t segment_size = 0;
-                if (!vnet::BuildTcpV4GsoSegment(gso, offset, segment.data(), segment.size(), segment_size)) {
-                    fail_vnet_input("failed to build inbound TCPv4 GSO segment; closing TUN");
-                    return;
-                }
-                PacketInputEventArgs segment_event{ segment.data(), static_cast<int>(segment_size) };
-                ITap::OnInput(segment_event);
-            }
-        }
-
-        bool TapLinux::AsynchronousReadPacketLoops() noexcept {
-            if (!vnet_header_) {
-                return ITap::AsynchronousReadPacketLoops();
-            }
-            std::shared_ptr<boost::asio::posix::stream_descriptor> stream = GetStream();
-            if (NULLPTR == stream || !stream->is_open() || NULLPTR == vnet_read_buffer_ || read_capacity_ == 0) {
-                return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::TunnelReadFailed);
-            }
-
-            std::shared_ptr<ITap> self = shared_from_this();
-            stream->async_read_some(boost::asio::buffer(vnet_read_buffer_.get(), read_capacity_),
-                [self, this, stream](const boost::system::error_code& ec, std::size_t sz) noexcept {
-                    if (ec == boost::system::errc::operation_canceled) {
-                        return;
-                    }
-                    const int length = std::max<int>(ec ? -1 : sz, -1);
-                    if (length > 0) {
-                        ppp::diagnostics::datapath_perf::RecordTunRead(length);
-                        PacketInputEventArgs event{ vnet_read_buffer_.get(), length };
-                        OnInput(event);
-                    }
-                    if (disposed_.load() == FALSE) {
-                        AsynchronousReadPacketLoops();
-                    }
-                });
-            return true;
-        }
-
         bool TapLinux::Output(const std::shared_ptr<Byte>& packet, int packet_size) noexcept {
-            return packet && Output(packet.get(), packet_size);
-        }
-
-        bool TapLinux::SupportsTxGso() const noexcept {
-            std::lock_guard<std::mutex> lock(gso_mutex_);
-            return disposed_.load(std::memory_order_acquire) == FALSE &&
-                tun_write_failed_.load(std::memory_order_acquire) == FALSE &&
-                vnet_header_ && tx_gso_supported_ && !gso_ssmt_disabled_;
-        }
-
-        bool TapLinux::OutputGso(const std::shared_ptr<Byte>& packet, int packet_size,
-            TxGsoMetadata metadata) noexcept {
-            virtio_net_hdr header{};
-            if (!packet || packet_size < 1 ||
-                !vnet::BuildTcpV4GsoHeader(packet.get(), static_cast<size_t>(packet_size), metadata, header)) {
-                direct_gso_rejected_.fetch_add(1, std::memory_order_relaxed);
-                ppp::telemetry::Count("tap.ndi_gso.rejected", 1);
-                return false;
-            }
-            if (disposed_.load(std::memory_order_acquire) != FALSE ||
-                tun_write_failed_.load(std::memory_order_acquire) != FALSE) {
-                direct_gso_rejected_.fetch_add(1, std::memory_order_relaxed);
-                ppp::telemetry::Count("tap.ndi_gso.rejected", 1);
-                return false;
-            }
-
-            const int tun = static_cast<int>(reinterpret_cast<std::intptr_t>(GetHandle()));
-            std::lock_guard<std::mutex> lock(gso_mutex_);
-            if (!vnet_header_ || !tx_gso_supported_ || gso_ssmt_disabled_ || tun < 0) {
-                direct_gso_rejected_.fetch_add(1, std::memory_order_relaxed);
-                ppp::telemetry::Count("tap.ndi_gso.rejected", 1);
-                return false;
-            }
-
-            // Preserve ordering with ordinary packets retained by the edge
-            // coalescer. A flush failure is terminal and the super-packet is
-            // never replayed through the ordinary oversized path.
-            gso_write_fd_ = tun;
-            if (!gso_coalescer_.Flush(TunGsoCoalescer::FlushReason::Explicit)) {
-                direct_gso_rejected_.fetch_add(1, std::memory_order_relaxed);
-                ppp::telemetry::Count("tap.ndi_gso.rejected", 1);
-                FailTunWrite(TunWriteFailureSource::DirectGsoWrite);
-                return false;
-            }
-            CancelGsoHoldTimerLocked();
-
-            struct iovec iov[2];
-            iov[0].iov_base = &header;
-            iov[0].iov_len = sizeof(header);
-            iov[1].iov_base = packet.get();
-            iov[1].iov_len = static_cast<size_t>(packet_size);
-            const size_t expected = sizeof(header) + static_cast<size_t>(packet_size);
-            ppp::diagnostics::datapath_perf::Scope write_scope;
-            const bool direct_write_accounting = ppp::diagnostics::datapath_perf::BeginTunDirectWrite();
-            const ssize_t written = ::writev(tun, iov, 2);
-            ppp::diagnostics::datapath_perf::EndTunDirectWrite(direct_write_accounting);
-            ppp::diagnostics::datapath_perf::RecordTunDirectWrite(
-                static_cast<int>(expected), static_cast<int>(written), write_scope.Elapsed());
-            if (written != static_cast<ssize_t>(expected)) {
-                direct_gso_rejected_.fetch_add(1, std::memory_order_relaxed);
-                ppp::telemetry::Count("tap.ndi_gso.rejected", 1);
-                FailTunWrite(TunWriteFailureSource::DirectGsoWrite);
-                return false;
-            }
-            direct_gso_packets_.fetch_add(1, std::memory_order_relaxed);
-            direct_gso_bytes_.fetch_add(static_cast<uint64_t>(packet_size), std::memory_order_relaxed);
-            ppp::telemetry::Count("tap.ndi_gso.packets", 1);
-            ppp::telemetry::Count("tap.ndi_gso.bytes", packet_size);
-            return true;
+            return Output(packet.get(), packet_size);
         }
 
         bool TapLinux::Output(const void* packet, int packet_size) noexcept {
-            return OutputInternal(packet, packet_size, nullptr);
-        }
-
-        bool TapLinux::OutputRetained(const void* packet, int packet_size,
-            RetainedPacketOwner&& owner) noexcept {
-            return OutputInternal(packet, packet_size, &owner);
-        }
-
-        bool TapLinux::OutputInternal(const void* packet, int packet_size,
-            RetainedPacketOwner* owner) noexcept {
             // Windows virtual nics need to use Event to write to the kernel asynchronously,
             // Linux virtual nics can directly write to the kernel ::write function,
             // Can reduce a memory allocation and replication, improve throughput efficiency.
-            GsoMergeabilityTelemetry& mergeability = GsoMergeabilityTelemetry::Instance();
             if (NULLPTR == packet || packet_size < 1) {
-                mergeability.CountTunOutputInvalid();
                 return false;
             }
 
             int disposed = disposed_.load();
             if (disposed != FALSE) {
-                mergeability.CountTunOutputDisposed();
                 return false;
             }
-            if (tun_write_failed_.load() != FALSE) {
-                mergeability.CountTunOutputWriteFailed();
-                return false;
-            }
+
             // https://man7.org/linux/man-pages/man2/write.2.html
             int tun = static_cast<int>(reinterpret_cast<std::intptr_t>(GetHandle()));
             if (Ssmt()) {
@@ -2395,76 +1816,8 @@ namespace ppp {
                 }
             }
 
-            // Mergeability is a packet-input model; the ledger below is driven
-            // by actual coalescer events. Boundaries are applied before either
-            // can observe the triggering output packet.
-            mergeability.SynchronizeMeasurementBoundary();
-            if (mergeability.enabled && !mergeability.measurement_window_closed && !Ssmt()) {
-                mergeability.analyzer.Observe(static_cast<const uint8_t*>(packet), static_cast<size_t>(packet_size));
-            }
-            if (!vnet_header_) {
-                // Preserve the bare/default path: no GSO state and no feature lock.
-                const ssize_t written = WriteTunFrame(tun, static_cast<const uint8_t*>(packet), static_cast<size_t>(packet_size));
-                if (written != packet_size) {
-                    FailTunWrite(TunWriteFailureSource::BareWrite);
-                    return false;
-                }
-                return true;
-            }
-
-            std::lock_guard<std::mutex> lock(gso_mutex_);
-            if ((mergeability.ledger_enabled || mergeability.tun_output_diagnostics_enabled) &&
-                !gso_observer_hooked_ && !Ssmt()) {
-                GsoMergeabilityTelemetry* telemetry = &mergeability;
-                gso_coalescer_.SetObserver([this, telemetry](const TunGsoCoalescer::Event& event) {
-                    if (telemetry->ledger_enabled) telemetry->ledger.OnEvent(event);
-                    if (gso_push_observation_active_) telemetry->first_push_failure.OnEvent(event);
-                });
-                gso_observer_hooked_ = true;
-            }
-            // GSO activation is fixed when this Tap is created. Keep only the
-            // intentional runtime kill switch on the per-packet output path;
-            // re-reading the startup enable flag here adds getenv work for
-            // every emitted segment but cannot activate a previously bare Tap.
-            if (gso_merge_active_ && TapGsoMergeDisableRequested()) {
-                DisableGsoMergeLocked(tun);
-            }
-            if (tun_write_failed_.load() != FALSE) {
-                mergeability.CountTunOutputWriteFailed();
-                return false;
-            }
-            gso_write_fd_ = tun;
-            if (!gso_merge_active_) {
-                // VNET framing remains mandatory after merging has been disabled.
-                // Do not call Push(): this write is physically synchronous.
-                const bool ok = gso_coalescer_.WriteOrdinaryFrame(static_cast<const uint8_t*>(packet),
-                    static_cast<size_t>(packet_size), owner != nullptr && owner->ChecksumPartial());
-                if (!ok) FailTunWrite(TunWriteFailureSource::GsoOrdinaryWrite);
-                return ok;
-            }
-
-            const bool was_pending = gso_coalescer_.has_pending();
-            gso_push_observation_active_ = mergeability.tun_output_diagnostics_enabled;
-            if (gso_push_observation_active_) mergeability.first_push_failure.BeginPush();
-            const bool ok = owner != nullptr
-                ? gso_coalescer_.PushOwned(static_cast<const uint8_t*>(packet),
-                    static_cast<size_t>(packet_size), std::move(*owner))
-                : gso_coalescer_.Push(static_cast<const uint8_t*>(packet), static_cast<size_t>(packet_size));
-            const uint64_t push_returned_false_ns = !ok && gso_push_observation_active_
-                ? TunGsoCoalescer::NowNs() : 0;
-            if (gso_push_observation_active_) {
-                const bool terminal_observed = mergeability.first_push_failure.EndPush(ok);
-                if (!ok) {
-                    mergeability.RecordPushReturnedFalse(push_returned_false_ns);
-                    if (!terminal_observed) mergeability.CountPushFalseWithoutTerminal();
-                }
-                gso_push_observation_active_ = false;
-            }
-            if (ok && !was_pending && gso_coalescer_.has_pending()) ArmGsoHoldTimerLocked();
-            if (!gso_coalescer_.has_pending()) CancelGsoHoldTimerLocked();
-            if (!gso_coalescer_.enabled()) gso_merge_active_ = false;
-            if (!ok) FailTunWrite(TunWriteFailureSource::GsoCoalescerPush);
-            return ok;
+            ssize_t bytes_transferred = ::write(tun, (void*)packet, (size_t)packet_size);
+            return bytes_transferred > -1;
         }
 
         bool TapLinux::Ssmt(const std::shared_ptr<boost::asio::io_context>& context) noexcept {
@@ -2477,18 +1830,13 @@ namespace ppp {
                 return false;
             }
 
-            {
-                std::lock_guard<std::mutex> lock(gso_mutex_);
-                gso_ssmt_disabled_ = true;
-                if (gso_merge_active_) {
-                    DisableGsoMergeLocked(static_cast<int>(reinterpret_cast<std::intptr_t>(GetHandle())), TunGsoCoalescer::FlushReason::Ssmt);
-                } else {
-                    CancelGsoHoldTimerLocked();
-                }
-            }
-
             ppp::string dev = GetId();
             if (dev.empty()) {
+                return false;
+            }
+
+            std::shared_ptr<Byte> buffer = make_shared_alloc<Byte>(ITap::Mtu);
+            if (NULLPTR == buffer) {
                 return false;
             }
 
@@ -2503,25 +1851,6 @@ namespace ppp {
             int tun = OpenDriver(dev.data());
             if (tun == -1) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::IPv6TransitTapOpenFailed);
-                return false;
-            }
-            struct ifreq driver_ifr;
-            memset(&driver_ifr, 0, sizeof(driver_ifr));
-            const bool got_secondary_ifr = ioctl(tun, TUNGETIFF, &driver_ifr) == 0;
-            const bool secondary_vnet = got_secondary_ifr && (driver_ifr.ifr_flags & IFF_VNET_HDR) != 0;
-            int header_readback = 0;
-            if (!got_secondary_ifr || secondary_vnet != vnet_header_ ||
-                (secondary_vnet && (ioctl(tun, TUNGETVNETHDRSZ, &header_readback) != 0 ||
-                    static_cast<size_t>(header_readback) != vnet_header_size_ ||
-                    !vnet::IsStandardHeaderSize(vnet_header_size_)))) {
-                ::close(tun);
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed);
-                return false;
-            }
-            std::shared_ptr<Byte> buffer = make_shared_alloc<Byte>(read_capacity_);
-            if (NULLPTR == buffer) {
-                ::close(tun);
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return false;
             }
 
@@ -2562,7 +1891,7 @@ namespace ppp {
             }
 
             std::shared_ptr<ITap> self = shared_from_this();
-            sd->async_read_some(boost::asio::buffer(buffer.get(), read_capacity_),
+            sd->async_read_some(boost::asio::buffer(buffer.get(), ITap::Mtu),
                 [self, this, context, buffer, sd, fd](const boost::system::error_code& ec, std::size_t sz) noexcept {
                     if (ec != boost::system::errc::operation_canceled) {
                         int len = std::max<int>(ec ? -1 : sz, -1);
@@ -2700,30 +2029,6 @@ namespace ppp {
                 return NULLPTR;
             }
 
-            struct ifreq driver_ifr;
-            memset(&driver_ifr, 0, sizeof(driver_ifr));
-            if (ioctl(tun, TUNGETIFF, &driver_ifr) != 0) {
-                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed);
-                return NULLPTR;
-            }
-            tap->vnet_header_ = (driver_ifr.ifr_flags & IFF_VNET_HDR) != 0;
-            if (tap->vnet_header_) {
-                int header_readback = 0;
-                if (ioctl(tun, TUNGETVNETHDRSZ, &header_readback) != 0 ||
-                    !vnet::IsStandardHeaderSize(static_cast<size_t>(header_readback)) ||
-                    !vnet::ReadCapacity(static_cast<size_t>(header_readback), tap->read_capacity_)) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelDeviceConfigureFailed);
-                    return NULLPTR;
-                }
-                tap->vnet_header_size_ = static_cast<size_t>(header_readback);
-                tap->vnet_read_buffer_ = make_shared_alloc<Byte>(tap->read_capacity_);
-                if (NULLPTR == tap->vnet_read_buffer_) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
-                    return NULLPTR;
-                }
-            }
-            tap->tx_gso_supported_ = tap->vnet_header_;
-            tap->gso_merge_active_ = tap->vnet_header_ && TapGsoMergeRequested();
             tap->promisc_ = promisc;
             tap->dns_addresses_ = dns_addresses;
 

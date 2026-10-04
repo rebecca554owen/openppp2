@@ -634,7 +634,13 @@ namespace ppp {
                 boost::asio::ip::tcp::endpoint remote_ep;
 
                 // Check if target is our own WebSocket endpoint (loopback)
-                if (be_host(configuration_->websocket.host, hostname_)) {
+                // be_host(host, domain) means "host equals or is a subdomain
+                // of domain". The previous call swapped the roles: the client SNI
+                // was treated as the reference domain, so subdomains of our own
+                // websocket host (the normal CDN fronting case) were resolved via
+                // public DNS and connected to the public IP instead of looped
+                // back to the local wss endpoint.
+                if (be_host(hostname_, configuration_->websocket.host)) {
                     if ((self_websocket_port <= IPEndPoint::MinPort) || (self_websocket_port > IPEndPoint::MaxPort)) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::NetworkPortInvalid);
                         return false;

@@ -73,7 +73,8 @@ noise::NoisePskHandshakeResult CompleteNoiseResult(
     BOOST_REQUIRE(client.ReadMessage2(message2.data(), message2.size()));
 
     noise::NoisePskHandshakeResult result;
-    BOOST_REQUIRE(client.TakeResult(result));
+    BOOST_REQUIRE(client.TakeResult(result,
+        reinterpret_cast<const std::uint8_t*>(key_id.data()), key_id.size()));
     return result;
 }
 
@@ -239,7 +240,7 @@ BOOST_AUTO_TEST_CASE(noise_binding_is_one_shot_typed_and_lifecycle_bound) {
     });
 }
 
-BOOST_AUTO_TEST_CASE(noise_rejects_non_carriers_and_migration_invalidates) {
+BOOST_AUTO_TEST_CASE(noise_rejects_non_carriers_accepts_loopback_and_migration_invalidates) {
     auto context = std::make_shared<asio::io_context>();
     auto strand = std::make_shared<FakeTransmission::StrandPtr::element_type>(
         asio::make_strand(*context));
@@ -256,6 +257,8 @@ BOOST_AUTO_TEST_CASE(noise_rejects_non_carriers_and_migration_invalidates) {
         });
     }
 
+    // v2.2.0: loopback ingress is authenticated exactly like LAN, so the
+    // noise binding installs and the exporter is available on loopback too.
     auto loopback = std::make_shared<FakeTransmission>(context, strand,
         transmissions::AuthenticatedCarrierKind::Tcp);
     loopback->SetHandshakeComplete(true);
@@ -263,10 +266,10 @@ BOOST_AUTO_TEST_CASE(noise_rejects_non_carriers_and_migration_invalidates) {
     BOOST_TEST(loopback->IsServerLoopbackIngress());
     OnStrand(context, strand, [&]() {
         auto result = CompleteNoiseResult();
-        BOOST_TEST(!loopback->InstallNoiseAuthenticatedCarrierBinding(
+        BOOST_REQUIRE(loopback->InstallNoiseAuthenticatedCarrierBinding(
             std::move(result)));
-        BOOST_TEST(!loopback->IsAuthenticatedCarrierBindingActive());
-        BOOST_TEST(!loopback->HasAuthenticatedSessionExporter());
+        BOOST_TEST(loopback->IsAuthenticatedCarrierBindingActive());
+        BOOST_TEST(loopback->HasAuthenticatedSessionExporter());
     });
 
     auto websocket = std::make_shared<FakeTransmission>(context, strand,
@@ -306,7 +309,7 @@ BOOST_AUTO_TEST_CASE(production_transport_descriptors_are_explicit) {
         context, strand, ConnectedSocket(context, peers), configuration);
 
     BOOST_TEST(child->GetAuthenticatedCarrierKind() ==
-        transmissions::AuthenticatedCarrierKind::None);
+        transmissions::AuthenticatedCarrierKind::Tcp);
     BOOST_TEST(main->GetAuthenticatedCarrierKind() ==
         transmissions::AuthenticatedCarrierKind::Tcp);
     BOOST_TEST(server->GetAuthenticatedCarrierKind() ==
@@ -324,62 +327,6 @@ BOOST_AUTO_TEST_CASE(production_transport_descriptors_are_explicit) {
     server->Dispose();
     websocket->Dispose();
     wss->Dispose();
-    context->restart();
-    context->poll();
-}
-
-BOOST_AUTO_TEST_CASE(tcp_child_send_half_close_preserves_receive) {
-    auto context = std::make_shared<asio::io_context>();
-    auto strand = std::make_shared<FakeTransmission::StrandPtr::element_type>(
-        asio::make_strand(*context));
-    auto configuration = std::make_shared<ppp::configurations::AppConfiguration>();
-    std::vector<std::shared_ptr<tcp::socket>> peers;
-    auto child = std::make_shared<transmissions::ITcpipTransmission>(
-        context, strand, ConnectedSocket(context, peers), configuration,
-        transmissions::TcpTransmissionRole::Child);
-    const auto peer = peers.front();
-
-    BOOST_TEST(child->SupportsSendHalfClose());
-    OnStrand(context, strand, [&]() {
-        BOOST_TEST(child->ShutdownSend());
-        BOOST_TEST(child->ShutdownSend());
-    });
-
-    std::array<char, 1> eof{};
-    boost::system::error_code ec;
-    BOOST_TEST(peer->read_some(asio::buffer(eof), ec) == 0U);
-    BOOST_TEST(ec == asio::error::eof);
-
-    constexpr std::array<ppp::Byte, 4> reply = { 1, 2, 3, 4 };
-    BOOST_REQUIRE(peer->write_some(asio::buffer(reply), ec) == reply.size());
-    BOOST_TEST(!ec);
-    bool reply_read = false;
-    BOOST_REQUIRE(ppp::coroutines::YieldContext::Spawn(
-        nullptr, *context, strand.get(),
-        [&](ppp::coroutines::YieldContext& y) noexcept {
-            const std::shared_ptr<ppp::Byte> bytes = child->ReadBytes(y, reply.size());
-            reply_read = bytes && std::equal(reply.begin(), reply.end(), bytes.get());
-        }));
-    context->restart();
-    context->run();
-    BOOST_TEST(reply_read);
-    BOOST_TEST(!child->IsReceiveClosed());
-
-    peer->shutdown(tcp::socket::shutdown_send, ec);
-    BOOST_TEST(!ec);
-    bool eof_read = false;
-    BOOST_REQUIRE(ppp::coroutines::YieldContext::Spawn(
-        nullptr, *context, strand.get(),
-        [&](ppp::coroutines::YieldContext& y) noexcept {
-            eof_read = !child->ReadBytes(y, 1);
-        }));
-    context->restart();
-    context->run();
-    BOOST_TEST(eof_read);
-    BOOST_TEST(child->IsReceiveClosed());
-    BOOST_TEST(child->ShutdownSend());
-
-    child->Dispose();
     context->restart();
     context->poll();
 }

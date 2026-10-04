@@ -600,10 +600,16 @@ fn resolve_ppp_path(configured: &str) -> Result<PathBuf, String> {
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let temporary = path.with_extension("tmp");
     fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
-    if path.exists() {
-        fs::remove_file(path).map_err(|error| error.to_string())?;
+
+    #[cfg(unix)]
+    {
+        fs::rename(&temporary, path).map_err(|error| error.to_string())
     }
-    fs::rename(temporary, path).map_err(|error| error.to_string())
+
+    #[cfg(windows)]
+    {
+        crate::replace_file_windows(&temporary, path).map_err(|error| error.to_string())
+    }
 }
 
 fn update_tray(state: &DesktopState, running: bool, node_name: Option<&str>) {

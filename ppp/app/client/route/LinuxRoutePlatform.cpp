@@ -3,7 +3,8 @@
 #include <ppp/app/client/route/RouteSpecs.h>
 #include <ppp/net/native/rib.h>
 
-#if defined(_LINUX) && !defined(_ANDROID) && !defined(_IPHONE)
+#if (defined(_LINUX) && !defined(_ANDROID) && !defined(_IPHONE)) || \
+    defined(OPENPPP2_TEST_LINUX_ROUTE_PLATFORM)
 #include <linux/ppp/tap/TapLinux.h>
 #endif
 
@@ -172,7 +173,8 @@ namespace ppp {
 
                 LinuxRouteOperations LinuxRoutePlatform::CreateSystemOperations() noexcept {
                     LinuxRouteOperations operations;
-#if defined(_LINUX) && !defined(_ANDROID) && !defined(_IPHONE)
+#if (defined(_LINUX) && !defined(_ANDROID) && !defined(_IPHONE)) || \
+    defined(OPENPPP2_TEST_LINUX_ROUTE_PLATFORM)
                     operations.capture_defaults = [](uint32_t gateway,
                         RouteInformationTablePtr& routes) noexcept {
                         return ppp::tap::TapLinux::TryFindAllDefaultGatewayRoutes(

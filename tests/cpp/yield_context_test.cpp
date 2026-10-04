@@ -3,8 +3,10 @@
 
 #include <ppp/coroutines/YieldContext.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <functional>
 #include <thread>
 #include <vector>
@@ -75,14 +77,24 @@ BOOST_AUTO_TEST_CASE(completion_before_suspend_multi_runner) {
     constexpr int kIterations = 300;
     std::atomic<int> done{0};
     std::atomic<int> failures{0};
+    std::array<std::atomic<ppp::coroutines::YieldContext*>, kCoroutines> contexts{};
+    for (auto& c : contexts) { c.store(nullptr); }
 
     for (int i = 0; i < kCoroutines; ++i) {
+        std::atomic<ppp::coroutines::YieldContext*>* slot = &contexts[i];
         const bool spawned = ppp::coroutines::YieldContext::Spawn(runner.context,
-            [&done, &failures](ppp::coroutines::YieldContext& y) noexcept {
+            [&done, &failures, slot](ppp::coroutines::YieldContext& y) noexcept {
                 ppp::coroutines::YieldContext* py = &y;
-                boost::asio::io_context& ctx = y.GetContext();
+                slot->store(py);
                 for (int k = 0; k < kIterations; ++k) {
-                    boost::asio::post(ctx, [py]() noexcept { py->Resume(); });
+                    // R() is the production wakeup path: it fences the handler
+                    // count so a queued resume never touches freed memory after
+                    // the coroutine completes (the raw-post pattern below was
+                    // the UAF source this test used to exercise).
+                    if (!y.R()) {
+                        failures.fetch_add(1);
+                        return;
+                    }
                     if (!y.Suspend()) {
                         failures.fetch_add(1);
                         return;
@@ -93,8 +105,43 @@ BOOST_AUTO_TEST_CASE(completion_before_suspend_multi_runner) {
         BOOST_REQUIRE(spawned);
     }
 
+    const bool completed = WaitFor([&] { return done.load() == kCoroutines; }, 60s);
+    if (!completed) {
+        ppp::coroutines::YieldContext::DumpYieldDiag();
+        for (int i = 0; i < kCoroutines; ++i) {
+            ppp::coroutines::YieldContext* py = contexts[i].load();
+            if (py) {
+                int status = -1, pending = -1;
+                py->DebugState(status, pending);
+                std::fprintf(stderr, "[coroutine %d] ptr=%p status=%d wakeup_pending=%d\n",
+                    i, (void*)py, status, pending);
+            } else {
+                std::fprintf(stderr, "[coroutine %d] never started\n", i);
+            }
+        }
+        std::fflush(stderr);
+        // Hold the process so `sample` can capture live stacks of the stuck
+        // io_context workers.  Enabled via OPENPPP2_YIELD_HANG_HOLD=1.
+        if (const char* hold = std::getenv("OPENPPP2_YIELD_HANG_HOLD"); hold && hold[0] == '1') {
+            std::fprintf(stderr, "[yield-hold] holding for sampler; polling coroutine states\n");
+            std::fflush(stderr);
+            for (int tick = 0; tick < 100; ++tick) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                for (int i = 0; i < kCoroutines; ++i) {
+                    ppp::coroutines::YieldContext* py = contexts[i].load();
+                    if (py) {
+                        int status = -1, pending = -1;
+                        py->DebugState(status, pending);
+                        std::fprintf(stderr, "[poll %d] c%d s=%d wp=%d\n", tick, i, status, pending);
+                    }
+                }
+                ppp::coroutines::YieldContext::DumpYieldDiag();
+                std::fflush(stderr);
+            }
+        }
+    }
     BOOST_REQUIRE_MESSAGE(
-        WaitFor([&] { return done.load() == kCoroutines; }, 60s),
+        completed,
         "coroutines hung: done=" << done.load() << "/" << kCoroutines
                                  << " failures=" << failures.load());
     BOOST_TEST(failures.load() == 0);

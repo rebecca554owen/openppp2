@@ -1,6 +1,6 @@
 #include <ppp/ethernet/VEthernet.h>
+#include <xtcp/XtcpNetstackAdapter.h>
 #include <ppp/diagnostics/Error.h>
-#include <ppp/diagnostics/DatapathPerfJson.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
 /**
  * @file VEthernet.cpp
@@ -42,9 +42,10 @@ namespace ppp
         /**
          * @brief Initializes VEthernet runtime flags and context.
          */
-        VEthernet::VEthernet(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta) noexcept
+        VEthernet::VEthernet(const std::shared_ptr<boost::asio::io_context>& context, bool lwip, bool vnet, bool mta, bool xtcp) noexcept
             : disposed_(false)
             , lwip_(lwip)
+            , xtcp_(xtcp)
             , vnet_(vnet)
             , mta_(mta)
             , context_(context)
@@ -151,7 +152,20 @@ namespace ppp
          */
         bool VEthernet::OnUpdate(uint64_t now) noexcept
         {
-            return !disposed_.load(std::memory_order_acquire);
+            if (disposed_.load(std::memory_order_acquire))
+            {
+                return false;
+            }
+
+            // Drive the XTCP user-space stack: dispatch MIMT completions and
+            // sweep per-connection timers (delayed-ACK, RTO/TLP, keepalive).
+            std::shared_ptr<XtcpNetstackAdapter> xtcp = std::atomic_load(&xtcp_adapter_);
+            if (NULLPTR != xtcp)
+            {
+                xtcp->Pump();
+            }
+
+            return true;
         }
 
         /**
@@ -440,6 +454,36 @@ namespace ppp
                 std::shared_ptr<ITap>& netstack_tap = constantof(netstack->Tap);
                 netstack_tap = tap;
 
+                if (xtcp_)
+                {
+                    // XTCP MIMT path: create the adapter, bind the TAP as the
+                    // NDI packet backend, and route accepted flows through the
+                    // virtual stack's client factory (same routing/connect
+                    // logic the lwIP accept path uses).
+                    ppp::threading::Executors::StrandPtr xtcp_strand =
+                        ppp::make_shared_object<ppp::threading::Executors::Strand>(context_->get_executor());
+                    std::shared_ptr<XtcpNetstackAdapter> xtcp_adapter =
+                        ppp::make_shared_object<XtcpNetstackAdapter>(context_, xtcp_strand);
+                    if (NULLPTR != xtcp_adapter)
+                    {
+                        xtcp_adapter->SetClientFactory(
+                            [netstack](const boost::asio::ip::tcp::endpoint& localEP,
+                                       const boost::asio::ip::tcp::endpoint& remoteEP) noexcept
+                            {
+                                return NULLPTR != netstack
+                                    ? netstack->BeginAcceptClient(localEP, remoteEP)
+                                    : std::shared_ptr<VNetstack::TapTcpClient>(NULLPTR);
+                            });
+
+                        std::shared_ptr<xtcp::ndi::Backend> ndi_backend =
+                            ppp::make_shared_object<TapNdiBackend>(tap);
+                        if (NULLPTR != ndi_backend && xtcp_adapter->Open(ndi_backend))
+                        {
+                            std::atomic_store(&xtcp_adapter_, xtcp_adapter);
+                        }
+                    }
+                }
+
                 if (!netstack->Open(lwip_, 0))
                 {
                     netstack->Release();
@@ -451,10 +495,6 @@ namespace ppp
             auto TAP_PACKET_INPUT_EVENT = 
                 [self, this](ppp::tap::ITap*, ppp::tap::ITap::PacketInputEventArgs& e) noexcept
                 {
-                    if (!ITap::ShouldDeliverWholeTcpV4Gso(e, CanConsumeTcpV4Gso()))
-                    {
-                        return false;
-                    }
                     int packet_length = e.PacketLength;
                     struct ip_hdr* iphdr = ip_hdr::Parse(e.Packet, packet_length);
                     if (NULLPTR == iphdr) // INVALID IS (Destination & Mask) != Destination;
@@ -462,7 +502,7 @@ namespace ppp
                         return OnPacketInput((Byte*)e.Packet, packet_length, vnet_);
                     }
 #if !defined(_WIN32)
-                    elif(mta_)
+                    elif(mta_ && !xtcp_)
                     {
                         /** @brief Use SSMT sharding when enabled for TCP inputs. */
                         if (ssmt_ > 0 && VETHERNET_INTERNAL::PacketSsmtInput(this, iphdr, packet_length))
@@ -479,73 +519,22 @@ namespace ppp
                         /**
                          * @brief Post packet processing to netstack executor in MTA mode.
                          */
-                        const bool handoff_telemetry_enabled = ppp::diagnostics::datapath_perf::IsEnabled();
-                        std::chrono::steady_clock::time_point t0;
-                        if (handoff_telemetry_enabled)
-                        {
-                            t0 = std::chrono::steady_clock::now();
-                        }
                         pbuf* packet = lwip::netstack_pbuf_copy(iphdr, packet_length);
                         if (NULLPTR == packet)
                         {
                             return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                         }
 
-                        std::shared_ptr<ppp::diagnostics::datapath_perf::MtaHandoffObservation> handoff_observation;
-                        if (handoff_telemetry_enabled)
-                        {
-                            std::shared_ptr<boost::asio::io_context> producer_context = Executors::GetCurrent(false);
-                            handoff_observation = std::make_shared<ppp::diagnostics::datapath_perf::MtaHandoffObservation>();
-                            handoff_observation->enabled = true;
-                            handoff_observation->producer_thread_id = GetCurrentThreadId();
-                            handoff_observation->producer_context_token = reinterpret_cast<uintptr_t>(producer_context.get());
-                            handoff_observation->target_context_token = reinterpret_cast<uintptr_t>(executor.get());
-                            handoff_observation->bytes = packet_length < 0 ? 0 : packet_length;
-                            handoff_observation->t0 = t0;
-                            handoff_observation->timeline = std::make_shared<ppp::diagnostics::datapath_perf::MtaHandoffTimeline>();
-                            ppp::diagnostics::datapath_perf::RecordVnetMtaPacketPosted();
-                            handoff_observation->t1 = std::chrono::steady_clock::now();
-                        }
                         auto self = shared_from_this();
                         boost::asio::post(*executor, 
-                            [self, this, packet, packet_length, handoff_observation]() noexcept
+                            [self, this, packet, packet_length]() noexcept
                             {
-                                if (handoff_observation)
+                                int status = VETHERNET_INTERNAL::PacketInput(this, packet, packet_length, false);
+                                if (status < 1)
                                 {
-                                    const std::shared_ptr<ppp::diagnostics::datapath_perf::MtaHandoffTimeline>& timeline = handoff_observation->timeline;
-                                    // The target can start before asio::post returns. Publish T2 with release/acquire
-                                    // instead of serializing every laboratory observation through a mutex.
-                                    while (!timeline->post_returned.load(std::memory_order_acquire)) {}
-                                    const std::chrono::steady_clock::time_point t2 = timeline->t2;
-                                    const std::chrono::steady_clock::time_point t3 = std::chrono::steady_clock::now();
-                                    int status = VETHERNET_INTERNAL::PacketInput(this, packet, packet_length, false);
-                                    if (status < 1)
-                                    {
-                                        lwip::netstack_pbuf_free(packet);
-                                    }
-                                    const std::chrono::steady_clock::time_point t4 = std::chrono::steady_clock::now();
-                                    ppp::diagnostics::datapath_perf::RecordVnetMtaHandoffCompleted(
-                                        *handoff_observation, GetCurrentThreadId(), {
-                                            ppp::diagnostics::datapath_perf::ElapsedMicroseconds(handoff_observation->t0, handoff_observation->t1),
-                                            ppp::diagnostics::datapath_perf::ElapsedMicroseconds(handoff_observation->t1, t2),
-                                            ppp::diagnostics::datapath_perf::ElapsedMicroseconds(t2, t3),
-                                            ppp::diagnostics::datapath_perf::ElapsedMicroseconds(t3, t4)
-                                        });
-                                }
-                                else
-                                {
-                                    int status = VETHERNET_INTERNAL::PacketInput(this, packet, packet_length, false);
-                                    if (status < 1)
-                                    {
-                                        lwip::netstack_pbuf_free(packet);
-                                    }
+                                    lwip::netstack_pbuf_free(packet);
                                 }
                             });
-                        if (handoff_observation)
-                        {
-                            handoff_observation->timeline->t2 = std::chrono::steady_clock::now();
-                            handoff_observation->timeline->post_returned.store(true, std::memory_order_release);
-                        }
                         return true;
                     }
 #endif
@@ -676,6 +665,23 @@ namespace ppp
                             return 1;
                         }
                     }
+                    elif (xtcp_)
+                    {
+                        // XTCP MIMT path: feed the raw IP packet into the
+                        // user-space stack; flows are delivered via StartMimt.
+                        std::shared_ptr<XtcpNetstackAdapter> xtcp = std::atomic_load(&xtcp_adapter_);
+                        if (NULLPTR != xtcp)
+                        {
+                            xtcp::buf::BufRef buf = xtcp::buf::BufRef::Acquire(packet_length);
+                            if (!buf.IsEmpty())
+                            {
+                                std::memcpy(buf.Data(), iphdr, packet_length);
+                                buf.SetLen(packet_length);
+                                xtcp->OnPacket(std::move(buf));
+                            }
+                        }
+                        return 0;
+                    }
                     else
                     {
                         struct tcp_hdr* tcphdr = tcp_hdr::Parse(iphdr, (Byte*)iphdr + iphdr_hlen, tcp_len); 
@@ -717,9 +723,9 @@ namespace ppp
             using Awaitable = ppp::threading::Executors::Awaitable;
 
             /**
-             * @brief Skip worker startup when lwIP is enabled or MTA is disabled.
+             * @brief Skip worker startup when lwIP/XTCP is enabled or MTA is disabled.
              */
-            if (lwip_ || !mta_)
+            if (lwip_ || xtcp_ || !mta_)
             {
                 return true;
             }
@@ -935,12 +941,6 @@ namespace ppp
         }
 #endif
 
-        /** @brief Rejects whole TCPv4 GSO frames unless a derived endpoint explicitly supports them. */
-        bool VEthernet::CanConsumeTcpV4Gso() noexcept
-        {
-            return false;
-        }
-
         /**
          * @brief Creates default IP fragment helper.
          */
@@ -1077,28 +1077,6 @@ namespace ppp
             return tap->Output(packet, packet_length);
         }
 
-        bool VEthernet::SupportsTxGso() noexcept
-        {
-            if (disposed_.load(std::memory_order_acquire))
-            {
-                return false;
-            }
-            std::shared_ptr<ITap> tap = GetTap();
-            return tap && tap->SupportsTxGso();
-        }
-
-        bool VEthernet::OutputGso(const std::shared_ptr<Byte>& packet, int packet_length,
-            ppp::tap::TxGsoMetadata metadata) noexcept
-        {
-            if (NULLPTR == packet || packet_length < 1 ||
-                disposed_.load(std::memory_order_acquire))
-            {
-                return false;
-            }
-            std::shared_ptr<ITap> tap = GetTap();
-            return tap && tap->OutputGso(packet, packet_length, metadata);
-        }
-
         /**
          * @brief Outputs shared packet buffer through TAP.
          */
@@ -1121,6 +1099,22 @@ namespace ppp
             }
 
             return tap->Output(packet, packet_length);
+        }
+
+        /**
+         * @brief GSO variant of Output; falls back to standard path in base class.
+         */
+        bool VEthernet::OutputGso(const std::shared_ptr<Byte>& packet, int packet_length, ppp::tap::TxGsoMetadata) noexcept
+        {
+            return Output(packet, packet_length);
+        }
+
+        /**
+         * @brief Whether this endpoint can consume native TCPv4 GSO segments.
+         */
+        bool VEthernet::CanConsumeTcpV4Gso() noexcept
+        {
+            return false;
         }
     }
 }

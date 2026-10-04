@@ -58,7 +58,27 @@ enum class BindingPurpose : std::uint8_t {
     SessionResumeRetainedRootV1 = 1,
     SessionResumeCandidateV1 = 2,
     P2PWrapV1 = 3,
+    RecordProtector = 4,
 };
+
+/** Exporter label for the v2.2.0 record protector root key derivation. */
+inline constexpr char RecordProtectorExporterLabel[] = "openppp2/v2.2/record/root";
+
+/**
+ * @brief Record protector binding context encoding.
+ *
+ * The context is explicit, variable-length, and strictly length-encoded:
+ *   version/reserved(1B) || handshake_ivv(16B) || carrier_kind(1B) ||
+ *   key_id_len(1B) || key_id_bytes
+ *
+ * The key identifier is the canonical transport-auth string (1..63 bytes).
+ * No role byte is ever mixed into this peer-symmetric context.
+ */
+inline constexpr std::uint8_t RecordProtectorBindingContextVersion = 1;
+inline constexpr std::size_t RecordProtectorBindingContextFixedLength = 19;   // 1 + 16 + 1 + 1
+inline constexpr std::size_t RecordProtectorBindingMaximumKeyIdLength = 63;
+inline constexpr std::size_t RecordProtectorBindingMaximumContextLength =
+    RecordProtectorBindingContextFixedLength + RecordProtectorBindingMaximumKeyIdLength;  // 82
 
 /** Builds the version-1 canonical binary prologue. Key identifiers are 1..64 bytes. */
 bool BuildCanonicalPrologue(Carrier carrier,
@@ -66,6 +86,38 @@ bool BuildCanonicalPrologue(Carrier carrier,
                             const std::uint8_t* key_id,
                             std::size_t key_id_size,
                             std::vector<std::uint8_t>& output) noexcept;
+
+/**
+ * @brief Strictly parses a RecordProtector binding context.
+ *
+ * Layout: version(1B) || handshake_ivv(16B) || carrier_kind(1B) ||
+ *         key_id_len(1B) || key_id_bytes (canonical, 1..63 bytes).
+ * The total length must equal RecordProtectorBindingContextFixedLength plus
+ * the declared key id length; no role byte is ever accepted.
+ *
+ * @param context         Binding context bytes.
+ * @param context_length  Context length in bytes.
+ * @return True when the context is structurally valid and the key id is canonical.
+ */
+bool IsValidRecordProtectorBindingContext(const std::uint8_t* context,
+                                          std::size_t context_length) noexcept;
+
+/**
+ * @brief Builds a RecordProtector binding context from explicit fields.
+ * @param ivv        16-byte handshake random material.
+ * @param ivv_size   Must equal NoiseSessionIdSize (16).
+ * @param carrier_kind 0 = TCP, 1 = WebSocket.
+ * @param key_id     Canonical transport-auth key identifier bytes.
+ * @param key_id_size 1..RecordProtectorBindingMaximumKeyIdLength (63).
+ * @param output     Receives version || ivv || carrier_kind || key_id_len || key_id.
+ * @return True when the context was built; output is cleared on failure.
+ */
+bool BuildRecordProtectorBindingContext(const std::uint8_t* ivv,
+                                        std::size_t ivv_size,
+                                        std::uint8_t carrier_kind,
+                                        const std::uint8_t* key_id,
+                                        std::size_t key_id_size,
+                                        std::vector<std::uint8_t>& output) noexcept;
 
 /** Completed handshake material. The handshake hash is public transcript state. */
 class NoisePskHandshakeResult final {
@@ -80,6 +132,9 @@ public:
 
     bool IsValid() const noexcept;
     bool GetHandshakeHash(Bytes32& output) const noexcept;
+    /** Returns the negotiated canonical transport-auth key id bytes, if set. */
+    bool GetTransportAuthKeyId(const std::uint8_t*& key_id,
+                               std::size_t& key_id_length) const noexcept;
     bool GenerateClientSuccessConfirmationProof(ClientSuccessProof& output) const noexcept;
     bool VerifyClientSuccessConfirmationProof(const ClientSuccessProof& proof) const noexcept;
     bool DeriveBinding(BindingPurpose purpose,
@@ -94,6 +149,8 @@ private:
 
     Secret32 exporter_;
     Bytes32 handshake_hash_{};
+    std::array<std::uint8_t, NoiseKeyIdMaxSize> key_id_{};
+    std::size_t key_id_size_ = 0;
     bool valid_ = false;
 };
 
@@ -121,7 +178,15 @@ public:
     bool WriteMessage2(std::vector<std::uint8_t>& output) noexcept;
     bool ReadMessage2(const std::uint8_t* message, std::size_t message_size) noexcept;
 
-    bool TakeResult(NoisePskHandshakeResult& output) noexcept;
+    /**
+     * @brief Moves the completed handshake material into the result.
+     * @param transport_auth_key_id  Negotiated canonical key id (may be null in
+     *                               unit tests that never bind record keys).
+     * @param transport_auth_key_id_length 1..63 when set (canonical encoding).
+     */
+    bool TakeResult(NoisePskHandshakeResult& output,
+                    const std::uint8_t* transport_auth_key_id = nullptr,
+                    std::size_t transport_auth_key_id_length = 0) noexcept;
     void Clear() noexcept;
 
 private:

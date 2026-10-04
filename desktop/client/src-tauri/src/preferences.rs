@@ -65,10 +65,17 @@ pub fn save_preferences(path: &Path, preferences: &Preferences) -> Result<(), Pr
     }
     let temporary = path.with_extension("tmp");
     fs::write(&temporary, serde_json::to_vec_pretty(preferences)?)?;
-    if path.exists() {
-        fs::remove_file(path)?;
+
+    #[cfg(unix)]
+    {
+        fs::rename(&temporary, path)?;
     }
-    fs::rename(temporary, path)?;
+
+    #[cfg(windows)]
+    {
+        crate::replace_file_windows(&temporary, path)?;
+    }
+
     Ok(())
 }
 

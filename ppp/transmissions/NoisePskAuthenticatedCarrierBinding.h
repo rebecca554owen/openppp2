@@ -35,6 +35,15 @@ public:
     bool IsAvailable(
         const ContextPtr& context,
         const StrandPtr& strand) const noexcept;
+    /**
+     * @brief Returns the negotiated canonical transport-auth key id.
+     * @param key_id         Receives the key id bytes owned by the binding.
+     * @param key_id_length  Receives the key id length (1..63 when set).
+     * @return True when a canonical key id was negotiated; false otherwise
+     *         (key_id is set to null and key_id_length to 0).
+     */
+    bool GetTransportAuthKeyId(const std::uint8_t*& key_id,
+                               std::size_t& key_id_length) const noexcept;
     bool Export(
         const ContextPtr& context,
         const StrandPtr& strand,

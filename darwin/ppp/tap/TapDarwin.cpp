@@ -595,6 +595,20 @@ namespace ppp
 
         }
 
+        TapDarwin::~TapDarwin() noexcept
+        {
+            // Close the underlying utun file descriptor so macOS
+            // destroys the utun interface when the last reference
+            // is released.  Without this, the utun interface leaks
+            // across server restarts and eventually exhausts the
+            // low-numbered utun slots (utun0-3).
+            int tun = reinterpret_cast<intptr_t>(GetHandle());
+            if (tun != -1)
+            {
+                utun_close(tun);
+            }
+        }
+
         std::shared_ptr<TapDarwin> TapDarwin::Create(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& dev, uint32_t ip, uint32_t gw, uint32_t mask, bool promisc, bool hosted_network, const ppp::vector<uint32_t>& dns_addresses) noexcept
         {
             if (NULLPTR == context)

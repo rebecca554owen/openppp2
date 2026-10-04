@@ -62,6 +62,7 @@
 #include <ppp/threading/Timer.h>
 #include <ppp/auxiliary/UriAuxiliary.h>
 #include <ppp/transmissions/ITcpipTransmission.h>
+#include <ppp/transmissions/ITransmissionStatistics.h>
 #include <ppp/app/client/ExchangerStaticEchoChannel.h>
 #include <ppp/app/client/ClientKeepAlivePolicy.h>
 #include <ppp/app/client/ClientReconnectionPolicy.h>
@@ -615,7 +616,7 @@ namespace ppp {
                  * @param y                Coroutine yield context.
                  * @return true if handled; false to close the session.
                  */
-                virtual bool                                                            OnMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, Byte ordering_caps, YieldContext& y) noexcept override;
+                virtual bool                                                            OnMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, Byte ordering_caps, uint32_t session_epoch, YieldContext& y) noexcept override;
 
             protected:
                 /**

@@ -153,3 +153,5 @@ work/
 # Local crash-analysis report and agent workflow state (not for version control)
 docs/CRASH_ANALYSIS_CN.md
 .opencode/
+.hermes/
+docs/design/XTCP_INTEGRATION_PLAN_CN.md

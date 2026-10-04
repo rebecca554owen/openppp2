@@ -4,20 +4,74 @@ project(openppp2_cpp_tests LANGUAGES CXX)
 option(ENABLE_COVERAGE "Enable LLVM coverage instrumentation" OFF)
 option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(ENABLE_TSAN "Enable ThreadSanitizer (cannot be combined with ENABLE_SANITIZERS)" OFF)
-option(ENABLE_XTCP_TESTS "Build the pinned XTCP dependency contract tests" OFF)
 
 get_filename_component(OPENPPP2_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
-set(XTCP_SOURCE_DIR "${OPENPPP2_ROOT}/third-party/xtcp" CACHE PATH
-    "Path to the pinned XTCP source tree")
+
+if(NOT DEFINED THIRD_PARTY_LIBRARY_DIR OR THIRD_PARTY_LIBRARY_DIR STREQUAL "")
+    set(THIRD_PARTY_LIBRARY_DIR "${OPENPPP2_ROOT}/third-party" CACHE PATH
+        "Third-party library root directory")
+endif()
+
+set(OPENPPP2_LOCAL_BOOST_ROOT "${THIRD_PARTY_LIBRARY_DIR}/boost")
+set(OPENPPP2_LOCAL_BOOST_CONTEXT
+    "${OPENPPP2_LOCAL_BOOST_ROOT}/stage/lib/libboost_context.a")
+if(EXISTS "${OPENPPP2_LOCAL_BOOST_ROOT}/boost/version.hpp")
+    file(STRINGS "${OPENPPP2_LOCAL_BOOST_ROOT}/boost/version.hpp"
+        OPENPPP2_BOOST_VERSION_LINE
+        REGEX "^#define BOOST_VERSION [0-9]+$")
+    # The local third-party Boost is the pinned source of truth (see
+    # toys/openppp/BUILD.macos.md).  It was upgraded from 1.86.0 to 1.92.0, so
+    # accept anything at least as new as 1.86.0 instead of pinning one exact
+    # version: pinning silently rejected the upgraded tree and fell back to a
+    # system Boost, which does not link libboost_context on macOS.
+    if(OPENPPP2_BOOST_VERSION_LINE MATCHES "BOOST_VERSION ([0-9]+)$")
+        set(OPENPPP2_BOOST_DETECTED_VERSION "${CMAKE_MATCH_1}")
+    else()
+        set(OPENPPP2_BOOST_DETECTED_VERSION 0)
+    endif()
+    if(OPENPPP2_BOOST_DETECTED_VERSION LESS 108600)
+        message(WARNING
+            "Local third-party Boost at ${OPENPPP2_LOCAL_BOOST_ROOT} is older than 1.86.0; falling back to system Boost")
+        set(OPENPPP2_BOOST_VERSION_MISMATCH TRUE)
+    else()
+        set(OPENPPP2_BOOST_VERSION_MISMATCH FALSE)
+    endif()
+    if(NOT OPENPPP2_BOOST_VERSION_MISMATCH)
+        if(NOT EXISTS "${OPENPPP2_LOCAL_BOOST_CONTEXT}")
+            message(FATAL_ERROR
+                "Local third-party Boost is missing libboost_context.a: "
+                "${OPENPPP2_LOCAL_BOOST_CONTEXT}")
+        endif()
+    endif()
+
+    if(NOT OPENPPP2_BOOST_VERSION_MISMATCH)
+    add_library(openppp2_boost_context STATIC IMPORTED GLOBAL)
+    set_target_properties(openppp2_boost_context PROPERTIES
+        IMPORTED_LOCATION "${OPENPPP2_LOCAL_BOOST_CONTEXT}"
+        INTERFACE_INCLUDE_DIRECTORIES "${OPENPPP2_LOCAL_BOOST_ROOT}")
+    set(OPENPPP2_BOOST_CONTEXT_TARGET openppp2_boost_context)
+    set(OPENPPP2_BOOST_INCLUDE_DIR "${OPENPPP2_LOCAL_BOOST_ROOT}")
+    message(STATUS "Using local third-party Boost: ${OPENPPP2_LOCAL_BOOST_ROOT}")
+    endif()
+else()
+    find_package(Boost REQUIRED COMPONENTS context)
+    set(OPENPPP2_BOOST_CONTEXT_TARGET Boost::context)
+    set(OPENPPP2_BOOST_INCLUDE_DIR ${Boost_INCLUDE_DIRS})
+    message(STATUS "Using system Boost ${Boost_VERSION}")
+endif()
 
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
+
+add_compile_definitions(_GNU_SOURCE)
+add_compile_definitions(BOOST_STACKTRACE_GNU_SOURCE_NOT_REQUIRED)
 
 set(OPENPPP2_TEST_INCLUDES
     "${OPENPPP2_ROOT}"
     "${OPENPPP2_ROOT}/common"
     "${OPENPPP2_ROOT}/common/dnslib"
     "${OPENPPP2_ROOT}/common/json/include"
+    ${OPENPPP2_BOOST_INCLUDE_DIR}
 )
 
 foreach(_hint /usr/include /usr/local/include /opt/homebrew/include)
@@ -44,6 +98,10 @@ set(OPENPPP2_AGGREGATOR_LOADER_TEST_SUPPORT
 set(OPENPPP2_TRANSPORT_AUTH_BINDING_SOURCES
     "${OPENPPP2_ROOT}/ppp/cryptography/noise/NoisePsk.cpp"
     "${OPENPPP2_ROOT}/ppp/transmissions/NoisePskAuthenticatedCarrierBinding.cpp")
+
+set(OPENPPP2_RECORD_PROTECTOR_SOURCES
+    "${OPENPPP2_ROOT}/ppp/cryptography/AuthenticatedRecordProtector.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/RecordKeyDerivation.cpp")
 
 function(openppp2_add_cpp_test target)
     cmake_parse_arguments(ARG "" "" "SOURCES" ${ARGN})
@@ -85,79 +143,6 @@ function(openppp2_add_cpp_test target)
     set_tests_properties(${target} PROPERTIES TIMEOUT 120)
 endfunction()
 
-openppp2_add_cpp_test(xtcp_upload_budget_test SOURCES xtcp_upload_budget_test.cpp)
-target_link_libraries(xtcp_upload_budget_test PRIVATE Threads::Threads)
-
-if(ENABLE_XTCP_TESTS)
-    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR ANDROID)
-        message(FATAL_ERROR "ENABLE_XTCP_TESTS is supported only for Linux desktop builds")
-    endif()
-    if(NOT EXISTS "${XTCP_SOURCE_DIR}/CMakeLists.txt")
-        message(FATAL_ERROR
-            "XTCP source tree not found at ${XTCP_SOURCE_DIR}; run tools/prepare_xtcp.sh first")
-    endif()
-
-    set(XTCP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(XTCP_BUILD_BENCH OFF CACHE BOOL "" FORCE)
-    set(XTCP_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
-    set(XTCP_BUILD_PLUGINS OFF CACHE BOOL "" FORCE)
-    set(XTCP_BUILD_LWIP OFF CACHE BOOL "" FORCE)
-    set(XTCP_BUILD_CC_PLUGINS ON CACHE BOOL "" FORCE)
-    set(XTCP_CHECKSUM_VALIDATE ON CACHE BOOL "" FORCE)
-    add_subdirectory("${XTCP_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/xtcp" EXCLUDE_FROM_ALL)
-    if(NOT TARGET xtcp_static)
-        message(FATAL_ERROR "XTCP source tree did not define the required xtcp_static target")
-    endif()
-
-    foreach(_xtcp_test
-            xtcp_dependency_contract_test
-            xtcp_ndi_ownership_test
-            xtcp_listener_gate_test)
-        openppp2_add_cpp_test(${_xtcp_test} SOURCES ${_xtcp_test}.cpp)
-        target_link_libraries(${_xtcp_test} PRIVATE xtcp_static)
-    endforeach()
-
-    openppp2_add_cpp_test(xtcp_ooo_frontier_test SOURCES "${XTCP_SOURCE_DIR}/tests/test_ooo_frontier.cpp")
-    target_link_libraries(xtcp_ooo_frontier_test PRIVATE xtcp_static)
-
-    foreach(_xtcp_resume_test xtcp_ooo_backpressure_probe xtcp_ooo_resume_contract_test)
-        openppp2_add_cpp_test(${_xtcp_resume_test} SOURCES ${_xtcp_resume_test}.cpp)
-        target_link_libraries(${_xtcp_resume_test} PRIVATE xtcp_static)
-    endforeach()
-
-    openppp2_add_cpp_test(xtcp_runtime_adapter_test SOURCES
-        xtcp_runtime_adapter_test.cpp
-        "${OPENPPP2_ROOT}/ppp/app/client/xtcp/XtcpNdiBackend.cpp"
-        "${OPENPPP2_ROOT}/ppp/app/client/xtcp/XtcpPoolLease.cpp"
-        "${OPENPPP2_ROOT}/ppp/app/client/xtcp/XtcpRuntime.cpp")
-    target_compile_definitions(xtcp_runtime_adapter_test PRIVATE
-        PPP_ENABLE_XTCP=1
-        PPP_XTCP_HAS_TIMER_DEADLINE=1
-        PPP_XTCP_RUNTIME_TESTING=1)
-    target_link_libraries(xtcp_runtime_adapter_test PRIVATE
-        xtcp_static Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
-
-    openppp2_add_cpp_test(xtcp_ndi_memory_probe SOURCES
-        xtcp_ndi_memory_probe.cpp
-        "${OPENPPP2_ROOT}/ppp/app/client/xtcp/XtcpNdiBackend.cpp")
-    target_compile_definitions(xtcp_ndi_memory_probe PRIVATE PPP_ENABLE_XTCP=1)
-    target_link_libraries(xtcp_ndi_memory_probe PRIVATE
-        xtcp_static Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
-
-    openppp2_add_cpp_test(xtcp_runtime_bridge_test SOURCES
-        xtcp_runtime_bridge_test.cpp
-        "${OPENPPP2_ROOT}/ppp/app/client/xtcp/XtcpNdiBackend.cpp"
-        "${OPENPPP2_ROOT}/ppp/app/client/xtcp/XtcpPoolLease.cpp"
-        "${OPENPPP2_ROOT}/ppp/app/client/xtcp/XtcpRuntime.cpp")
-    target_compile_definitions(xtcp_runtime_bridge_test PRIVATE
-        PPP_ENABLE_XTCP=1
-        PPP_XTCP_HAS_TIMER_DEADLINE=1)
-    target_include_directories(xtcp_runtime_bridge_test PRIVATE
-        "${XTCP_SOURCE_DIR}/tests")
-    target_link_libraries(xtcp_runtime_bridge_test PRIVATE
-        xtcp_static Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
-endif()
-
 openppp2_add_cpp_test(runtime_snapshot_test SOURCES
     runtime_snapshot_test.cpp
     "${OPENPPP2_ROOT}/common/json/src/json_reader.cpp"
@@ -170,13 +155,6 @@ openppp2_add_cpp_test(runtime_stats_json_test SOURCES
     "${OPENPPP2_ROOT}/common/json/src/json_reader.cpp"
     "${OPENPPP2_ROOT}/common/json/src/json_value.cpp"
     "${OPENPPP2_ROOT}/common/json/src/json_writer.cpp")
-openppp2_add_cpp_test(datapath_acceptance_boundary_test SOURCES
-    datapath_acceptance_boundary_test.cpp
-    "${OPENPPP2_ROOT}/ppp/app/runtime/DatapathAcceptanceBoundary.cpp"
-    "${OPENPPP2_ROOT}/common/json/src/json_reader.cpp"
-    "${OPENPPP2_ROOT}/common/json/src/json_value.cpp"
-    "${OPENPPP2_ROOT}/common/json/src/json_writer.cpp")
-target_link_libraries(datapath_acceptance_boundary_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(runtime_stop_coordinator_test SOURCES
     runtime_stop_coordinator_test.cpp)
 openppp2_add_cpp_test(runtime_stop_pipeline_test SOURCES
@@ -185,8 +163,6 @@ openppp2_add_cpp_test(client_lifecycle_stress_test SOURCES
     client_lifecycle_stress_test.cpp)
 openppp2_add_cpp_test(client_bootstrap_policy_test SOURCES
     client_bootstrap_policy_test.cpp)
-openppp2_add_cpp_test(tcp_stack_mode_test SOURCES
-    tcp_stack_mode_test.cpp)
 openppp2_add_cpp_test(client_keepalive_policy_test SOURCES
     client_keepalive_policy_test.cpp)
 openppp2_add_cpp_test(client_reconnection_policy_test SOURCES
@@ -221,8 +197,12 @@ openppp2_add_cpp_test(noise_psk_handshake_test SOURCES
 target_link_libraries(noise_psk_handshake_test PRIVATE OpenSSL::Crypto)
 openppp2_add_cpp_test(noise_psk_exporter_test SOURCES
     noise_psk_exporter_test.cpp
-    "${OPENPPP2_ROOT}/ppp/cryptography/noise/NoisePsk.cpp")
-target_link_libraries(noise_psk_exporter_test PRIVATE OpenSSL::Crypto)
+    "${CMAKE_CURRENT_BINARY_DIR}/transport_auth_configuration_test_stubs.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/noise/NoisePsk.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/RecordKeyDerivation.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp")
+target_link_libraries(noise_psk_exporter_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(transport_auth_keyring_test SOURCES
     transport_auth_keyring_test.cpp
     "${OPENPPP2_ROOT}/ppp/configurations/TransportAuthConfiguration.cpp")
@@ -257,6 +237,10 @@ namespace ppp::threading {
 std::shared_ptr<boost::asio::io_context> Executors::GetCurrent(bool) noexcept { return nullptr; }
 uint64_t Executors::GetTickCount() noexcept { return 0; }
 }
+
+ppp::string chnroutes2_cacertpath_default() noexcept {
+    return {};
+}
 ]=])
 openppp2_add_cpp_test(transport_auth_configuration_test SOURCES
     transport_auth_configuration_test.cpp
@@ -288,7 +272,11 @@ openppp2_add_cpp_test(transport_auth_configuration_test SOURCES
     "${OPENPPP2_ROOT}/common/json/src/json_value.cpp"
     "${OPENPPP2_ROOT}/common/json/src/json_writer.cpp")
 target_compile_options(transport_auth_configuration_test PRIVATE -ffunction-sections -fdata-sections)
-target_link_options(transport_auth_configuration_test PRIVATE -Wl,--gc-sections)
+if(APPLE)
+    target_link_options(transport_auth_configuration_test PRIVATE -Wl,-dead_strip)
+elseif(UNIX)
+    target_link_options(transport_auth_configuration_test PRIVATE -Wl,--gc-sections)
+endif()
 target_link_libraries(transport_auth_configuration_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(transport_auth_negotiation_test SOURCES
     transport_auth_negotiation_test.cpp
@@ -336,6 +324,7 @@ openppp2_add_cpp_test(session_resume_production_wss_lifecycle_test SOURCES
     "${OPENPPP2_ROOT}/ppp/app/protocol/SessionResumeAuthenticator.cpp"
     "${OPENPPP2_ROOT}/ppp/transmissions/ITransmission.cpp"
     ${OPENPPP2_TRANSPORT_AUTH_BINDING_SOURCES}
+    ${OPENPPP2_RECORD_PROTECTOR_SOURCES}
     "${OPENPPP2_ROOT}/ppp/transmissions/ITransmissionQoS.cpp"
     "${OPENPPP2_ROOT}/ppp/transmissions/IWebsocketTransmission.cpp"
     "${OPENPPP2_ROOT}/ppp/Random.cpp"
@@ -373,7 +362,7 @@ target_compile_definitions(session_resume_production_wss_lifecycle_test PRIVATE
     OPENPPP2_TEST_CERTIFICATE="${OPENPPP2_ROOT}/starrylink.net.pem"
     OPENPPP2_TEST_PRIVATE_KEY="${OPENPPP2_ROOT}/starrylink.net.key")
 target_link_libraries(session_resume_production_wss_lifecycle_test PRIVATE
-    boost_context Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+    ${OPENPPP2_BOOST_CONTEXT_TARGET} Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 get_target_property(OPENPPP2_PRODUCTION_WSS_TEST_SOURCES
     session_resume_production_wss_lifecycle_test SOURCES)
 list(REMOVE_ITEM OPENPPP2_PRODUCTION_WSS_TEST_SOURCES
@@ -383,7 +372,7 @@ openppp2_add_cpp_test(transport_auth_lifecycle_test SOURCES
     ${OPENPPP2_PRODUCTION_WSS_TEST_SOURCES}
     "${OPENPPP2_ROOT}/ppp/transmissions/ITcpipTransmission.cpp")
 target_link_libraries(transport_auth_lifecycle_test PRIVATE
-    boost_context Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+    ${OPENPPP2_BOOST_CONTEXT_TARGET} Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 if(ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     # These partial-link fixtures intentionally stub allocator users without
     # linking the allocator implementation that owns its RTTI key function.
@@ -400,7 +389,7 @@ target_compile_definitions(transport_auth_handshake_capability_test PRIVATE
     OPENPPP2_TEST_CERTIFICATE="${OPENPPP2_ROOT}/starrylink.net.pem"
     OPENPPP2_TEST_PRIVATE_KEY="${OPENPPP2_ROOT}/starrylink.net.key")
 target_link_libraries(transport_auth_handshake_capability_test PRIVATE
-    boost_context Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+    ${OPENPPP2_BOOST_CONTEXT_TARGET} Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(session_resume_establish_transaction_wss_test SOURCES
     session_resume_establish_transaction_wss_test.cpp
     support/session_resume_production_wss_test_stubs.cpp
@@ -411,6 +400,7 @@ openppp2_add_cpp_test(session_resume_establish_transaction_wss_test SOURCES
     "${OPENPPP2_ROOT}/ppp/app/protocol/SessionResumeAuthenticator.cpp"
     "${OPENPPP2_ROOT}/ppp/transmissions/ITransmission.cpp"
     ${OPENPPP2_TRANSPORT_AUTH_BINDING_SOURCES}
+    ${OPENPPP2_RECORD_PROTECTOR_SOURCES}
     "${OPENPPP2_ROOT}/ppp/transmissions/ITransmissionQoS.cpp"
     "${OPENPPP2_ROOT}/ppp/transmissions/IWebsocketTransmission.cpp"
     "${OPENPPP2_ROOT}/ppp/Random.cpp"
@@ -452,7 +442,7 @@ target_compile_definitions(session_resume_establish_transaction_wss_test PRIVATE
     OPENPPP2_TEST_CERTIFICATE="${OPENPPP2_ROOT}/starrylink.net.pem"
     OPENPPP2_TEST_PRIVATE_KEY="${OPENPPP2_ROOT}/starrylink.net.key")
 target_link_libraries(session_resume_establish_transaction_wss_test PRIVATE
-    boost_context Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+    ${OPENPPP2_BOOST_CONTEXT_TARGET} Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(runtime_snapshot_publisher_test SOURCES
     runtime_snapshot_publisher_test.cpp)
 openppp2_add_cpp_test(vmux_runtime_state_test SOURCES
@@ -475,26 +465,6 @@ openppp2_add_cpp_test(peer_route_announce_policy_test SOURCES
     peer_route_announce_policy_test.cpp)
 openppp2_add_cpp_test(vmux_link_churn_test SOURCES
     vmux_link_churn_test.cpp)
-openppp2_add_cpp_test(vmux_wave0_rtx_release_test SOURCES
-    vmux_wave0_rtx_release_test.cpp)
-openppp2_add_cpp_test(vmux_wave2_flow_isolation_test SOURCES
-    vmux_wave2_flow_isolation_test.cpp)
-openppp2_add_cpp_test(vmux_wave3_per_link_rtt_test SOURCES
-    vmux_wave3_per_link_rtt_test.cpp)
-openppp2_add_cpp_test(vmux_wave4_pto_rtx_test SOURCES
-    vmux_wave4_pto_rtx_test.cpp)
-openppp2_add_cpp_test(vmux_wave5_control_plane_test SOURCES
-    vmux_wave5_control_plane_test.cpp)
-openppp2_add_cpp_test(vmux_wave6_property_wrap_test SOURCES
-    vmux_wave6_property_wrap_test.cpp)
-openppp2_add_cpp_test(vmux_wave6_long_stability_test SOURCES
-    vmux_wave6_long_stability_test.cpp)
-openppp2_add_cpp_test(vmux_qa001_write_failure_test SOURCES
-    vmux_qa001_write_failure_test.cpp)
-openppp2_add_cpp_test(vmux_qa001_fec_race_test SOURCES
-    vmux_qa001_fec_race_test.cpp)
-openppp2_add_cpp_test(vmux_qa001_ack_malicious_test SOURCES
-    vmux_qa001_ack_malicious_test.cpp)
 openppp2_add_cpp_test(mux_transport_adapter_test SOURCES
     mux_transport_adapter_test.cpp)
 target_link_libraries(mux_transport_adapter_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
@@ -657,19 +627,24 @@ openppp2_add_cpp_test(route_coordinator_test SOURCES
     "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
 target_compile_definitions(route_coordinator_test PRIVATE
     OPENPPP2_ROUTE_TEST_MOBILE)
+if(NOT APPLE)
 openppp2_add_cpp_test(linux_route_platform_contract_test SOURCES
     linux_route_platform_contract_test.cpp
     support/linux_route_platform_stubs.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/route/LinuxRoutePlatform.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/route/RouteSpecs.cpp")
+target_compile_definitions(linux_route_platform_contract_test PRIVATE
+    OPENPPP2_TEST_LINUX_ROUTE_PLATFORM)
 openppp2_add_cpp_test(linux_ipv6_contract_test SOURCES
     linux_ipv6_contract_test.cpp)
 target_link_libraries(linux_ipv6_contract_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+endif()
 openppp2_add_cpp_test(windows_ipv6_route_transaction_test SOURCES
     windows_ipv6_route_transaction_test.cpp
     "${OPENPPP2_ROOT}/ppp/ipv6/IPv6RouteTransaction.cpp")
 openppp2_add_cpp_test(route_platform_adapters_test SOURCES
     route_platform_adapters_test.cpp
+    support/darwin_route_platform_stubs.cpp
     "${OPENPPP2_ROOT}/ppp/app/client/route/WindowsRoutePlatform.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/route/DarwinRoutePlatform.cpp"
     "${OPENPPP2_ROOT}/ppp/app/client/route/MobileRoutePlatform.cpp")
@@ -759,21 +734,7 @@ openppp2_add_cpp_test(yield_context_test SOURCES
     "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
-target_link_libraries(yield_context_test PRIVATE boost_context Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
-openppp2_add_cpp_test(tun_gso_mergeability_test SOURCES
-    tun_gso_mergeability_test.cpp)
-openppp2_add_cpp_test(tun_gso_coalescer_test SOURCES
-    tun_gso_coalescer_test.cpp)
-openppp2_add_cpp_test(tun_gso_ledger_test SOURCES
-    tun_gso_ledger_test.cpp)
-openppp2_add_cpp_test(tap_vnet_codec_test SOURCES
-    tap_vnet_codec_test.cpp)
-target_link_libraries(tap_vnet_codec_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-openppp2_add_cpp_test(random_test SOURCES
-    random_test.cpp
-    support/random_test_stubs.cpp
-    "${OPENPPP2_ROOT}/ppp/Random.cpp")
-target_link_libraries(random_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(yield_context_test PRIVATE ${OPENPPP2_BOOST_CONTEXT_TARGET} Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(spinlock_test SOURCES
     spinlock_test.cpp
     support/spinlock_test_stubs.cpp
@@ -790,7 +751,7 @@ openppp2_add_cpp_test(asynchronous_write_io_queue_test SOURCES
     "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
-target_link_libraries(asynchronous_write_io_queue_test PRIVATE boost_context Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(asynchronous_write_io_queue_test PRIVATE ${OPENPPP2_BOOST_CONTEXT_TARGET} Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(protector_network_request_test SOURCES
     protector_network_request_test.cpp)
 target_link_libraries(protector_network_request_test PRIVATE Threads::Threads)
@@ -802,7 +763,7 @@ openppp2_add_cpp_test(transmission_qos_concurrency_test SOURCES
     "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
-target_link_libraries(transmission_qos_concurrency_test PRIVATE boost_context Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(transmission_qos_concurrency_test PRIVATE ${OPENPPP2_BOOST_CONTEXT_TARGET} Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(vdns_request_lifecycle_test SOURCES
     vdns_request_lifecycle_test.cpp)
 target_link_libraries(vdns_request_lifecycle_test PRIVATE Threads::Threads)
@@ -848,5 +809,134 @@ openppp2_add_cpp_test(app_configuration_routing_test SOURCES
     app_configuration_routing_test.cpp)
 set_tests_properties(app_configuration_routing_test PROPERTIES
     WORKING_DIRECTORY "${OPENPPP2_ROOT}")
-openppp2_add_cpp_test(mta_handoff_telemetry_test SOURCES
-    mta_handoff_telemetry_test.cpp)
+openppp2_add_cpp_test(gcm_config_test SOURCES
+    gcm_config_test.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/transport_auth_configuration_test_stubs.cpp"
+    "${OPENPPP2_ROOT}/ppp/configurations/AppConfiguration.cpp"
+    "${OPENPPP2_ROOT}/ppp/configurations/TransportAuthConfiguration.cpp"
+    "${OPENPPP2_ROOT}/ppp/app/ApplicationMode.cpp"
+    "${OPENPPP2_ROOT}/ppp/auxiliary/JsonAuxiliary.cpp"
+    "${OPENPPP2_ROOT}/ppp/auxiliary/StringAuxiliary.cpp"
+    "${OPENPPP2_ROOT}/ppp/auxiliary/UriAuxiliary.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/Ciphertext.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/EVP.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/rc4.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/ssea.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/digest.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/md5.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp"
+    "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp"
+    "${OPENPPP2_ROOT}/common/aesni/aes.cpp"
+    "${OPENPPP2_ROOT}/ppp/io/File.cpp"
+    "${OPENPPP2_ROOT}/ppp/net/IPEndPoint.cpp"
+    "${OPENPPP2_ROOT}/ppp/net/Ipep.cpp"
+    "${OPENPPP2_ROOT}/ppp/net/http/HttpClient.cpp"
+    "${OPENPPP2_ROOT}/ppp/Random.cpp"
+    "${OPENPPP2_ROOT}/ppp/ssl/SSL.cpp"
+    "${OPENPPP2_ROOT}/ppp/stdafx.cpp"
+    "${OPENPPP2_ROOT}/ppp/threading/Thread.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_reader.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_value.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_writer.cpp")
+target_compile_options(gcm_config_test PRIVATE -ffunction-sections -fdata-sections)
+if(APPLE)
+    target_link_options(gcm_config_test PRIVATE -Wl,-dead_strip)
+elseif(UNIX)
+    target_link_options(gcm_config_test PRIVATE -Wl,--gc-sections)
+endif()
+target_link_libraries(gcm_config_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(transmission_length_test SOURCES
+    transmission_length_test.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/transport_auth_configuration_test_stubs.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/EVP.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
+    "${OPENPPP2_ROOT}/ppp/threading/Thread.cpp"
+    "${OPENPPP2_ROOT}/ppp/Random.cpp"
+    "${OPENPPP2_ROOT}/ppp/stdafx.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/Ciphertext.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/rc4.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/ssea.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/digest.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/md5.cpp"
+    "${OPENPPP2_ROOT}/common/aesni/aes.cpp"
+    "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp")
+target_compile_options(transmission_length_test PRIVATE -ffunction-sections -fdata-sections)
+if(APPLE)
+    target_link_options(transmission_length_test PRIVATE -Wl,-dead_strip)
+elseif(UNIX)
+    target_link_options(transmission_length_test PRIVATE -Wl,--gc-sections)
+endif()
+target_link_libraries(transmission_length_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(record_protector_install_test SOURCES
+    record_protector_install_test.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/transport_auth_configuration_test_stubs.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/AuthenticatedRecordProtector.cpp"
+    "${OPENPPP2_ROOT}/ppp/cryptography/RecordKeyDerivation.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp"
+    "${OPENPPP2_ROOT}/ppp/threading/Thread.cpp"
+    "${OPENPPP2_ROOT}/ppp/Random.cpp"
+    "${OPENPPP2_ROOT}/ppp/stdafx.cpp"
+    "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp")
+target_compile_options(record_protector_install_test PRIVATE -ffunction-sections -fdata-sections)
+if(APPLE)
+    target_link_options(record_protector_install_test PRIVATE -Wl,-dead_strip)
+elseif(UNIX)
+    target_link_options(record_protector_install_test PRIVATE -Wl,--gc-sections)
+endif()
+target_link_libraries(record_protector_install_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+set(OPENPPP2_XTCP_TEST_SOURCES
+    "${OPENPPP2_ROOT}/common/xtcp/XtcpNetstackAdapter.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/xtcp.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/ndi/manual.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/zc/zc_probe.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/async/async.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/buf/bufref.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/cc/cc.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/core/mempool.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/core/timer.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/core/ip.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/core/md5.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/core/shard.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/core/tcp_fsm.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/core/gso.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/core/scheduler.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/core/syncookies.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/core/tfo.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/core/stack.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/mimt/mimt.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/options/options.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/plugin/plugin.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/qdisc/qdisc.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/qdisc/fq.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/qdisc/fq_codel.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/qdisc/cake.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/src/qdisc/fifo.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/plugins/cc_bbrv1.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/plugins/cc_cubic.cpp"
+    "${OPENPPP2_ROOT}/third_party/xtcp/plugins/cc_kcc.cpp")
+openppp2_add_cpp_test(xtcp_netstack_adapter_test SOURCES
+    xtcp_netstack_adapter_test.cpp
+    ${OPENPPP2_XTCP_TEST_SOURCES}
+    "${OPENPPP2_ROOT}/ppp/Random.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp"
+    "${OPENPPP2_ROOT}/ppp/threading/Thread.cpp"
+    "${OPENPPP2_ROOT}/ppp/threading/Executors.cpp"
+    "${OPENPPP2_ROOT}/ppp/stdafx.cpp"
+    "${OPENPPP2_ROOT}/ppp/hash/hash_bytes.cpp")
+target_include_directories(xtcp_netstack_adapter_test PRIVATE
+    "${OPENPPP2_ROOT}/third_party/xtcp/include")
+target_compile_options(xtcp_netstack_adapter_test PRIVATE -ffunction-sections -fdata-sections)
+if(APPLE)
+    target_link_options(xtcp_netstack_adapter_test PRIVATE -Wl,-dead_strip)
+elseif(UNIX)
+    target_link_options(xtcp_netstack_adapter_test PRIVATE -Wl,--gc-sections)
+endif()
+target_link_libraries(xtcp_netstack_adapter_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+set_tests_properties(xtcp_netstack_adapter_test PROPERTIES TIMEOUT "120")

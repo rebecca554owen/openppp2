@@ -1,0 +1,12 @@
+.git
+.gitignore
+.github
+docs
+tools
+tests
+go
+android
+app
+build
+third-party
+*.md

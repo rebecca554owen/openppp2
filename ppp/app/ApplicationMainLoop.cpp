@@ -92,17 +92,14 @@ static const char* RuntimeStatsGradeName(
     }
 }
 
-static bool WriteRuntimeStatsLine(
+static void WriteRuntimeStatsLine(
     const ppp::string& path,
     const ppp::app::runtime::RuntimeStatsSample& sample) noexcept {
     if (path.empty()) {
-        return false;
+        return;
     }
 
     const std::string json = ppp::app::runtime::SerializeRuntimeStats(sample);
-    if (json.empty()) {
-        return false;
-    }
     std::FILE* output = stdout;
     bool close_output = false;
     if (path != "stdout") {
@@ -110,16 +107,14 @@ static bool WriteRuntimeStatsLine(
         close_output = true;
     }
     if (NULLPTR == output) {
-        return false;
+        return;
     }
-
-    const bool written = std::fwrite(json.data(), 1, json.size(), output) == json.size() &&
-        std::fputc('\n', output) != EOF && std::fflush(output) == 0 && !std::ferror(output);
-    if (!close_output) {
-        return written;
+    std::fwrite(json.data(), 1, json.size(), output);
+    std::fputc('\n', output);
+    std::fflush(output);
+    if (close_output) {
+        std::fclose(output);
     }
-    const int close_result = std::fclose(output);
-    return written && close_result == 0;
 }
 
 /**
@@ -645,8 +640,6 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
     uint64_t incoming_traffic = 0;
     uint64_t outgoing_traffic = 0;
 
-    acceptance_boundary_.RetryAcknowledgement();
-
     std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics_snapshot;
     std::shared_ptr<VEthernetNetworkSwitcher> client = client_;
     std::shared_ptr<VEthernetExchanger> exchanger = NULLPTR;
@@ -745,36 +738,7 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
         sample.link.error_count = link.error_count;
         sample.link.success_count = link.success_count;
         sample.runtime = runtime;
-        if (NULLPTR != client) {
-            const char* tcp_stack = ppp::app::GetTcpStackModeName(client->GetTcpStackMode());
-            sample.requested_tcp_stack = tcp_stack;
-            sample.active_tcp_stack = tcp_stack;
-
-            ppp::tap::TapRuntimeStats tap_stats;
-            if (client->GetTapRuntimeStats(tap_stats)) {
-                sample.has_tap_linux = true;
-                sample.tap_linux = tap_stats;
-            }
-
-            ppp::app::runtime::RuntimeXtcpStats xtcp_stats;
-            if (client->GetXtcpRuntimeStats(xtcp_stats)) {
-                sample.has_xtcp = true;
-                sample.xtcp = xtcp_stats;
-            }
-        }
-        ppp::app::runtime::DatapathAcceptanceBoundaryRecord boundary;
-        if (acceptance_boundary_.Poll(boundary)) {
-            boundary.monotonic_ms = sample.monotonic_ms;
-            boundary.xtcp_runtime_instance_id = sample.has_xtcp
-                ? sample.xtcp.runtime_instance_id : 0;
-            sample.has_acceptance_boundary = true;
-            sample.acceptance_boundary = boundary;
-        }
-        if (WriteRuntimeStatsLine(stats_json_path_, sample) && sample.has_acceptance_boundary) {
-            acceptance_boundary_.MarkStatsWritten(
-                sample.monotonic_ms, sample.acceptance_boundary.xtcp_runtime_instance_id);
-            acceptance_boundary_.RetryAcknowledgement();
-        }
+        WriteRuntimeStatsLine(stats_json_path_, sample);
     }
     const std::vector<std::string> runtime_lines =
         ppp::app::tui::BuildStatusLines(runtime);

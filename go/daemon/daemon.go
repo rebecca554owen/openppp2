@@ -122,13 +122,13 @@ func NewDaemon(cfg *Config) (*Daemon, error) {
 func (d *Daemon) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", d.handleIndex)
-	mux.HandleFunc("/api/status", d.handleStatus)
-	mux.HandleFunc("/api/config", d.handleConfig)
-	mux.HandleFunc("/api/start", d.handleStart)
-	mux.HandleFunc("/api/stop", d.handleStop)
-	mux.HandleFunc("/api/restart", d.handleRestart)
-	mux.HandleFunc("/api/logs", d.handleLogs)
-	mux.HandleFunc("/api/managed/", d.handleManagedProxy)
+	mux.HandleFunc("/api/status", d.requireAuth(d.handleStatus))
+	mux.HandleFunc("/api/config", d.requireAuth(d.handleConfig))
+	mux.HandleFunc("/api/start", d.requireAuth(d.handleStart))
+	mux.HandleFunc("/api/stop", d.requireAuth(d.handleStop))
+	mux.HandleFunc("/api/restart", d.requireAuth(d.handleRestart))
+	mux.HandleFunc("/api/logs", d.requireAuth(d.handleLogs))
+	mux.HandleFunc("/api/managed/", d.requireAuth(d.handleManagedProxy))
 	return mux
 }
 

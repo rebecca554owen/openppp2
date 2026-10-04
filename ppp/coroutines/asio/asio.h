@@ -205,10 +205,26 @@ namespace ppp {
                 y.Suspend();
                 return ok;
 #else
-                boost::system::error_code ec;
-                socket.open(protocol, ec);
+                /* Post the open onto the socket executor instead of calling it
+                   synchronously from the coroutine thread: the socket belongs to
+                   an io_context that other scheduler threads are running, and a
+                   direct open() registers into that reactor concurrently with
+                   its run loop (asio object accessed without executor
+                   serialization -> data race -> heap corruption on darwin arm64;
+                   TSan: conditionally_enabled_mutex / descriptor_state race). */
+                std::shared_ptr<boost::system::error_code> ec_ptr = make_shared_object<boost::system::error_code>();
+                if (NULLPTR == ec_ptr) {
+                    return false;
+                }
 
-                return ec == boost::system::errc::success;
+                boost::asio::post(socket.get_executor(),
+                    [&socket, &protocol, ec_ptr, &y]() noexcept {
+                        socket.open(protocol, *ec_ptr);
+                        y.R();
+                    });
+
+                y.Suspend();
+                return *ec_ptr == boost::system::errc::success;
 #endif
             }
             
