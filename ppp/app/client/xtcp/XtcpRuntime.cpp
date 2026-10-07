@@ -3601,12 +3601,12 @@ private:
             std::uint64_t blocked_bytes = 0;
             std::uint64_t max_current_us = 0;
             bool have_snapshot = false;
-            uint64_t attempt_min = 0, attempt_max = 0;
-            uint64_t pending_min = 0, pending_max = 0;
-            uint64_t inflight_min = 0, inflight_max = 0;
-            uint64_t sndbuf_min = 0, sndbuf_max = 0;
-            uint64_t sndwnd_min = 0, sndwnd_max = 0;
-            uint64_t cwnd_min = 0, cwnd_max = 0;
+            std::uint32_t attempt_min = 0, attempt_max = 0;
+            std::uint32_t pending_min = 0, pending_max = 0;
+            std::uint32_t inflight_min = 0, inflight_max = 0;
+            std::uint32_t sndbuf_min = 0, sndbuf_max = 0;
+            std::uint32_t sndwnd_min = 0, sndwnd_max = 0;
+            std::uint64_t cwnd_min = 0, cwnd_max = 0;
             UInt64 pacing_due_min = 0, pacing_due_max = 0;
             const std::uint64_t now_us = NowUs();
             for (const auto& entry : s0.flows) {
