@@ -3657,8 +3657,8 @@ private:
                 sndbuf_max = std::max(sndbuf_max, snapshot.snd_buf);
                 sndwnd_min = std::min(sndwnd_min, snapshot.snd_wnd);
                 sndwnd_max = std::max(sndwnd_max, snapshot.snd_wnd);
-                cwnd_min = std::min(cwnd_min, snapshot.cwnd_bytes);
-                cwnd_max = std::max(cwnd_max, snapshot.cwnd_bytes);
+                cwnd_min = std::min(cwnd_min, static_cast<std::uint64_t>(snapshot.cwnd_bytes));
+                cwnd_max = std::max(cwnd_max, static_cast<std::uint64_t>(snapshot.cwnd_bytes));
                 pacing_due_min = std::min(pacing_due_min, pacing_due);
                 pacing_due_max = std::max(pacing_due_max, pacing_due);
             }
