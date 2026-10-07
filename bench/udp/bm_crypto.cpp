@@ -84,6 +84,52 @@ static bool roundtrip_ok(const char* method) {
     return std::memcmp(dec.get(), data.data(), data.size()) == 0;
 }
 
+static bool simd_decrypt_matches_openssl() {
+    auto reference = make_benchmark_cipher("aes-256-cfb");
+    auto accelerated = make_benchmark_cipher("simd-aes-256-cfb");
+    if (!reference || !accelerated) {
+        return false;
+    }
+    const int lengths[] = {1, 15, 16, 17, 63, 64, 65, 1400, 4096};
+    for (int length : lengths) {
+        std::vector<Byte> data = make_payload(length);
+        int cipher_len = 0;
+        std::shared_ptr<Byte> encrypted = reference->Encrypt(nullptr, data.data(), length, cipher_len);
+        if (!encrypted || cipher_len != length) {
+            return false;
+        }
+        int plain_len = 0;
+        std::shared_ptr<Byte> decrypted = accelerated->Decrypt(nullptr, encrypted.get(), cipher_len, plain_len);
+        if (!decrypted || plain_len != length || std::memcmp(decrypted.get(), data.data(), (size_t)length) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool simd_decrypt_matches_scalar() {
+    const uint8_t key[32] = {
+        0x31, 0x72, 0x05, 0xa6, 0x48, 0x19, 0xc2, 0x53,
+        0x84, 0x25, 0xd6, 0x07, 0x98, 0x39, 0xea, 0x5b,
+        0xac, 0x4d, 0xfe, 0x6f, 0x10, 0xb1, 0x62, 0x03,
+        0x54, 0xf5, 0x86, 0x27, 0xc8, 0x69, 0x3a, 0xdb};
+    const uint8_t iv[16] = {0x8d, 0x3e, 0xaf, 0x50, 0xc1, 0x72, 0x13, 0xa4,
+        0x35, 0xd6, 0x47, 0xe8, 0x79, 0x1a, 0xbb, 0x5c};
+    const size_t lengths[] = {1, 15, 16, 17, 63, 64, 65, 1400, 4096};
+    __m128i round_key[15];
+    aesni::aes256_cfb_key_expansion(key, round_key);
+    for (size_t length : lengths) {
+        std::vector<uint8_t> ciphertext(length);
+        for (size_t i = 0; i < length; ++i) ciphertext[i] = static_cast<uint8_t>(i * 73 + 19);
+        std::vector<uint8_t> expected(length);
+        std::vector<uint8_t> actual(length);
+        aes256_cfb_decrypt_scalar_reference(expected.data(), ciphertext.data(), length, iv, round_key);
+        aesni::aes256_cfb_decrypt(actual.data(), ciphertext.data(), length, iv, round_key);
+        if (actual != expected) return false;
+    }
+    return true;
+}
+
 // v2.2.0: GCM must reject tampered ciphertext/tag (authentication check).
 static bool tamper_rejected(const char* method) {
     auto c = make_benchmark_cipher(method);
