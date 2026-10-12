@@ -122,13 +122,6 @@ namespace ppp
              * @return true if MTU update succeeds.
              */
             virtual bool                                                    SetInterfaceMtu(int mtu) noexcept = 0;
-            /** @brief Whether this concrete device can accept validated TCPv4 GSO output. */
-            virtual bool                                                    SupportsTxGso() const noexcept { return false; }
-            /**
-             * @brief Sends one validated L3 super-packet with explicit segmentation metadata.
-             * @note The default is fail-closed; it must never route an oversized packet through Output().
-             */
-            virtual bool                                                    OutputGso(const std::shared_ptr<Byte>&, int, TxGsoMetadata) noexcept { return false; }
 
         public:
             /**
@@ -154,6 +147,20 @@ namespace ppp
              * @return true if packet is queued for asynchronous write.
              */
             virtual bool                                                    Output(const void* packet, int packet_size) noexcept;
+            /**
+             * @brief Whether this adapter can transmit TCPv4 GSO (generic segmentation
+             *        offload) segments natively.  Default: false (callers must fall
+             *        back to plain Output()).
+             */
+            virtual bool                                                    SupportsTxGso() const noexcept { return false; }
+            /**
+             * @brief GSO variant of Output(); default forwards to the plain path.
+             * @param packet Packet payload pointer.
+             * @param packet_size Packet payload length in bytes.
+             * @param metadata Per-segment GSO metadata (TSO/GSO sizing hints).
+             * @return true if packet is queued for asynchronous write.
+             */
+            virtual bool                                                    OutputGso(const std::shared_ptr<Byte>& packet, int packet_size, TxGsoMetadata metadata) noexcept;
 
         public:
             /** @brief Returns the device identifier string. */
@@ -258,11 +265,13 @@ namespace ppp
             std::deque<std::pair<std::shared_ptr<Byte>, int>>               _write_queue;
             /** @brief True while an async_write is outstanding on _stream. */
             bool                                                            _write_in_progress = false;
-            /** @brief Reusable buffer for ordinary MTU-sized packet reads.
-             * Linux VNET/GSO reads are owned by TapLinux with its negotiated
-             * per-instance virtio-header capacity.
+            /** @brief Reusable buffer for single-copy packet reads.
+             *
+             * Sized to ITap::Mtu + 4 to accommodate the 4-byte address-family
+             * header that Darwin utun prepends to every packet.  On Linux (IFF_NO_PI)
+             * the extra 4 bytes are simply unused.
              */
-            Byte                                                            _packet[ITap::Mtu];
+            Byte                                                            _packet[ITap::Mtu + 4];
         };
     }
 }
