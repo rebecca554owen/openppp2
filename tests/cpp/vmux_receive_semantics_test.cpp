@@ -125,6 +125,7 @@ struct vmux_net_test_access {
             skt->status_.connected_ = true;
             skt->status_.disposed_ = false;
             skt->status_.fin_ = false;
+            skt->status_.peer_eof_ = false;
             skt->status_.sending_.store(1, std::memory_order_relaxed); // queue-only input path
             mux->skts_[connection_id] = skt;
             return skt;
@@ -143,6 +144,22 @@ struct vmux_net_test_access {
             }
         }
         return total;
+    }
+
+    static void SetLocalFin(vmux_net& mux, vmux_skt& skt, bool value) {
+        RunOnStrandVoid(mux, [&]() { skt.status_.fin_ = value; });
+    }
+
+    static void SetSending(vmux_net& mux, vmux_skt& skt, bool value) {
+        RunOnStrandVoid(mux, [&]() { skt.status_.sending_.store(value, std::memory_order_release); });
+    }
+
+    static bool ReceivePeerFin(vmux_net& mux, vmux_skt& skt) {
+        return RunOnStrand(mux, [&]() { return skt.input(nullptr, 0); });
+    }
+
+    static bool CloseOnEofConvergence(vmux_net& mux, vmux_skt& skt) {
+        return RunOnStrand(mux, [&]() { return skt.close_on_eof_convergence(); });
     }
 
     static bool FlowExists(vmux_net& mux, std::uint32_t connection_id) {
@@ -616,19 +633,19 @@ void TestCompatGapTimeoutClosesSession() {
     Require(vmux::vmux_net_test_access::IsDisposed(*mux), "compat gap timeout must dispose session");
 }
 
-void TestCompatReorderCapClosesSession() {
+void TestCompatReorderCapDropsSurplusKeepsSession() {
     auto mux = MakeMux();
     constexpr std::size_t frame_size = 9;
     vmux::vmux_net_test_access::ConfigureCompat(*mux, 1000, frame_size);
 
     Require(vmux::vmux_net_test_access::InjectCompatFrame(*mux, 3, 1, 11000), "first future frame");
     Require(vmux::vmux_net_test_access::CompatReorderSize(*mux) == 1, "first frame fits cap");
-    Require(vmux::vmux_net_test_access::InjectCompatFrame(*mux, 4, 1, 11001), "overflow schedules close");
-    auto ctx = mux->get_context();
-    Require(static_cast<bool>(ctx), "ctx");
-    ctx->poll();
-    ctx->restart();
-    Require(vmux::vmux_net_test_access::IsDisposed(*mux), "compat reorder overflow must close session");
+    // Surplus frame over the reorder cap is dropped (never buffered, never
+    // note_ack_pending'd) instead of rebuilding the session: the peer keeps
+    // its retransmission copy and re-sends it once the gap closes.
+    Require(vmux::vmux_net_test_access::InjectCompatFrame(*mux, 4, 1, 11001), "surplus overflow frame");
+    Require(vmux::vmux_net_test_access::CompatReorderSize(*mux) == 1, "surplus frame must not be buffered");
+    Require(!vmux::vmux_net_test_access::IsDisposed(*mux), "compat reorder overflow must keep session alive");
 }
 
 void TestUnknownCidDoesNotGrowFlowsUnbounded() {
@@ -673,6 +690,8 @@ void TestSessionReorderCapResetsFlow() {
     Require(vmux::vmux_net_test_access::SessionReorderBytes(*mux) <= 40, "session reorder bounded");
 }
 
+void DrainContext(const std::shared_ptr<vmux::vmux_net>& mux);
+
 void TestMaxOpenFlowsEnforced() {
     auto mux = MakeMux();
     vmux::vmux_net_test_access::ConfigureFlowV2(*mux, 1024, 1000, 0, /*max_open*/ 1);
@@ -682,6 +701,64 @@ void TestMaxOpenFlowsEnforced() {
     Require(!vmux::vmux_net_test_access::ProcessRxConnecting(mux, 2, "127.0.0.1:81"), "second open rejected");
     Require(!vmux::vmux_net_test_access::ConnectRequire(*mux), "locally initiated open must use the same cap");
     Require(vmux::vmux_net_test_access::SktCount(*mux) == 1, "still one skt");
+}
+
+void TestPeerFinWaitsForLocalFin() {
+    auto mux = MakeMux();
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, 100);
+    vmux::vmux_net_test_access::SetSending(*mux, *skt, false);
+
+    Require(vmux::vmux_net_test_access::ReceivePeerFin(*mux, *skt), "peer FIN accepted");
+    DrainContext(mux);
+    Require(vmux::vmux_net_test_access::SktCount(*mux) == 1,
+        "peer FIN alone must preserve the response half");
+}
+
+void TestBidirectionalEofReleasesFlowSlot() {
+    auto mux = MakeMux();
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, 101);
+    vmux::vmux_net_test_access::SetSending(*mux, *skt, false);
+    vmux::vmux_net_test_access::SetLocalFin(*mux, *skt, true);
+
+    Require(vmux::vmux_net_test_access::ReceivePeerFin(*mux, *skt), "peer FIN accepted");
+    DrainContext(mux);
+    Require(vmux::vmux_net_test_access::SktCount(*mux) == 0,
+        "bidirectional EOF must release the flow slot");
+}
+
+void TestBidirectionalEofWaitsForInflightWrite() {
+    auto mux = MakeMux();
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, 102);
+    vmux::vmux_net_test_access::SetLocalFin(*mux, *skt, true);
+
+    Require(vmux::vmux_net_test_access::ReceivePeerFin(*mux, *skt), "peer FIN accepted");
+    DrainContext(mux);
+    Require(vmux::vmux_net_test_access::SktCount(*mux) == 1,
+        "in-flight local write must keep the flow alive");
+
+    vmux::vmux_net_test_access::SetSending(*mux, *skt, false);
+    Require(vmux::vmux_net_test_access::CloseOnEofConvergence(*mux, *skt),
+        "write completion must converge EOF state");
+    DrainContext(mux);
+    Require(vmux::vmux_net_test_access::SktCount(*mux) == 0,
+        "drained bidirectional EOF must release the flow slot");
+}
+
+void TestSequentialCompletedFlowsDoNotExhaustCap() {
+    auto mux = MakeMux();
+    constexpr std::size_t max_open = 4;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, 1024, 1000, 0, max_open);
+
+    for (std::uint32_t cid = 1; cid <= 4097; ++cid) {
+        auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+        vmux::vmux_net_test_access::SetSending(*mux, *skt, false);
+        vmux::vmux_net_test_access::SetLocalFin(*mux, *skt, true);
+        Require(vmux::vmux_net_test_access::ReceivePeerFin(*mux, *skt),
+            "sequential peer FIN accepted");
+        DrainContext(mux);
+        Require(vmux::vmux_net_test_access::SktCount(*mux) == 0,
+            "completed flow must not consume a persistent slot");
+    }
 }
 
 void TestCtrlBudgetDoesNotDrainAll() {
@@ -819,11 +896,15 @@ int main() {
         TestFrameOversizeResetsFlow();
         TestCompatOooRefreshesActivity();
         TestCompatGapTimeoutClosesSession();
-        TestCompatReorderCapClosesSession();
+        TestCompatReorderCapDropsSurplusKeepsSession();
         TestUnknownCidDoesNotGrowFlowsUnbounded();
         TestInitiatorOpenBarrierBlocksPush();
         TestSessionReorderCapResetsFlow();
         TestMaxOpenFlowsEnforced();
+        TestPeerFinWaitsForLocalFin();
+        TestBidirectionalEofReleasesFlowSlot();
+        TestBidirectionalEofWaitsForInflightWrite();
+        TestSequentialCompletedFlowsDoNotExhaustCap();
         TestCtrlBudgetDoesNotDrainAll();
         TestLinkExitIsolatesWhenOthersLive();
         TestLinkExitClosesWhenLast();
