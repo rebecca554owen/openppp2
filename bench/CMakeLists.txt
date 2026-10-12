@@ -15,7 +15,6 @@ endif()
 
 option(ENABLE_ASAN "Build with AddressSanitizer" OFF)
 option(ENABLE_TSAN "Build with ThreadSanitizer" OFF)
-option(ENABLE_TUN_GSO_OUTPUT_PROBE "Build the isolated Linux TUN GSO output probe" OFF)
 
 if(ENABLE_ASAN AND ENABLE_TSAN)
     message(FATAL_ERROR "ENABLE_ASAN and ENABLE_TSAN cannot be enabled together")
@@ -191,36 +190,6 @@ ppp_add_bench(bm_vmux_rtx SOURCES udp/bm_vmux_rtx.cpp)
 # VMux Flow Reorder Buffer — header-only.
 ppp_add_bench(bm_vmux_reorder SOURCES udp/bm_vmux_reorder.cpp)
 
-# Linux-only raw write(TUN) service benchmark. This intentionally avoids the
-# production TapLinux wrapper and Google Benchmark so its measured loop is just
-# syscall timing. The only CTest registration is its unprivileged self-test.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    add_executable(bm_tun_write linux/bm_tun_write.cpp)
-    target_compile_features(bm_tun_write PRIVATE cxx_std_17)
-    target_compile_options(bm_tun_write PRIVATE -O3 -DNDEBUG)
-    target_link_libraries(bm_tun_write PRIVATE pthread)
-
-    # Isolated TCP socket carrier benchmark; it does not link production transport code.
-    add_executable(bm_tcp_carrier linux/bm_tcp_carrier.cpp)
-    target_compile_features(bm_tcp_carrier PRIVATE cxx_std_17)
-    target_compile_options(bm_tcp_carrier PRIVATE -O3 -DNDEBUG)
-    target_link_libraries(bm_tcp_carrier PRIVATE pthread)
-
-    # B0/B1 GSO ns-per-payload-byte sweep over the same two-TUN topology as the
-    # probe. Only its unprivileged self-test is registered with CTest.
-    add_executable(bm_tun_gso linux/bm_tun_gso.cpp)
-    target_compile_features(bm_tun_gso PRIVATE cxx_std_17)
-    target_compile_options(bm_tun_gso PRIVATE -O3 -DNDEBUG)
-    target_link_libraries(bm_tun_gso PRIVATE pthread)
-
-    if(ENABLE_TUN_GSO_OUTPUT_PROBE)
-        add_executable(tun_gso_output_probe linux/tun_gso_output_probe.cpp)
-        target_include_directories(tun_gso_output_probe PRIVATE "${OPENPPP2_ROOT}")
-        target_compile_features(tun_gso_output_probe PRIVATE cxx_std_17)
-        target_compile_options(tun_gso_output_probe PRIVATE -O3 -DNDEBUG)
-    endif()
-endif()
-
 if(BUILD_TESTING)
     add_test(NAME bench_crypto_compatibility COMMAND compat_check)
     add_test(NAME bench_evp_simd_selection COMMAND evp_simd_test)
@@ -235,26 +204,6 @@ if(BUILD_TESTING)
     add_test(NAME bench_vmux_ack_smoke COMMAND bm_vmux_ack --benchmark_min_time=0.001)
     add_test(NAME bench_vmux_rtx_smoke COMMAND bm_vmux_rtx --benchmark_min_time=0.001)
     add_test(NAME bench_vmux_reorder_smoke COMMAND bm_vmux_reorder --benchmark_min_time=0.001)
-    if(TARGET bm_tun_write)
-        add_test(NAME bench_tun_write_distribution_contract COMMAND bm_tun_write --self-test)
-        set_tests_properties(bench_tun_write_distribution_contract
-            PROPERTIES LABELS "micro;contract" TIMEOUT 30)
-    endif()
-    if(TARGET bm_tcp_carrier)
-        add_test(NAME bench_tcp_carrier_contract COMMAND bm_tcp_carrier --self-test)
-        set_tests_properties(bench_tcp_carrier_contract
-            PROPERTIES LABELS "micro;contract" TIMEOUT 30)
-    endif()
-    if(TARGET tun_gso_output_probe)
-        add_test(NAME bench_tun_gso_output_probe_contract COMMAND tun_gso_output_probe --self-test)
-        set_tests_properties(bench_tun_gso_output_probe_contract
-            PROPERTIES LABELS "micro;contract" TIMEOUT 30)
-    endif()
-    if(TARGET bm_tun_gso)
-        add_test(NAME bench_tun_gso_perf_contract COMMAND bm_tun_gso --self-test)
-        set_tests_properties(bench_tun_gso_perf_contract
-            PROPERTIES LABELS "micro;contract" TIMEOUT 60)
-    endif()
 
     set_tests_properties(
         bench_crypto_compatibility

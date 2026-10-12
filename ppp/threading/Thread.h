@@ -171,15 +171,6 @@ namespace ppp
             SynchronizedObject                                              _lifecycle;
             /** @brief True after a worker thread has been created for this one-shot wrapper. */
             bool                                                            _started = false;
-            /**
-             * @brief Set while a `Join()` is in progress so `Detach()` cannot run
-             *        concurrently on the same `std::thread` object.
-             * @note  Concurrent `join()`/`detach()` on one `std::thread` is undefined
-             *        behaviour (crash during shutdown). `Join()` may not hold
-             *        `_lifecycle` while blocking, or the worker thread's own `Detach()`
-             *        would deadlock, so the flag serializes the two paths instead.
-             */
-            bool                                                            _joining = false;
             /** @brief User-supplied entry-point callback, accessed only under `_lifecycle`. */
             ThreadStart                                                     _start;
             /** @brief Mutex guarding thread-local storage and exposed to existing callers. */

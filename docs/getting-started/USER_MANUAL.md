@@ -141,12 +141,17 @@ Minimal server config:
   "tcp": {
     "listen": { "port": 20000 }
   },
+  "udp": {
+    "listen": { "port": 20000 }
+  },
   "server": {
     "node": 1,
     "subnet": true
   }
 }
 ```
+
+> **Note:** For production, enable `transport-auth` (data-plane authentication) on both ends. See the `transport-auth` block in [CONFIGURATION.md](../reference/CONFIGURATION.md).
 
 ### Client Quick Start
 
