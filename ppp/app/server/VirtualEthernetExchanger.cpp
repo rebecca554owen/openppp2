@@ -137,9 +137,10 @@ namespace {
     static bool IsConfiguredRecoveryCarrier(
         const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
         const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept {
+        // v2.2.0: loopback ingress is authenticated and exporter-capable
+        // exactly like LAN; recovery eligibility no longer exempts it.
         if (!configuration || !configuration->server.session_resume.enabled ||
-            !transmission || transmission->IsServerLoopbackIngress() ||
-            !transmission->IsAuthenticatedCarrierBindingActive() ||
+            !transmission || !transmission->IsAuthenticatedCarrierBindingActive() ||
             !transmission->HasAuthenticatedSessionExporter()) {
             return false;
         }
@@ -158,8 +159,10 @@ namespace {
     static bool IsRecoveryCapableCarrier(
         const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration,
         const std::shared_ptr<ppp::transmissions::ITransmission>& transmission) noexcept {
+        // v2.2.0: loopback ingress is authenticated and exporter-capable
+        // exactly like LAN; recovery capability no longer exempts it.
         if (!configuration || !configuration->server.session_resume.enabled ||
-            !transmission || transmission->IsServerLoopbackIngress()) {
+            !transmission) {
             return false;
         }
 
@@ -1322,7 +1325,7 @@ namespace ppp {
             }
 
             /** @brief Applies VMUX enable/disable request and acknowledges resulting state. */
-            bool VirtualEthernetExchanger::OnMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, Byte ordering_caps, YieldContext& y) noexcept {
+            bool VirtualEthernetExchanger::OnMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, Byte ordering_caps, uint32_t session_epoch, YieldContext& y) noexcept {
                 bool err = true;
 
                 // Negotiated receiver ordering mode (flow v2). agreed == FLOW_V2 only when the
@@ -1359,7 +1362,15 @@ namespace ppp {
                     bool clean = vlan == 0 || max_connections == 0;
                     std::shared_ptr<vmux::vmux_net> mux = mux_coordinator_->Session();
                     if (NULLPTR != mux) {
-                        if (clean || mux->Vlan != vlan || mux->get_max_connections() != max_connections || mux->is_disposed()) {
+                        // Session-epoch guard: the MUX request carries the client's
+                        // vmux_net incarnation nonce. When the client rebuilt its
+                        // session (reconnect timeout, process restart), its seq space
+                        // restarted from zero while this retained session still
+                        // expects the old rx_ack_ baseline — every data frame would
+                        // be silently dropped as "stale" (heartbeats keep it looking
+                        // alive). A changed non-zero epoch therefore forces a rebuild.
+                        if (clean || mux->Vlan != vlan || mux->get_max_connections() != max_connections || mux->is_disposed() ||
+                            (session_epoch != 0 && mux->SessionEpoch != 0 && mux->SessionEpoch != session_epoch)) {
                             mux_coordinator_->ResetIfCurrent(mux);
                             mux->close_exec();
                         }
@@ -1388,6 +1399,7 @@ namespace ppp {
                     mux = make_shared_object<vmux::vmux_net>(vmux_context, vmux_strand, max_connections, true, acceleration, mux_mode);
                     if (NULLPTR != mux) {
                         mux->Vlan = vlan;
+                        mux->SessionEpoch = session_epoch;
                         mux->Firewall = GetFirewall();
                         mux->Logger = switcher_->GetLogger();
                         mux->AppConfiguration = configuration;
@@ -1430,7 +1442,7 @@ namespace ppp {
                         mux->close_exec();
                     }
 
-                    DoMux(transmission, 0, 0, false, 0, y);
+                    DoMux(transmission, 0, 0, false, 0, 0, y);
                 }
                 else {
                     // Echo the agreed capabilities back so the client learns the result.
@@ -1441,7 +1453,7 @@ namespace ppp {
                     if (mux_coordinator_->Session() != NULLPTR && mux_coordinator_->Session()->fec_agreed()) {
                         agreed_caps |= (Byte)vmux::vmux_net::ordering_caps_fec;
                     }
-                    DoMux(transmission, vlan, max_connections, acceleration, agreed_caps, y);
+                    DoMux(transmission, vlan, max_connections, acceleration, agreed_caps, session_epoch, y);
                 }
 
                 return true;
