@@ -1,22 +1,23 @@
 # Copyright  : Copyright (C) 2017 ~ 2035 SupersocksR ORG. All rights reserved.
 # Description: PPP PRIVATE NETWORK(TM) 2 – macOS builds (arm64 & x86_64).
 # Author     : OpenCode.
-# Date-Time  : 2026/05/03
+# Date-Time  : 2026-05-03
 
 name: Build · macOS
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main, codex/runtime-ui-lifecycle-integration]
+    tags: ['v*']
   workflow_dispatch:
 
 concurrency:
-  group: build-macos-${{ github.event.pull_request.number || github.ref }}
+  group: build-macos-${{ github.ref }}
   cancel-in-progress: true
 
 env:
+  BOOST_VERSION: "1.92.0"
+  OPENSSL_VERSION: "4.0.2"
+  JEMALLOC_VERSION: "5.3.1"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -25,24 +26,105 @@ jobs:
     runs-on: macos-latest
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(github.event_name == 'pull_request' && '{"include":[{"arch":"arm64","third_repo":"Liz-Nozomi/openppp2-macos-arm64-environment"}]}' || '{"include":[{"arch":"arm64","third_repo":"Liz-Nozomi/openppp2-macos-arm64-environment"},{"arch":"x86_64","third_repo":"liulilittle/openppp2-macos-amd64-environment"}]}') }}
+      matrix:
+        arch: [arm64, x86_64]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
-      - name: Clone third-party environment
-        run: git clone --depth 1 "https://github.com/${{ matrix.third_repo }}.git" "${{ runner.temp }}/3rd"
+      - name: Install build dependencies
+        run: |
+          brew install autoconf automake libtool
+
+      - name: Set architecture
+        id: arch
+        run: |
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            echo "flags=-arch arm64" >> $GITHUB_OUTPUT
+            echo "b2_props=architecture=arm address-model=64 abi=aapcs" >> $GITHUB_OUTPUT
+          else
+            echo "flags=-arch x86_64" >> $GITHUB_OUTPUT
+            echo "b2_props=architecture=x86 address-model=64 abi=sysv" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Cache third-party libraries
+        id: cache-third
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/third-party
+          key: macos-${{ matrix.arch }}-deps-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+          restore-keys: |
+            macos-${{ matrix.arch }}-deps-v2-
+
+      - name: Build Boost
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p third-party && cd third-party
+          curl -L -o boost.tar.bz2 "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION//./_}.tar.bz2"
+          tar -xjf boost.tar.bz2 && rm -rf boost boost.tar.bz2
+          mv boost_* boost
+          cd boost && ./bootstrap.sh && ./b2 cxxflags="-fPIC ${{ steps.arch.outputs.flags }}" linkflags="${{ steps.arch.outputs.flags }}" ${{ steps.arch.outputs.b2_props }} --with-system --with-context --with-coroutine --with-thread --with-filesystem --with-regex --stagedir=stage -j$(sysctl -n hw.logicalcpu)
+          # Boost 1.89+ system is header-only; create empty archive for linker compatibility
+          touch /tmp/empty.c && cc -c /tmp/empty.c -o /tmp/empty.o && ar rcs stage/lib/libboost_system.a /tmp/empty.o && rm -f /tmp/empty.c /tmp/empty.o
+          cd ../..
+
+      - name: Build jemalloc
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        run: |
+          cd third-party
+          curl -L -o jemalloc.tar.bz2 "https://github.com/jemalloc/jemalloc/releases/download/${JEMALLOC_VERSION}/jemalloc-${JEMALLOC_VERSION}.tar.bz2"
+          tar -xjf jemalloc.tar.bz2 && rm -rf jemalloc jemalloc.tar.bz2
+          mv jemalloc-* jemalloc
+          cd jemalloc
+          CFLAGS="${{ steps.arch.outputs.flags }}" LDFLAGS="${{ steps.arch.outputs.flags }}" \
+            ./autogen.sh --with-jemalloc-prefix=je_ --disable-shared --enable-static
+          make -j$(sysctl -n hw.logicalcpu)
+          cd ../..
+
+      - name: Build OpenSSL
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        run: |
+          cd third-party
+          curl -L -o openssl.tar.gz "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+          tar -xzf openssl.tar.gz && rm -rf openssl openssl-src openssl.tar.gz
+          mv openssl-* openssl-src
+          cd openssl-src
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            OPENSSL_CONF="darwin64-arm64-cc"
+          else
+            OPENSSL_CONF="darwin64-x86_64-cc"
+          fi
+          CC=/usr/bin/clang RANLIB=/usr/bin/ranlib AR=/usr/bin/ar \
+            ./Configure ${OPENSSL_CONF} \
+            --prefix="$PWD/../openssl" \
+            no-shared no-tests
+          make -j$(sysctl -n hw.logicalcpu) RANLIB=/usr/bin/ranlib AR=/usr/bin/ar
+          make install_sw RANLIB=/usr/bin/ranlib AR=/usr/bin/ar
+          cd ..
+          ln -sf lib/libssl.a openssl/libssl.a
+          ln -sf lib/libcrypto.a openssl/libcrypto.a
+          cd ../..
+
+      - name: Compute version label
+        id: ver
+        run: |
+          git fetch --tags --force 2>/dev/null || true
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "label=${TAG}-${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Build openppp2
         run: |
-          TP="${{ runner.temp }}/3rd"
           mkdir -p build && cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-            -DTHIRD_PARTY_LIBRARY_DIR="$TP"
+            -DTHIRD_PARTY_LIBRARY_DIR="${{ github.workspace }}/third-party" \
+            -DPPP_APPLICATION_VERSION="${{ steps.ver.outputs.label }}"
           make -j$(sysctl -n hw.physicalcpu)
 
       - name: Package artifact
@@ -51,58 +133,8 @@ jobs:
           echo "ARTIFACT=$ARTIFACT" >> $GITHUB_ENV
           cd bin && zip -r "$ARTIFACT" ppp
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.ARTIFACT }}
           path: bin/${{ env.ARTIFACT }}
-          if-no-files-found: error
-
-  # ── AddressSanitizer diagnostic build (macOS) ──────────────────────
-  # Diagnostic only (NOT for production). Builds with -DENABLE_ASAN=ON which
-  # disables jemalloc so ASan's allocator interceptors are in effect, to
-  # capture the exact double-free / use-after-free stack of the vmux
-  # multi-link teardown crash on macOS (issue #5). Run the produced binary
-  # to reproduce; ASan prints the offending alloc/free/access stacks.
-  build-asan:
-    name: macOS ${{ matrix.arch }} ASan
-    if: github.event_name != 'pull_request'
-    runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: arm64
-            third_repo: Liz-Nozomi/openppp2-macos-arm64-environment
-          - arch: x86_64
-            third_repo: liulilittle/openppp2-macos-amd64-environment
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Clone third-party environment
-        run: git clone --depth 1 "https://github.com/${{ matrix.third_repo }}.git" "${{ runner.temp }}/3rd"
-
-      - name: Build openppp2 (ASan)
-        run: |
-          TP="${{ runner.temp }}/3rd"
-          mkdir -p build && cd build
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-            -DENABLE_ASAN=ON \
-            -DTHIRD_PARTY_LIBRARY_DIR="$TP"
-          make -j$(sysctl -n hw.physicalcpu)
-
-      - name: Package artifact
-        run: |
-          ARTIFACT=openppp2-darwin-${{ matrix.arch }}-asan.zip
-          echo "ARTIFACT_ASAN=$ARTIFACT" >> $GITHUB_ENV
-          cd bin && zip -r "$ARTIFACT" ppp
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: openppp2-darwin-${{ matrix.arch }}-asan
-          path: bin/openppp2-darwin-${{ matrix.arch }}-asan.zip
           if-no-files-found: error

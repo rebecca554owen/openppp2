@@ -33,6 +33,7 @@ def cmake_expected_cpp_sources(root: Path) -> set[str]:
         "common/json/src",
         "common/libtcpip",
         "common/dnslib",
+        "common/xtcp",
     )
     for rel in common_dirs:
         expected.update(
