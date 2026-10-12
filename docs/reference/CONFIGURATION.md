@@ -305,6 +305,114 @@ Controls periodic vBGP route refresh from the server:
 
 ---
 
+### `transport-auth`
+
+Data-plane handshake authentication. Once the TA handshake completes the data plane is
+taken over by `AuthenticatedRecordProtector`, becoming a true authenticated-encryption
+(AEAD) record layer. The AEAD algorithm is chosen by `key.transport` (must be an
+OpenSSL AEAD: GCM / CCM / ChaCha20-Poly1305); `aes-256-gcm` is recommended.
+
+Record keys come only from the Noise handshake export (`record_root`, split by direction
+and purpose through HKDF). `protocol-key` / `transport-key` serve the handshake and
+legacy framing only and never encrypt records.
+
+#### Generating the key
+
+```bash
+# 64 lowercase hex characters (= a 32-byte random secret); identical on both ends
+python3 -c "import secrets; print(secrets.token_hex(32))" > transport.key
+chmod 600 transport.key
+```
+
+Or let the binary write the file (64 chars, no newline, mode 0600, read back and verified):
+
+```bash
+./bin/ppp --transport-auth-key=./secrets/transport.key
+```
+
+The secret file is generated at runtime and mounted at deploy time; it is **never
+committed**. The `secret-file` checks are strict (a failure refuses to start):
+
+- exactly **64 lowercase hex characters** (32 bytes, no trailing newline)
+- must be a **regular file** (symlinks are refused via `O_NOFOLLOW`), with all
+  group/other permission bits zero (`chmod 600`)
+- loading a `secret-file` is **unsupported on Windows**
+
+#### Enabling it (both ends)
+
+```json
+{
+    "transport-auth": {
+        "handshake-timeout-ms": 5000,
+        "keys": [
+            { "id": "primary", "state": "active", "secret-file": "./secrets/transport.key" }
+        ]
+    },
+    "server": { "transport-auth": { "enabled": true } },
+    "client": { "transport-auth": { "enabled": true } }
+}
+```
+
+- top-level `transport-auth.keys` is required on both ends with identical content;
+  `state` accepts `active` / `verify-only` / `revoked`
+- limits enforced by `Normalize()`: at most **8** keys and **2** `verify-only` keys;
+  when TA is enabled exactly **one** `active` key is required; `id` must be **1–63
+  canonical lowercase** characters and unique
+- `handshake-timeout-ms` defaults to `5000` and is clamped to `[1000, 30000]`
+- `server.transport-auth.enabled` and `client.transport-auth.enabled` must both be
+  `true` for TA to activate
+- asymmetric `enabled` is rejected rather than silently downgraded; loopback is
+  authenticated exactly like LAN traffic
+- a connection pins the negotiated `key-id` at handshake time and never switches mid-connection
+- in Docker the secret file must be mounted, and the in-container path must match `secret-file`
+
+#### Rotation
+
+```json
+{
+    "transport-auth": {
+        "handshake-timeout-ms": 5000,
+        "keys": [
+            { "id": "primary",  "state": "active",      "secret-file": "./secrets/transport.key" },
+            { "id": "previous", "state": "verify-only", "secret-file": "./secrets/previous.key" }
+        ]
+    }
+}
+```
+
+1. Deploy the new key as `active` and keep the old one as `verify-only`: new connections
+   use the new key while old clients can still be verified
+2. Drain the old connections, then mark the old key `revoked` (or remove the entry)
+3. `revoked` entries never load a secret and take part in no connection
+
+#### Recommended key block (`aes-256-gcm`, pure EVP AEAD)
+
+```json
+"key": {
+    "kf": 154543927,
+    "protocol": "aes-128-cfb",
+    "protocol-key": "N6HMzdUs7IUnYHwq",
+    "transport": "aes-256-gcm",
+    "transport-key": "HWFweXu2g5RVMEpy",
+    "simd-auto": false,
+    "masked": false,
+    "plaintext": false,
+    "delta-encode": false,
+    "shuffle-data": false
+}
+```
+
+- `transport` uses `aes-256-gcm`: a GCM name always takes the OpenSSL EVP AEAD path
+  (SIMD has no authentication tag, so GCM is never promoted to a `simd-` variant)
+- `protocol` should stay non-GCM (e.g. `aes-128-cfb`). An explicit GCM `protocol` is
+  **not** rejected at load time: `WarnExplicitGcmCipher` only emits an informational
+  telemetry line (`key.protocol uses explicit gcm cipher; ...`). The authenticated
+  record layer exists only after the TA handshake, so a GCM `protocol` has no tag to
+  carry on the pre-handshake framing path
+- `simd-auto: false`: a bare name (without the `simd-` prefix) is not in the built-in
+  SIMD table, so disabling auto-promotion guarantees the pure OpenSSL EVP path. The
+  default `true` transparently promotes bare CFB names back to their `simd-` variants
+
 ## 6. Normalization Rules From `Loaded()`
 
 `Loaded()` does the real shaping work. The rules, in category order:
