@@ -847,6 +847,17 @@ namespace ppp
                 completionPortThreads = kMinThreadCount;
             }
 
+            // Root-fix for the macOS/arm64 kqueue_reactor data race:
+            // a single scheduler io_context must be run() by exactly ONE thread.
+            // Boost.Asio's kqueue reactor is unsafe when several OS threads run()
+            // the same io_context (no deferred ops queue + is_enqueued dedup,
+            // unlike epoll on Linux), which collapses the data plane after a few
+            // transfers on darwin. The scheduler is a serialized strand, so more
+            // threads over one context only race the reactor with zero
+            // concurrency benefit; real parallelism is served by the per-thread
+            // worker pool (SetMaxThreads / GetExecutor round-robin).
+            completionPortThreads = 1;
+
             SynchronizedObjectScope scope(Internal->Lock);
             if (NULLPTR != Internal->Scheduler)
             {
@@ -934,13 +945,15 @@ namespace ppp
             {
                 context = ppp::threading::Executors::GetExecutor();
             }
-            else
+
+            // Always build a strand over the selected context so callers (e.g.
+            // the client handshake timer) never observe a null strand. A
+            // missing scheduler (concurrent=1) used to take the executor
+            // fallback with strand left null - the 355cff call-site bandaid
+            // worked around that at the timer construction site.
+            if (NULLPTR != context && NULLPTR == strand)
             {
                 strand = make_shared_object<Strand>(boost::asio::make_strand(*context));
-                if (NULLPTR == strand)
-                {
-                    context = ppp::threading::Executors::GetExecutor();
-                }
             }
 
             return context;
