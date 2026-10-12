@@ -24,7 +24,4 @@ stable-reference claims.
 - [桌面客户端手动节点与启动参数设计](CLIENT_MANUAL_PROFILES_DESIGN_CN.md)
 - [OpenPPP2 Client 管理器 UI/UX 设计](CLIENT_UIUX_DESIGN_CN.md)
 - [VMUX 可靠性子协议设计(ACK + 快速重传 + FEC)](MUX_RELIABILITY_FEC_DESIGN_CN.md)
-- [XTCP 接入设计与依赖门禁](XTCP_INTEGRATION_CN.md)
-- [Linux Tap 边缘 GSO 合并设计](PPP-DATAPATH-GSO-CONTRACT_CN.md)
-- [Datapath 网络损伤验收设计](PPP-DATAPATH-NETEM-ACCEPTANCE_CN.md)
 - [Client UI mockup](mockups/client-connected.html)
