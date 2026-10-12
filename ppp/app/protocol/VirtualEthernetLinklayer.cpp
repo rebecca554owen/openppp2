@@ -593,6 +593,7 @@ namespace ppp {
                 uint16_t    max_connections;    // max concurrent connections (network order)
                 Byte        acceleration;       // acceleration flag (0/1)
                 Byte        ordering_caps;       // receiver ordering capability bits (bit0 = FLOW_V2); optional trailing byte
+                uint32_t    session_epoch;      // optional client vmux_net incarnation nonce (network order); present when packet_length covers it; legacy peers omit it (reads as 0)
             } VirtualEthernetLinklayer_MUX_IL;
 
             // MUXON acknowledgment structure (includes action byte)
@@ -879,8 +880,15 @@ namespace ppp {
                         // packet_length excludes the leading action byte, so the full struct on the
                         // wire is present only when packet_length >= sizeof(struct) - 1.
                         Byte ordering_caps = 0;
+                        uint32_t session_epoch = 0;
                         if (packet_length >= (int)(sizeof(VirtualEthernetLinklayer_MUX_IL) - 1)) {
                             ordering_caps = pil->ordering_caps;
+                        }
+                        // The incarnation nonce is the optional trailing field: legacy
+                        // peers send a shorter packet and decode as epoch 0 (unknown),
+                        // which keeps the old accept-any behavior on the server.
+                        if (packet_length >= (int)(sizeof(VirtualEthernetLinklayer_MUX_IL) - 1) + (int)sizeof(uint32_t)) {
+                            session_epoch = ntohl(pil->session_epoch);
                         }
 
                         ppp::telemetry::Log(Level::kDebug, "protocol", "MUX received vlan=%u max_connections=%u caps=%u",
@@ -889,7 +897,7 @@ namespace ppp {
                                             static_cast<unsigned int>(ordering_caps));
                         ppp::telemetry::Count("protocol.mux.received", 1);
                         return global::PACKET_Result(OnMux(transmission, ntohs(pil->vlan), ntohs(pil->max_connections),
-                                     pil->acceleration != 0, ordering_caps, y), ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
+                                     pil->acceleration != 0, ordering_caps, session_epoch, y), ppp::diagnostics::ErrorCode::ProtocolMuxFailed);
                     } else {
                         return packet_length == 0;
                     }
@@ -962,7 +970,7 @@ namespace ppp {
 
                 // generate random payload (printable ASCII) to avoid predictable patterns
                 Byte packet[MAX_RANDOM_BUFFER_SIZE];
-                int packet_size = RandomNext(1, MAX_RANDOM_BUFFER_SIZE);
+                int packet_size = RandomNext(17, MAX_RANDOM_BUFFER_SIZE);
                 for (int i = 0; i < packet_size; ++i) {
                     packet[i] = static_cast<Byte>(RandomNext(0x20, 0x7E)); // printable range
                 }
@@ -1255,7 +1263,7 @@ namespace ppp {
             // Send MUX setup request.
             // ---------------------------------------------------------------------
             /** @brief Sends MUX setup request packet. */
-            bool VirtualEthernetLinklayer::DoMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, Byte ordering_caps, YieldContext& y) noexcept
+            bool VirtualEthernetLinklayer::DoMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, Byte ordering_caps, uint32_t session_epoch, YieldContext& y) noexcept
             {
                 MemoryStream ms;
                 VirtualEthernetLinklayer_MUX_IL data;
@@ -1264,6 +1272,7 @@ namespace ppp {
                 data.max_connections  = htons(max_connections);
                 data.acceleration     = acceleration ? 1 : 0;
                 data.ordering_caps    = ordering_caps;
+                data.session_epoch    = htonl(session_epoch);
 
                 if (ms.Write(&data, 0, sizeof(data))) {
                     std::shared_ptr<Byte> buffer = ms.GetBuffer();
