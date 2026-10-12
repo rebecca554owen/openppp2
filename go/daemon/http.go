@@ -17,13 +17,32 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+func (d *Daemon) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get("Authorization")
+		if token == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing Authorization header"})
+			return
+		}
+		// Accept either "Bearer <token>" or a bare "<token>" header
+		if strings.HasPrefix(token, "Bearer ") {
+			token = strings.TrimPrefix(token, "Bearer ")
+		}
+		if token != d.cfg.AuthToken {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid auth token"})
+			return
+		}
+		next(w, r)
+	}
+}
+
 func (d *Daemon) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = io.WriteString(w, indexHTML(d.cfg.UI.Title))
+	_, _ = io.WriteString(w, indexHTML(d.cfg.UI.Title, d.cfg.AuthToken))
 }
 
 func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -40,6 +59,9 @@ func (d *Daemon) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, ConfigPayload{Content: string(content)})
 	case http.MethodPut, http.MethodPost:
+		/* Limit request body size to prevent memory exhaustion */
+		const MAX_BODY_SIZE = 2 * 1024 * 1024
+		r.Body = http.MaxBytesReader(w, r.Body, MAX_BODY_SIZE)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -100,7 +122,8 @@ func (d *Daemon) handleManagedProxy(w http.ResponseWriter, r *http.Request) {
 	d.proxy.ServeHTTP(w, r)
 }
 
-func indexHTML(title string) string {
+func indexHTML(title, authToken string) string {
+	tokenJSON, _ := json.Marshal(authToken)
 	return `<!doctype html>
 <html>
 <head>
@@ -134,28 +157,31 @@ func indexHTML(title string) string {
   <pre id="logs">loading...</pre>
 
   <script>
+    const AUTH_TOKEN = ` + string(tokenJSON) + `;
+    const AUTH_HEADERS = {'Authorization': 'Bearer ' + AUTH_TOKEN};
+
     async function refreshStatus() {
-      const res = await fetch('/api/status');
+      const res = await fetch('/api/status', {headers: AUTH_HEADERS});
       document.getElementById('status').textContent = JSON.stringify(await res.json(), null, 2);
     }
     async function loadConfig() {
-      const res = await fetch('/api/config');
+      const res = await fetch('/api/config', {headers: AUTH_HEADERS});
       const data = await res.json();
       document.getElementById('config').value = data.content || '';
     }
     async function saveConfig() {
       await fetch('/api/config', {
         method: 'PUT',
-        headers: {'Content-Type': 'application/json'},
+        headers: {...AUTH_HEADERS, 'Content-Type': 'application/json'},
         body: JSON.stringify({content: document.getElementById('config').value})
       });
       await refreshStatus();
     }
-    async function startInstance() { await fetch('/api/start', {method: 'POST'}); await refreshStatus(); await refreshLogs(); }
-    async function stopInstance() { await fetch('/api/stop', {method: 'POST'}); await refreshStatus(); await refreshLogs(); }
-    async function restartInstance() { await fetch('/api/restart', {method: 'POST'}); await refreshStatus(); await refreshLogs(); }
+    async function startInstance() { await fetch('/api/start', {method: 'POST', headers: AUTH_HEADERS}); await refreshStatus(); await refreshLogs(); }
+    async function stopInstance() { await fetch('/api/stop', {method: 'POST', headers: AUTH_HEADERS}); await refreshStatus(); await refreshLogs(); }
+    async function restartInstance() { await fetch('/api/restart', {method: 'POST', headers: AUTH_HEADERS}); await refreshStatus(); await refreshLogs(); }
     async function refreshLogs() {
-      const res = await fetch('/api/logs');
+      const res = await fetch('/api/logs', {headers: AUTH_HEADERS});
       const data = await res.json();
       document.getElementById('logs').textContent = (data.items || []).map(x => '[' + x.at + '] ' + x.stream + ': ' + x.text).join('\n');
     }

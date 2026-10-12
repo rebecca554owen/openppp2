@@ -1,6 +1,8 @@
 package ppp
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"log"
 	"os"
@@ -58,7 +60,12 @@ type AdminConfiguration struct {
 }
 
 func defaultManagedServerConfiguration() *ManagedServerConfiguration {
+	key := make([]byte, 16)
+	if _, err := rand.Read(key); err == nil {
+		key = []byte(hex.EncodeToString(key))
+	}
 	return &ManagedServerConfiguration{
+		Key:      string(key),
 		Prefixes: ":10000",
 		Path:     "/ppp/webhook",
 		Interfaces: &InterfacesConfiguration{
@@ -144,7 +151,13 @@ func LoadManagedServerConfiguration(path string) *ManagedServerConfiguration {
 	} else if _, err := cfg.ManagedMode(); err != nil {
 		LOG_ERROR.Println(err)
 		return nil
-	} else {
-		return cfg
 	}
+
+	// reject empty key config to prevent authentication bypass
+	if cfg.Key == "" {
+		LOG_ERROR.Println("SECURITY: managed server 'key' is empty - authentication would be bypassed. Refusing to start.")
+		return nil
+	}
+
+	return cfg
 }
