@@ -23,8 +23,9 @@
 #include <ppp/net/native/rib.h>
 #include <common/aggligator/aggligator.h>
 
-#include <chrono>
 #include <cstdlib>
+
+#include <chrono>
 
 #if defined(_LINUX)
 #include <linux/ppp/tap/TapLinux.h>
@@ -78,7 +79,7 @@ namespace ppp {
                 }
 
                 if (owner_->tcp_stack_mode_ == ppp::app::TcpStackMode::Xtcp) {
-#if defined(PPP_ENABLE_XTCP)
+#if defined(PPP_ENABLE_XTCP) && defined(__linux__)
                     const auto self = std::static_pointer_cast<VEthernetNetworkSwitcher>(
                         owner_->shared_from_this());
                     const std::weak_ptr<VEthernetNetworkSwitcher> weak = self;
@@ -202,6 +203,7 @@ namespace ppp {
 #endif
                 }
 
+
                 ppp::net::asio::vdns::ClearCache();
 
                 ppp::telemetry::Log(Level::kInfo, "client", owner_->proxy_only_ ? "proxy-only session starting" : "TUN attached");
@@ -266,6 +268,8 @@ namespace ppp {
                     IDisposable::DisposeReferences(qos, exchanger);
                     return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::SessionOpenFailed);
                 }
+
+#if defined(__linux__)
                 if (owner_->tcp_stack_mode_ == ppp::app::TcpStackMode::Xtcp) {
                     const std::shared_ptr<xtcp::XtcpRuntime> runtime = owner_->xtcp_runtime_;
                     if (NULLPTR == runtime) {
@@ -278,6 +282,7 @@ namespace ppp {
                             ppp::diagnostics::ErrorCode::RuntimeInitializationFailed);
                     }
                 }
+#endif
 
                 // Enable the local HTTP PROXY server middleware to provide proxy services directly by the VPN.
                 VEthernetNetworkSwitcher::VEthernetHttpProxySwitcherPtr http_proxy = owner_->NewHttpProxy(exchanger);
