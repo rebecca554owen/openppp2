@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: test-linux-coverage-${{ github.event.pull_request.number || github.ref }}
+  group: test-linux-coverage-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -14,7 +14,9 @@ jobs:
     name: Unit tests + LLVM cov
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Install build dependencies
         run: |

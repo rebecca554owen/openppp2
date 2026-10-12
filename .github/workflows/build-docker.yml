@@ -143,10 +143,17 @@ jobs:
           merge-multiple: true
 
       - name: Create multi-arch manifest and push
+        working-directory: /tmp/digests
         run: |
+          # Reference each platform manifest as <image>@<digest>; a bare
+          # "sha256:..." argument does not resolve and silently yields a
+          # single-architecture tag.
+          DIGEST_AMD64=$(cat linux-amd64 | tr -d '"')
+          DIGEST_ARM64=$(cat linux-arm64 | tr -d '"')
           docker buildx imagetools create \
             -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag || github.ref_name }} \
-            $(cat /tmp/digests/*)
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@$DIGEST_AMD64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@$DIGEST_ARM64
 
       - name: Verify multi-arch image
         run: |
