@@ -162,6 +162,11 @@ VPN 链路重连次数超过 `count` 时触发进程重启，用于检测陈旧�
 
 ---
 
+### `--stats-json=<path|stdout>`
+
+把本机运行时统计以 NDJSON 写入 `path`（或 stdout）。每条记录包含运行时阶段、
+生效的 mux 模式、活跃 mux 链路数、链路计数与流量总量。默认关闭。
+
 ## 服务端输入
 
 ### `--block-quic=[yes|no]`
@@ -188,6 +193,12 @@ ppp --mode=server -c=./server.json --firewall-rules=/etc/ppp/firewall.txt
 
 选择客户端网络栈行为。`yes` 时使用 lwIP TCP/IP 栈处理虚拟 NIC 包；`no` 时走
 宿主网络栈路径。
+
+### `--tcp-stack=[native|lwip|xtcp]`
+
+选择客户端 TCP/IP 栈。`native` 走宿主栈，`lwip` 走 lwIP 栈，`xtcp` 走用户态 XTCP 栈。
+`xtcp` 是**仅 Linux** 的数据面：二进制必须编译并接好该栈；在其他平台上请求它会被
+**静默回退**到 `native`，以保证会话仍能进入 `connected`。
 
 ### `--vbgp=[yes|no]`
 
@@ -222,6 +233,19 @@ ppp --mode=client -c=./client.json --tun=ppp0
 # Windows
 ppp --mode=client -c=./client.json --tun="PPP Adapter"
 ```
+
+### `--proxy-http-port=<port>`
+
+代理模式下的本地 HTTP 代理监听端口（覆盖 `client.http-proxy.port`）。
+
+### `--proxy-socks-port=<port>`
+
+代理模式下的本地 SOCKS5 代理监听端口（覆盖 `client.socks-proxy.port`）。
+
+### `--set-http-proxy=[yes|no]`（仅 Windows）
+
+是否在非代理模式下把配置的 HTTP 代理写入系统代理环境。仅在 Windows 上解析
+（`#if defined(_WIN32)`），其他平台忽略。默认 `no`。
 
 ### `--tun-ip=<ip>`
 
@@ -471,6 +495,11 @@ ppp --pull-iplist ./cn.txt
 ```
 
 ---
+
+### `--transport-auth-key=<path>`
+
+生成 64 字符的 transport-auth secret，以 `0600` 权限写入 `path` 后退出。两端必须使用
+同一 secret；在配置文件的 `transport-auth.keys[].secret-file` 中引用它。
 
 ## Console UI 命令与布局
 
