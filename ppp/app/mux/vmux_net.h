@@ -57,21 +57,6 @@ namespace vmux {
             uint64_t                                                                total_sent_bytes_ = 0; ///< Lifetime bytes accepted by local write path. Strand-affine.
             ppp::app::mux::MuxLinkDrainState                                        drain_;            ///< Strand-affine in-flight write and retirement state.
             std::atomic<bool>                                                       handshake_complete_{false}; ///< True only after the carrier handshake succeeds. Atomic: written by the carrier handshake (under syncobj_), read lock-free on the vmux strand.
-
-            // Per-link path state (strand-affine, same domain as queued_bytes_).
-            // Updated from packet_input_ack on the vmux strand; used by PTO and
-            // fast-retransmit path-awareness. All in ms-tick units.
-            uint64_t                                                                srtt_ms_ = 0;       ///< Smoothed RTT (EWMA 7/8).
-            uint64_t                                                                rttvar_ms_ = 0;     ///< RTT variance (EWMA 3/4).
-            uint64_t                                                                min_rtt_ms_ = 0;    ///< Minimum observed RTT (floor).
-            bool                                                                    has_rtt_sample_ = false; ///< True after first RTT sample.
-
-            /** Unified "can this link accept new work?" predicate. All schedulability
-             *  checks (count_live_carriers, turbo, shrink, scheduler) MUST use this
-             *  instead of ad-hoc handshake/retiring combos. */
-            bool schedulable() const noexcept {
-                return handshake_complete_.load(std::memory_order_acquire) && !drain_.retiring();
-            }
         }                                                                           vmux_linklayer;
 
         typedef std::shared_ptr<vmux_linklayer>                                     vmux_linklayer_ptr;
@@ -258,7 +243,6 @@ namespace vmux {
             int64_t                                                                  deficit = 0;           ///< DRR deficit (bytes of send credit remaining this round).
             bool                                                                    quantum_due = true;     ///< Add a quantum before the next turn.
             bool                                                                    active = false;        ///< True while this cid is in active_tx_flows_.
-            uint32_t                                                                visit_count = 0;       ///< Frames popped from this flow in the current DRR visit (reset when requeued to back).
         };
 
         typedef vmux::unordered_map<uint32_t, vmux_skt_ptr>                         vmux_skt_map;
@@ -591,17 +575,15 @@ namespace vmux {
         /** @brief Process an inbound cmd_fec payload: cache the group, attempt single-loss recovery. */
         void                                                                        packet_input_fec(const vmux_linklayer_ptr& linklayer, Byte* buffer, int buffer_size, uint64_t now) noexcept;
         /** @brief Retain a just-sent reliable frame in the retransmit buffer (strand-affine). @return true when this was the first send of the frame. */
-        bool                                                                        track_sent_frame(const std::shared_ptr<Byte>& packet, int packet_length, uint64_t now, uint16_t link_id = 0) noexcept;
+        bool                                                                        track_sent_frame(const std::shared_ptr<Byte>& packet, int packet_length, uint64_t now) noexcept;
         /** @brief Record ACK/FEC state for one inbound frame before dispatch (strand-affine). */
         void                                                                        note_inbound_reliability_frame(const vmux_linklayer_ptr& linklayer, const std::shared_ptr<Byte>& frame, vmux_hdr* h, int length, uint64_t now) noexcept;
         /** @brief Latch the negotiated reliability/FEC flags and their config bounds (pre-establishment). */
         void                                                                        latch_reliability(bool agreed_reliability, bool agreed_fec) noexcept;
         /** @brief Re-send scheduled lost frames on live carriers, bounded per turn (strand-affine). */
         void                                                                        retransmit_pending(uint64_t now) noexcept;
-        /** @brief Current probe-timeout derived from the smoothed RTT estimate (session-level fallback). */
+        /** @brief Current probe-timeout derived from the smoothed RTT estimate. */
         uint64_t                                                                    current_pto() const noexcept;
-        /** @brief Per-link probe-timeout using QUIC-style SRTT+4*RTTVAR (falls back to session PTO when no sample). */
-        uint64_t                                                                    current_pto(const vmux_linklayer_ptr& linklayer) const noexcept;
         /** @brief Periodic reliability maintenance: ACK delay flush, PTO scan, FEC flush (strand-affine). */
         void                                                                        reliability_tick() noexcept;
         /** @brief Arm the reliability maintenance timer (no-op unless negotiated). */
@@ -909,11 +891,9 @@ namespace vmux {
         bool                                                                        fec_flush_due_ = false;   ///< Full FEC group awaiting deferred emission on the maintenance tick.
 
         ppp::app::mux::MuxRetransmitBuffer                                          rtx_;               ///< Sender-side retransmit buffer (strand-affine).
-        vmux::unordered_map<uint32_t, size_t>                                       rtx_flow_bytes_;    ///< Per-flow RTX byte usage (strand-affine, flow v2 only).
         vmux::unordered_map<uint32_t, ppp::app::mux::MuxAckTracker>                 ack_trackers_;      ///< Received-sequence trackers; cid 0 = compat global space (strand-affine).
         uint32_t                                                                    ack_pending_count_ = 0;      ///< Reliable frames received since the last emitted ACK.
         uint64_t                                                                    ack_first_pending_tick_ = 0; ///< Tick the oldest un-ACKed frame arrived (delayed-ACK base).
-        uint64_t                                                                    ack_last_sent_tick_ = 0;    ///< Tick the last ACK frame was emitted (suppresses redundant immediate ACKs).
         uint64_t                                                                    srtt_ms_ = 0;              ///< Smoothed RTT estimate in ms (0 = no sample yet).
         std::vector<uint64_t>                                                       rtx_pending_;       ///< Retransmit-buffer keys scheduled for re-send.
         std::shared_ptr<boost::asio::steady_timer>                                  reliability_timer_; ///< Maintenance timer (ACK delay / PTO / FEC flush).

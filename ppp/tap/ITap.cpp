@@ -13,7 +13,6 @@
 #include <ppp/tap/ITap.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/TelemetryFwd.h>
-#include <ppp/diagnostics/DatapathPerfJson.h>
 
 #if defined(_WIN32)
 #include <windows/ppp/tap/TapWindows.h>
@@ -474,8 +473,6 @@ namespace ppp
                     int len = std::max<int>(ec ? -1 : sz, -1);
                     if (len > 0)
                     {
-                        // Lab-only JSONL: successful kernel read completion count and bytes.
-                        ppp::diagnostics::datapath_perf::RecordTunRead(len);
                         PacketInputEventArgs e{ _packet, len };
                         OnInput(e);
                     }
@@ -550,8 +547,6 @@ namespace ppp
                         arm = true;
                     }
                 }
-                // Lab-only JSONL: packet accepted into the single async-write queue.
-                ppp::diagnostics::datapath_perf::RecordTunWriteEnqueued(packet_size);
 
                 if (arm)
                 {
@@ -568,17 +563,23 @@ namespace ppp
         };
 
         /**
-         * @brief Issues queued writes; completions re-enter on the strand.
-         *
-         * XTCP-STRAND-DISPATCH-001 (data-plane tier): the TAP fd is
-         * O_NONBLOCK, so a bounded synchronous drain amortizes one strand
-         * dispatch and one epoll round-trip over a whole burst of queued
-         * frames instead of one async_write completion per frame. On EAGAIN
-         * the packet is pushed back and a single async_write re-arms when the
-         * kernel queue drains.
+         * @brief Issues the next queued write; completions re-enter on the strand.
          */
         void ITap::DrainWriteQueue() noexcept
         {
+            std::pair<std::shared_ptr<Byte>, int> front;
+            {
+                std::lock_guard<std::mutex> scope(_write_mutex);
+                if (_write_queue.empty())
+                {
+                    _write_in_progress = false;
+                    return;
+                }
+
+                front = _write_queue.front();
+                _write_queue.pop_front();
+            }
+
             std::shared_ptr<boost::asio::posix::stream_descriptor> stream = GetStream();
             if (NULLPTR == stream || !stream->is_open())
             {
@@ -588,71 +589,12 @@ namespace ppp
                 return;
             }
 
-            static constexpr int kTapWriteBatch = 64;
-            int batch = kTapWriteBatch;
-            std::pair<std::shared_ptr<Byte>, int> front;
-            for (;;)
-            {
-                {
-                    std::lock_guard<std::mutex> scope(_write_mutex);
-                    if (_write_queue.empty())
-                    {
-                        _write_in_progress = false;
-                        return;
-                    }
-                    front = _write_queue.front();
-                    _write_queue.pop_front();
-                }
-
-                std::shared_ptr<Byte> packet = front.first;
-                ppp::diagnostics::datapath_perf::Scope write_scope;
-                boost::system::error_code ec;
-                const std::size_t sz = stream->write_some(boost::asio::buffer(packet.get(), front.second), ec);
-                if (ec == boost::asio::error::would_block)
-                {
-                    std::lock_guard<std::mutex> scope(_write_mutex);
-                    _write_queue.push_front(std::move(front));
-                    break;
-                }
-                if (!ec)
-                {
-                    // Lab-only JSONL: physical kernel-write completion bytes and post-to-completion time.
-                    ppp::diagnostics::datapath_perf::RecordTunWriteCompleted((int)sz, write_scope.Elapsed());
-                }
-                if (--batch == 0)
-                {
-                    break;
-                }
-            }
-
-            /**
-             * @brief Queue still has work (EAGAIN backoff or batch budget
-             *        exhausted): keep _write_in_progress and resume with one
-             *        async_write for the front packet; the completion handler
-             *        re-enters this drain.
-             */
-            {
-                std::lock_guard<std::mutex> scope(_write_mutex);
-                if (_write_queue.empty())
-                {
-                    _write_in_progress = false;
-                    return;
-                }
-                front = _write_queue.front();
-                _write_queue.pop_front();
-            }
-
             std::shared_ptr<Byte> packet = front.first;
-            ppp::diagnostics::datapath_perf::Scope write_scope;
             std::shared_ptr<ITap> self = shared_from_this();
             boost::asio::async_write(*stream, boost::asio::buffer(packet.get(), front.second),
                 boost::asio::bind_executor(*_strand,
-                    [self, this, stream, packet, write_scope](const boost::system::error_code& ec, std::size_t sz) noexcept
+                    [self, this, stream, packet](const boost::system::error_code& ec, std::size_t sz) noexcept
                     {
-                        // Lab-only JSONL: physical kernel-write completion bytes and post-to-completion time.
-                        if (!ec) {
-                            ppp::diagnostics::datapath_perf::RecordTunWriteCompleted((int)sz, write_scope.Elapsed());
-                        }
                         /**
                          * @brief Completion handler finalizes on cancellation errors.
                          */
@@ -699,6 +641,12 @@ namespace ppp
         bool ITap::Output(const std::shared_ptr<Byte>& packet, int packet_size) noexcept
         {
             return WritePacketToKernelNio::Invoke(this, packet, packet_size);
+        }
+
+        bool ITap::OutputGso(const std::shared_ptr<Byte>& packet, int packet_size, TxGsoMetadata) noexcept
+        {
+            /** @brief Default fallback: plain Output() path (no native GSO). */
+            return Output(packet, packet_size);
         }
     }
 }

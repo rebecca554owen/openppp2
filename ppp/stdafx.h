@@ -385,8 +385,7 @@ static constexpr int                                                        PPP_
 static constexpr int                                                        PPP_MUX_DEFAULT_CONGESTIONS     = 128 << 20; /* 134217728 */
 static constexpr int                                                        PPP_MUX_FLOW_REORDER_BYTES      = 1 << 20;  /* 1 MiB per-connection reorder cap (flow v2) */
 static constexpr int                                                        PPP_MUX_FLOW_REORDER_TIMEOUT    = 400;      /* gap wait timeout in ms (flow v2); near link RTT to bound stuck->self-heal */
-static constexpr int                                                        PPP_MUX_TX_FLOW_QUANTUM_BYTES  = 16 << 10; /* soft per-flow drain quantum before yielding to another cid (reduced from 64K to bound per-visit latency under Elephant+Mice) */
-static constexpr int                                                        PPP_MUX_TX_FLOW_MAX_VISIT_FRAMES = 8;      /* max frames popped from a single flow per DRR visit (prevents one flow monopolizing a drain turn) */
+static constexpr int                                                        PPP_MUX_TX_FLOW_QUANTUM_BYTES  = 64 << 10; /* soft per-flow drain quantum before yielding to another cid */
 static constexpr int                                                        PPP_MUX_LINK_BYTE_HIGH_WATER   = 256 << 10; /* per-link outstanding write bytes before refusing new sends */
 static constexpr int                                                        PPP_MUX_TURBO_SHRINK_DEPTH_RATIO = 10;      /* percent of tx high-water that arms shrink hold */
 static constexpr int                                                        PPP_MUX_TURBO_GROW_DEPTH_RATIO  = 50;       /* percent of tx high-water that arms grow hold */
@@ -404,10 +403,6 @@ static constexpr int                                                        PPP_
 static constexpr int                                                        PPP_MUX_TURBO_CONTROL_COOLDOWN  = 3000;     /* ms minimum interval between turbo pool grow/shrink steps (hysteresis vs jitter) */
 static constexpr int                                                        PPP_MUX_RELIABILITY_RTX_BYTES   = 32 << 20;  /* 32 MiB session-wide retransmit buffer byte cap */
 static constexpr int                                                        PPP_MUX_RELIABILITY_RTX_MAX_ATTEMPTS = 8;   /* per-frame retransmit attempts before flow/session teardown */
-static constexpr int                                                        PPP_MUX_TX_FLOW_MAX_FRAMES      = 256;      /* per-flow TX queue frame cap (DoS bound, prevents single flow monopolizing session) */
-static constexpr int                                                        PPP_MUX_TX_FLOW_MAX_BYTES       = 1 << 20;  /* 1 MiB per-flow TX queue byte cap */
-static constexpr int                                                        PPP_MUX_RTX_FLOW_MAX_BYTES      = 2 << 20;  /* 2 MiB per-flow retransmit buffer byte cap */
-static constexpr int                                                        PPP_MUX_TX_CTRL_MAX_FRAMES      = 256;      /* control frame queue hard cap (DoS bound) */
 static constexpr int                                                        PPP_MUX_RELIABILITY_ACK_DELAY   = 10;       /* ms max delayed-ACK wait before flushing an ACK frame */
 static constexpr int                                                        PPP_MUX_RELIABILITY_GAP_TIMEOUT = 3000;     /* ms gap timeout when reliability is negotiated (replaces the 400ms default) */
 static constexpr int                                                        PPP_MUX_RELIABILITY_PTO_INIT    = 500;      /* ms initial probe-timeout before any RTT sample */
