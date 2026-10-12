@@ -21,7 +21,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
 
         self.assertIn("actions: read", workflow)
-        self.assertIn("ref: ${{ inputs.tag }}", workflow)
+        # The workflow also supports non-dispatch triggers, so `inputs.tag`
+        # carries a `github.ref_name` fallback. The intent asserted here is
+        # unchanged: the checkout must resolve to the release tag's commit.
+        self.assertIn("ref: ${{ inputs.tag || github.ref_name }}", workflow)
         self.assertIn("fetch-depth: 0", workflow)
         self.assertIn('git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}"', workflow)
         self.assertIn('--commit="$RELEASE_SHA"', workflow)
