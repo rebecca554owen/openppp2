@@ -248,7 +248,7 @@ namespace ppp {
                 const StrandPtr&                                        strand,
                 const Int128&                                           id,
                 const std::shared_ptr<boost::asio::ip::tcp::socket>&    socket,
-                const ITransmissionStatisticsPtr&                        statistics) noexcept
+                const ITransmissionStatisticsPtr&                       statistics) noexcept
                 : disposed_(false)
                 , connected_(false)
                 , configuration_(configuration)
@@ -842,10 +842,6 @@ namespace ppp {
                     return false;
                 }
 
-                // Note: Traffic statistics are recorded by the underlying
-                // ITcpipTransmission layer (ITcpipTransmission::DoWriteBytes),
-                // so we do NOT record here to avoid double counting.
-
                 auto self = shared_from_this();
                 return transmission->Write(buffer.get(), bytes_transferred,
                     [self, this, buffer, buffer_size, bytes_transferred, transmission_write_accepted_scope](bool ok) noexcept {
@@ -1038,9 +1034,6 @@ namespace ppp {
                     if (ok) {
                         packets_to_socket++;
                         bytes_to_socket += packet_length;
-                        // Note: Traffic statistics are recorded by the underlying
-                        // ITcpipTransmission layer, so we do NOT record here
-                        // to avoid double counting.
                         Update();
                     }
                     else {

@@ -9,7 +9,6 @@
 #include <ppp/net/IPEndPoint.h>
 #include <ppp/net/native/rib.h>
 
-
 using ppp::telemetry::Level;
 
 namespace ppp {
@@ -22,11 +21,10 @@ namespace ppp {
 
             void PeerPrefixRouteManager::Clear() noexcept {
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                const route::RoutePlanInput input = owner_->BuildRoutePlanInput();
                 if (!owner_->proxy_only_) {
+                    const route::RoutePlanInput input = owner_->BuildRoutePlanInput();
                     for (const auto& route : owner_->applied_peer_prefix_routes_) {
-                        owner_->route_coordinator_->DeleteRoute(
-                            input, route.Destination, route.NextHop, route.Prefix);
+                        owner_->route_coordinator_->DeleteRoute(input, route.Destination, route.NextHop, route.Prefix);
                     }
                 }
 #endif
@@ -59,8 +57,11 @@ namespace ppp {
                     ? extensions.PeerRouteTable.routes
                     : owner_->dynamic_peer_routes_;
 #if !defined(_ANDROID) && !defined(_IPHONE)
-                const route::RoutePlanInput route_input = owner_->BuildRoutePlanInput();
                 const bool apply_host_routes = !owner_->proxy_only_;
+                route::RoutePlanInput route_input;
+                if (apply_host_routes) {
+                    route_input = owner_->BuildRoutePlanInput();
+                }
 #endif
 
                 auto install_route = [&](const ppp::app::protocol::PeerPrefixRouteEntry& route) -> bool {
@@ -91,8 +92,7 @@ namespace ppp {
                     if (!rib->AddRoute(network, route.prefix, via)) {
 #if !defined(_ANDROID) && !defined(_IPHONE)
                         if (apply_host_routes) {
-                            owner_->route_coordinator_->DeleteRoute(
-                                route_input, network, via, route.prefix);
+                            owner_->route_coordinator_->DeleteRoute(route_input, network, via, route.prefix);
                         }
 #endif
                         return false;
@@ -134,7 +134,7 @@ namespace ppp {
                     if (NULLPTR != fib) {
                         fib->Fill(*rib);
                         if (fib->IsAvailable()) {
-                            owner_->route_coordinator_->ReplacePeerPrefix(rib, fib);
+                owner_->route_coordinator_->ReplacePeerPrefix(rib, fib);
                         }
                     }
 
