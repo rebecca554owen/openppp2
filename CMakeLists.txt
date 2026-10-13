@@ -2,7 +2,7 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.0.0)
 
 # Define the solutions name.
 SET(NAME ppp)
-PROJECT(${NAME} VERSION 2.1.6.0 LANGUAGES C CXX)# CMAKE_CURRENT_SOURCE_DIR
+PROJECT(${NAME} VERSION 2.2.2.0 LANGUAGES C CXX)# CMAKE_CURRENT_SOURCE_DIR
 
 # Allow CI to inject a concrete version label (e.g. v2.2.0-<short sha>).
 # Overrides the hardcoded PPP_APPLICATION_VERSION default in ppp/stdafx.h.
