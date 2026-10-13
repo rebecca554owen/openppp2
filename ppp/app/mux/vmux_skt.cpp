@@ -1,5 +1,6 @@
 #include "vmux_skt.h"
 #include "vmux_net.h"
+#include <ppp/threading/BufferswapAllocator.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/transmissions/ITransmissionStatistics.h>
@@ -953,8 +954,39 @@ namespace vmux {
                                 close();
                                 return false;
                             }
+                            Byte* push_data = tx_buffer_.get();
+                            int push_size = bytes_transferred;
+                            if (client_data_transform_) {
+                                ppp::string rewritten;
+                                client_data_transform_(tx_buffer_.get(), bytes_transferred, rewritten);
+
+                                int rewritten_size = static_cast<int>(rewritten.size());
+                                if (rewritten_size < 1) {
+                                    if (forward_to_rx_socket()) {
+                                        return true;
+                                    }
+                                    close();
+                                    return false;
+                                }
+
+                                if (NULLPTR == rewrite_buffer_ || rewrite_buffer_size_ < rewritten_size) {
+                                    auto allocator = mux_ ? mux_->AppConfiguration->GetBufferAllocator() : NULLPTR;
+                                    rewrite_buffer_ = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, vmux_net::max_buffers_size);
+                                    rewrite_buffer_size_ = (NULLPTR != rewrite_buffer_) ? vmux_net::max_buffers_size : 0;
+                                }
+
+                                if (NULLPTR == rewrite_buffer_) {
+                                    close();
+                                    return false;
+                                }
+
+                                ::memcpy(rewrite_buffer_.get(), rewritten.data(), rewritten_size);
+                                push_data = rewrite_buffer_.get();
+                                push_size = rewritten_size;
+                            }
+
                             bool forwarding = 
-                                mux_->post(vmux_net::cmd_push, tx_buffer_.get(), bytes_transferred, connection_id_, status_.tx_acceleration_,
+                                mux_->post(vmux_net::cmd_push, push_data, push_size, connection_id_, status_.tx_acceleration_,
                                     [self, this](bool successed) noexcept {
                                         if (successed) {
                                             if (forward_to_rx_socket()) {

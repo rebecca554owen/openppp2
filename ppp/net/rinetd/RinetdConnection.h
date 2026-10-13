@@ -89,6 +89,26 @@ namespace ppp {
                 void                                                                    StartRemoteToTapRelay(const ppp::function<void(const void*, size_t)>& on_data) noexcept;
 #endif
 
+                /**
+                 * @brief Optional hook rewriting local->remote bytes before they are
+                 *        written to the remote socket. The HTTP proxy uses it to normalise
+                 *        request targets on a reused connection (RFC 7230 5.3.2).
+                 * @param data Bytes just read from the local socket.
+                 * @param size Number of bytes.
+                 * @param output Receives the bytes to forward; leave empty to buffer a
+                 *               partially received protocol unit and keep reading.
+                 * @return None.
+                 */
+                typedef ppp::function<void(const void*, int, ppp::string&)>              ClientDataTransform;
+
+                /**
+                 * @brief Installs the optional local->remote byte rewriting hook.
+                 * @param transform Callback invoked for every local read; unset disables.
+                 * @return None.
+                 * @note Must be set before Run() starts the forwarding loops.
+                 */
+                void                                                                    SetClientDataTransform(const ClientDataTransform& transform) noexcept { client_data_transform_ = transform; }
+
             public:
                 /** @brief Returns a shared reference to this object. */
                 std::shared_ptr<RinetdConnection>                                       GetReference()     noexcept { return shared_from_this(); }
@@ -160,6 +180,7 @@ namespace ppp {
                 std::shared_ptr<Byte>                                                   remote_buffer_;
                 std::shared_ptr<ppp::configurations::AppConfiguration>                  configuration_;
                 std::shared_ptr<ppp::transmissions::ITransmissionStatistics>          statistics_;
+                ClientDataTransform                                                     client_data_transform_; ///< Optional local->remote byte rewriting hook (HTTP proxy request rewrite).
             };
         }
     }

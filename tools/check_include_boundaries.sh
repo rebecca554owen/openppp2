@@ -39,7 +39,8 @@ fi
 # 105 -> 107: P2-f adds StaticUdpRelayHost.h + StaticDatagramPortManager.h for the static-echo table.
 # 107 -> 109: PMTU hardening adds VirtualEthernetPathMtu.h + VirtualEthernetTcpMss.h.
 # 109 -> 111: v2.2.0 AEAD adds AuthenticatedRecordProtector.h + RecordKeyDerivation.h.
-STDAFX_BASELINE=111
+# 111 -> 112: the HTTP proxy request rewriter adds HttpProxyRequestRewriter.h.
+STDAFX_BASELINE=112
 stdafx_count=$({ list_headers 'stdafx' ppp 2>/dev/null || true; } | wc -l | tr -d ' ')
 if [[ "$stdafx_count" -gt "$STDAFX_BASELINE" ]]; then
   echo "FAIL: stdafx in ppp/**/*.h increased ($stdafx_count > $STDAFX_BASELINE)"

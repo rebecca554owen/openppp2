@@ -842,6 +842,49 @@ namespace ppp {
                     return false;
                 }
 
+                // Optional client->peer rewriting hook (HTTP proxy request-target
+                // normalisation on a reused connection). Unset keeps the verbatim path.
+                ClientDataTransform transform = client_data_transform_;
+                if (transform) {
+                    ppp::string rewritten;
+                    transform(buffer.get(), bytes_transferred, rewritten);
+
+                    int rewritten_size = static_cast<int>(rewritten.size());
+                    if (rewritten_size < 1) {
+                        // The hook buffered a partially received protocol unit; keep reading.
+                        ForwardSocketToTransmissionOK(true, buffer, buffer_size);
+                        return true;
+                    }
+
+                    auto allocator = configuration_->GetBufferAllocator();
+                    std::shared_ptr<Byte> outgoing = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, rewritten_size);
+                    if (NULLPTR == outgoing) {
+                        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                        return false;
+                    }
+
+                    ::memcpy(outgoing.get(), rewritten.data(), rewritten_size);
+
+                    auto self = shared_from_this();
+                    return transmission->Write(outgoing.get(), rewritten_size,
+                        [self, this, buffer, buffer_size, outgoing, rewritten_size, transmission_write_accepted_scope](bool ok) noexcept {
+                            if (!ok) {
+                                ppp::telemetry::Log(ppp::telemetry::Level::kInfo,
+                                    "tcpip",
+                                    "socket->transmission write callback failed bytes=%d error=%d disposed=%s connected=%s",
+                                    rewritten_size,
+                                    (int)ppp::diagnostics::GetLastErrorCode(),
+                                    disposed_ ? "yes" : "no",
+                                    connected_ ? "yes" : "no");
+                            }
+                            else {
+                                ppp::diagnostics::datapath_perf::RecordTcpipBridgeTransmissionWriteAccepted(
+                                    rewritten_size, transmission_write_accepted_scope.Elapsed());
+                            }
+                            ForwardSocketToTransmissionOK(ok, buffer, buffer_size);
+                        });
+                }
+
                 auto self = shared_from_this();
                 return transmission->Write(buffer.get(), bytes_transferred,
                     [self, this, buffer, buffer_size, bytes_transferred, transmission_write_accepted_scope](bool ok) noexcept {
