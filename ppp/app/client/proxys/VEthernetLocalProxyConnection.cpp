@@ -193,6 +193,26 @@ namespace ppp {
                 }
 
                 /**
+                 * @brief Installs a client->peer byte rewriting hook on the active bridge.
+                 * @param transform Callback invoked for every client read; empty clears it.
+                 * @return None.
+                 * @note The vmux bridge does not expose the hook yet; it is a no-op there.
+                 */
+                void VEthernetLocalProxyConnection::SetClientPeerDataTransform(const ClientDataTransform& transform) noexcept {
+                    if (NULLPTR != connection_) {
+                        connection_->SetClientDataTransform(transform);
+                    }
+
+                    if (NULLPTR != connection_rinetd_) {
+                        connection_rinetd_->SetClientDataTransform(transform);
+                    }
+
+                    if (NULLPTR != connection_mux_) {
+                        connection_mux_->set_client_data_transform(transform);
+                    }
+                }
+
+                /**
                  * @brief Creates a bridge path in priority order: rinetd, mux, then transmission tunnel.
                  */
                 bool VEthernetLocalProxyConnection::ConnectBridgeToPeer(const std::shared_ptr<ppp::app::protocol::AddressEndPoint>& destinationEP, YieldContext& y) noexcept {
