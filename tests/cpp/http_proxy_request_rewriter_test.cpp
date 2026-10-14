@@ -155,3 +155,50 @@ BOOST_AUTO_TEST_CASE(origin_form_is_unchanged) {
 
     BOOST_TEST(Rewrite(raw) == raw);
 }
+
+/**
+ * @brief The reported SIGSEGV regression: a framing violation (repeated
+ *        Content-Length, the RFC 9112 6.1 smuggling shape) makes Fail() flush
+ *        line_ and the whole tail (p + i .. size) and switch to Passthrough.
+ *        Consume must fall out of the loop immediately — the Passthrough
+ *        branch at the top of the next iteration would otherwise append the
+ *        same tail a second time, doubling the bytes on the wire.
+ */
+BOOST_AUTO_TEST_CASE(fail_path_emits_trailing_bytes_exactly_once) {
+    const std::string head =
+        "GET /a HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Content-Length: 5\r\n"
+        "Content-Length: 6\r\n";
+    const std::string tail =
+        "GET /b HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "\r\n";
+
+    const std::string out = Rewrite(head + tail);
+
+    // Everything through the violating header line is forwarded once, then the
+    // remainder streams verbatim (Passthrough) — exactly once, never doubled.
+    const std::string expected = head + tail;
+    BOOST_TEST(out == expected);
+
+    // Byte-count guard independent of the exact framing above: the first and
+    // last occurrence of the tail request coincide iff it appears exactly once.
+    BOOST_TEST(out.find("GET /b HTTP/1.1") != std::string::npos);
+    BOOST_TEST(out.find("GET /b HTTP/1.1") == out.rfind("GET /b HTTP/1.1"));
+}
+
+/**
+ * @brief Locks the kMaxLineBytes path: an over-long line without a terminating
+ *        LF is cut off once and the remainder streams verbatim. This path
+ *        returns directly from Consume (a different control flow than the
+ *        EmitHeaderLine violations above) and must not double-emit either.
+ */
+BOOST_AUTO_TEST_CASE(overlong_line_is_flushed_once) {
+    const std::string long_line(10000, 'X'); // > kMaxLineBytes (8192), no '\n'
+    const std::string tail = "GET /b HTTP/1.1\r\n";
+
+    const std::string out = Rewrite(long_line + tail);
+
+    BOOST_TEST(out == long_line + tail);
+}

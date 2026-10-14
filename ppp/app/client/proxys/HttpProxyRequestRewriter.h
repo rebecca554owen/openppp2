@@ -50,7 +50,8 @@ namespace ppp {
                         content_length_ = -1;
                         chunk_left_ = false;
                         upgrade_ = false;
-                
+                        content_length_seen_ = false;
+
                         if (upgrade) {
                             state_ = State::Passthrough;
                         }
@@ -72,6 +73,12 @@ namespace ppp {
                      * @param size Byte count.
                      * @param out Receives the bytes to forward; stays empty while buffering.
                      * @return None.
+                     * @details On a framing violation (over-long line, unusable
+                     *          Content-Length, conflicting framing headers) the
+                     *          connection drops to verbatim passthrough and failed()
+                     *          becomes true. Passthrough keeps the tunnel usable while
+                     *          refusing to guess where this request ends, so the origin
+                     *          applies its own framing rules instead of ours.
                      */
                     void Consume(const void* data, int size, ppp::string& out) noexcept {
                         const char* p = static_cast<const char*>(data);
@@ -81,7 +88,7 @@ namespace ppp {
                                 out.append(p + i, static_cast<std::size_t>(size - i));
                                 return;
                             }
-                
+
                             if (state_ == State::Body || state_ == State::ChunkData) {
                                 int n = static_cast<int>(std::min<long long>(remaining_, size - i));
                                 out.append(p + i, static_cast<std::size_t>(n));
@@ -96,6 +103,14 @@ namespace ppp {
                             char ch = p[i++];
                             line_.push_back(ch);
                             if (ch != '\n') {
+                                // RFC 9112 3.1: a request line or header field that
+                                // never terminates would otherwise grow line_ without
+                                // bound, so a single peer could exhaust memory with one
+                                // connection and no valid request.
+                                if (line_.size() > kMaxLineBytes) {
+                                    Fail(out, p, i, size);
+                                    return;
+                                }
                                 continue;
                             }
                 
@@ -103,7 +118,7 @@ namespace ppp {
                                 EmitRequestLine(out);
                             }
                             elif(state_ == State::Headers) {
-                                EmitHeaderLine(out);
+                                EmitHeaderLine(out, p, i, size);
                             }
                             elif(state_ == State::ChunkSize) {
                                 EmitChunkSizeLine(out);
@@ -119,12 +134,82 @@ namespace ppp {
                                     state_ = State::RequestLine;
                                 }
                             }
-                
+
                             line_.clear();
+
+                            // A framing violation inside EmitHeaderLine flushed
+                            // line_ and the whole tail (p + i .. size) via Fail()
+                            // and switched to Passthrough. Fall out of the loop
+                            // now: the Passthrough branch at the top of the next
+                            // iteration would otherwise append the same tail a
+                            // second time.
+                            if (failed_) {
+                                return;
+                            }
                         }
                     }
                 
-                private:
+                public:
+                    /** @brief Whether a framing violation forced passthrough.
+                     *
+                     *  The bytes are still relayed; the origin applies its own framing
+                     *  rules from here on. This only reports that the rewriter stopped
+                     *  normalising the stream.
+                     */
+                    bool Failed() const noexcept { return failed_; }
+
+private:
+                    /** @brief Upper bound for an accepted Content-Length. */
+                    static constexpr long long                                   kMaxContentLength = 1LL << 30;
+
+                    /**
+                     * @brief Maximum bytes accepted for one request line or header line.
+                     * @details Matches the nginx large_client_header_buffers default. A
+                     *          peer that never sends '\n' is cut off at this bound.
+                     */
+                    static constexpr std::size_t                              kMaxLineBytes = 8192;
+
+                    /**
+                     * @brief Parses a Content-Length field value.
+                     * @return true when @p value is a decimal integer in [0, kMaxContentLength].
+                     */
+                    static bool TryParseContentLength(const ppp::string& value, int& parsed) noexcept {
+                        if (value.empty() || value.size() > 19) {
+                            return false;
+                        }
+                        long long acc = 0;
+                        for (std::size_t i = 0; i < value.size(); ++i) {
+                            const char c = value[i];
+                            if (c < '0' || c > '9') {
+                                return false;
+                            }
+                            acc = acc * 10 + (c - '0');
+                            if (acc > kMaxContentLength) {
+                                return false;
+                            }
+                        }
+                        parsed = static_cast<int>(acc);
+                        return true;
+                    }
+
+                    /**
+                     * @brief Stops rewriting and relays everything from here on.
+                     * @details Flushes whatever the current call had already buffered into
+                     *          @p out, then switches to Passthrough so the origin applies its
+                     *          own framing rules. We never guess a body boundary we cannot
+                     *          verify; leaving the connection usable is preferable to
+                     *          resynchronising on an assumption.
+                     */
+                    void Fail(ppp::string& out, const char* p, int i, int size) noexcept {
+                        out.append(line_);
+                        line_.clear();
+                        failed_ = true;
+                        state_ = State::Passthrough;
+                        if (p != NULLPTR && i < size) {
+                            out.append(p + i, static_cast<std::size_t>(size - i));
+                        }
+                    }
+
                     enum class State { RequestLine, Headers, Body, ChunkSize, ChunkData, ChunkDataCrlf, ChunkTrailer, Passthrough };
                 
                     static char ToLowerAsciiChar(char c) noexcept {
@@ -222,7 +307,7 @@ namespace ppp {
                     }
                 
                     /** @brief Filters one header line and drives the body framing. */
-                    void EmitHeaderLine(ppp::string& out) noexcept {
+                    void EmitHeaderLine(ppp::string& out, const char* p, int i, int size) noexcept {
                         if (line_.size() <= 2) {
                             out.append(line_);
                             if (upgrade_) {
@@ -238,9 +323,11 @@ namespace ppp {
                             else {
                                 state_ = State::RequestLine;
                             }
+                            line_.clear();
+                            content_length_seen_ = false;
                             return;
                         }
-                
+
                         std::size_t colon = line_.find(':');
                         if (colon == ppp::string::npos) {
                             out.append(line_);
@@ -251,11 +338,43 @@ namespace ppp {
                         ppp::string value = Trim(line_.substr(colon + 1));
                 
                         if (name == "content-length") {
-                            content_length_ = atoi(value.data());
+                            // RFC 9110 8.6: the value must be a non-negative decimal
+                            // integer. atoi() saturates silently on overflow, which
+                            // desynchronises the framing from the origin's, so parse it
+                            // explicitly and treat anything unusable as a violation.
+                            if (content_length_seen_ || chunk_left_ || !TryParseContentLength(value, parsed_length_)) {
+                                // A repeated Content-Length, or one sent alongside
+                                // Transfer-Encoding, is the request-smuggling shape
+                                // RFC 9112 6.1 warns about: we and the origin could
+                                // pick different body boundaries from the same bytes.
+                                Fail(out, p, i, size);
+                                return;
+                            }
+                            content_length_seen_ = true;
+                            content_length_ = parsed_length_;
                         }
                         elif(name == "transfer-encoding") {
+                            if (content_length_seen_) {
+                                // Transfer-Encoding after Content-Length is the same
+                                // smuggling shape as the reverse order; the origin
+                                // applies its own precedence rule and we would not
+                                // agree with it.
+                                Fail(out, p, i, size);
+                                return;
+                            }
                             if (ToLowerAscii(value).find("chunked") != ppp::string::npos) {
                                 chunk_left_ = true;
+                            }
+                            else {
+                                // A transfer-coding we do not parse (gzip, compress, ...)
+                                // defines the body boundaries and we cannot track them.
+                                // Staying in rewrite mode here would leave the state
+                                // machine believing the request has no body, so every
+                                // later request on the connection would be parsed at the
+                                // wrong offset. Hand the connection to the origin verbatim
+                                // instead of guessing.
+                                Fail(out, p, i, size);
+                                return;
                             }
                             out.append(line_);
                             return;
@@ -316,8 +435,11 @@ namespace ppp {
                     ppp::string                         line_;
                     long long                           remaining_ = 0;
                     int                                 content_length_ = -1;
+                    int                                 parsed_length_ = 0;
+                    bool                                content_length_seen_ = false;
                     bool                                chunk_left_ = false;
                     bool                                upgrade_ = false;
+                    bool                                failed_ = false;
                     std::vector<ppp::string>            hop_by_hop_; ///< Tokens named by Connection plus the fixed hop-by-hop set.
                 };
                 
