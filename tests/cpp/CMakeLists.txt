@@ -115,6 +115,20 @@ function(openppp2_add_cpp_test target)
         -Wno-format
         -Wno-deprecated-declarations
         -Wno-tautological-constant-out-of-range-compare
+        # Both of the following match the top-level CMakeLists.txt.  The test
+        # tree is configured independently and had drifted from it.
+        #
+        # -Winconsistent-missing-override: the websocket template specialises
+        # HandshakeWebsocket over a narrower socket parameter, which is an
+        # overload rather than an override.  This diagnostic matches on the
+        # name alone and then tells you to add a keyword the compiler rejects.
+        -Wno-inconsistent-missing-override
+        # stdafx.h's nullof() deliberately binds a null pointer to a reference
+        # as a placeholder; callers never dereference it.
+        -Wno-null-dereference
+        # ppp/net/http/httplib.h is vendored cpp-httplib (MIT, Yuji Hirose) and
+        # declares operator"" _t with a space, which C++20 deprecated.
+        -Wno-deprecated-literal-operator
     )
     target_compile_definitions(${target} PRIVATE FUNCTION)
     if(ENABLE_COVERAGE)

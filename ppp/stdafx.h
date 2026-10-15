@@ -1318,8 +1318,11 @@ namespace ppp {
             return true;
         }
 
-        if (ch > -1 && ch < 128) {
-            return ::isspace(ch);
+        // char is signed here, so a byte with the high bit set arrives
+        // negative and ::isspace() would be undefined on it.  The range
+        // check is the guard, not a redundant bound.
+        if (static_cast<unsigned char>(ch) < 128) {
+            return ::isspace(static_cast<unsigned char>(ch));
         }
 
         return false;

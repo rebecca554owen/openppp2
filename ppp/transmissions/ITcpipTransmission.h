@@ -75,7 +75,7 @@ namespace ppp {
              * @param length Requested number of bytes.
              * @return Byte buffer on success; null on failure.
              */
-            virtual std::shared_ptr<Byte>                                                       DoReadBytes(YieldContext& y, int length) noexcept;
+            virtual std::shared_ptr<Byte>                                                       DoReadBytes(YieldContext& y, int length) noexcept override;
             /**
              * @brief Asynchronously writes a byte range to the socket.
              * @param packet Buffer that owns payload memory.
@@ -84,7 +84,7 @@ namespace ppp {
              * @param cb Completion callback receiving success state.
              * @return true if write is scheduled; otherwise false.
              */
-            virtual bool                                                                        DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept;
+            virtual bool                                                                        DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept override;
 
         private:
             /** @brief Performs one-time cleanup of socket-related resources. */
