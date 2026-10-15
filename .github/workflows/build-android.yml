@@ -18,14 +18,13 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   ANDROID_API: "21"
   BOOST_VERSION: "1.92.0"
-  OPENSSL_VERSION: "4.0.2"
+  OPENSSL_VERSION: "4.0.3"
   NDK_VERSION: "r29"
-  CACHE_VERSION: "v2.2.0"
 
 jobs:
   build:
     name: Android ${{ matrix.abi }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -65,19 +64,54 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Cache NDK and dependencies
-        id: cache-ndk
+      # Caches only the *built* artifacts, never the toolchain or the sources.
+      # The NDK alone was ~720 MB compressed per ABI and re-downloads in ~19 s,
+      # and the Boost/OpenSSL source trees added ~500 MB more that `make` would
+      # only rebuild. Together they pushed this repository over its 10 GB cache
+      # quota, which evicted the caches other workflows depend on.
+      #
+      # NDK_VERSION stays in the key even though the NDK is no longer stored
+      # here: it is the toolchain that *produced* the Boost and OpenSSL archives
+      # in this entry, so bumping it without changing the key would go on to
+      # link a newer NDK against archives the older one compiled. The same
+      # reasoning applies to BOOST_VERSION and OPENSSL_VERSION -- actions/cache
+      # never overwrites an existing key, so an unchanged key would keep serving
+      # a stale entry forever.
+      # One cache entry per dependency, so bumping Boost or OpenSSL leaves the
+      # other alone. Keys are exact-match only on purpose: a restore-keys prefix
+      # hit restores the tree but still reports cache-hit=false, so the build step
+      # reruns on top of what was just restored. And because a partial hit forces
+      # the rebuild anyway, the prefix match saves nothing -- a version bump should
+      # be a clean cold build of that one dependency.
+      #
+      # NDK_VERSION is deliberately not part of either key. The NDK itself is no
+      # longer cached, but it is the toolchain that produces these archives, so in
+      # principle the key should carry it. It is left out because each release is
+      # cut from a new tag, and a new tag is a new cache scope in its own right --
+      # the guard could only ever fire if NDK_VERSION were bumped in place without
+      # cutting a release. If you bump NDK_VERSION, bump these keys along with it.
+      - name: Cache Boost
+        id: cache-boost
         uses: actions/cache@v5
         with:
+          # boost-src carries the headers that BOOST_ANDROID_INCLUDE_DIR points at;
+          # boost/<abi> carries the archives. Both have to come back together.
           path: |
-            ${{ runner.temp }}/ndk
-            ${{ runner.temp }}/third-party
-          key: android-${{ matrix.abi }}-ndk${{ env.NDK_VERSION }}-deps-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}
-          restore-keys: |
-            android-${{ matrix.abi }}-ndk${{ env.NDK_VERSION }}-deps-v2-
+            ${{ runner.temp }}/third-party/boost-src
+            ${{ runner.temp }}/third-party/boost
+          key: android-${{ matrix.abi }}-boost${{ env.BOOST_VERSION }}
 
+      - name: Cache OpenSSL
+        id: cache-openssl
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/third-party/openssl
+          key: android-${{ matrix.abi }}-openssl${{ env.OPENSSL_VERSION }}
+
+      # Intentionally not cached and not guarded by the cache-hit check: the
+      # download is cheap, and skipping it on a hit is what used to leave the
+      # build without a toolchain.
       - name: Download NDK ${{ env.NDK_VERSION }}
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           mkdir -p "${{ runner.temp }}/ndk" && cd "${{ runner.temp }}/ndk"
@@ -110,7 +144,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build OpenSSL for Android ${{ matrix.abi }}
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        if: steps.cache-openssl.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           archive="$TP/openssl-${OPENSSL_VERSION}.tar.gz"
@@ -142,7 +176,7 @@ jobs:
           make install_sw
 
       - name: Build Boost for Android ${{ matrix.abi }}
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        if: steps.cache-boost.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           boost_lib_version="$(printf '%s' "$BOOST_VERSION" | sed 's/\./_/g')"
@@ -214,6 +248,23 @@ jobs:
             test -f "$BOOST_OUT_DIR/libboost_${lib}.a"
           done
 
+      # Trim the tree down to what "Build openppp2" actually reads, so the cache
+      # stops carrying ~1.2 GB of re-downloadable source per ABI. Everything
+      # removed here is refetched by the same step in seconds, and this runs
+      # *before* the verification step below on purpose: a wrong path fails this
+      # run loudly instead of poisoning the next cache hit.
+      - name: Trim re-downloadable sources before caching
+        run: |
+          set -euo pipefail
+          # Boost headers stay (BOOST_ANDROID_INCLUDE_DIR points at the source
+          # tree); the 1.0 GB of per-library build trees and docs do not.
+          rm -rf "$BOOST_SRC_DIR/libs" "$BOOST_SRC_DIR/doc" "$BOOST_SRC_DIR/tools" \
+                 "$BOOST_SRC_DIR/status" "$BOOST_SRC_DIR/bin.v2"
+          rm -rf "$BOOST_OUT_DIR/build"
+          # OpenSSL is consumed through OPENSSL_ANDROID_ROOT, which holds both
+          # include/ and lib/, so the entire build tree is disposable.
+          rm -rf "$OPENSSL_SRC_DIR"
+
       - name: Verify Android third-party dependencies
         run: |
           set -euo pipefail
@@ -275,7 +326,7 @@ jobs:
   build-apk:
     name: Build Flutter APK
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
 
     steps:
@@ -377,7 +428,7 @@ jobs:
 
   device-test:
     name: Android instrumented device test (x86_64 emulator)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     timeout-minutes: 60
 

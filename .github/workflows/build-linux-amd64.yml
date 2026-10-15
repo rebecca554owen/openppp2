@@ -16,9 +16,8 @@ concurrency:
 
 env:
   BOOST_VERSION: "1.92.0"
-  OPENSSL_VERSION: "4.0.2"
-  JEMALLOC_VERSION: "5.3.1"
-  RUNNER_IMAGE: "ubuntu-22.04"
+  OPENSSL_VERSION: "4.0.3"
+  JEMALLOC_VERSION: "5.4.0"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -41,28 +40,53 @@ jobs:
             autoconf clang libbenchmark-dev \
             liburing-dev libbpf-dev
 
-      - name: Cache third-party libraries
-        id: cache-third
+      # Built archives only. The Boost and OpenSSL source trees, plus the .o
+      # files left behind by `make`, used to turn this into a ~600 MB entry.
+      # Changing what is cached means bumping one of the version variables
+      # above; actions/cache never overwrites an existing key.
+      # One cache entry per dependency, so bumping one version leaves the other
+      # two alone instead of rebuilding all three from source. Keys are
+      # exact-match only on purpose: a restore-keys prefix hit restores the tree
+      # but still reports cache-hit=false, so the build step reruns on top of
+      # what was just restored.
+      - name: Cache Boost
+        id: cache-boost
         uses: actions/cache@v5
         with:
-          path: ${{ github.workspace }}/third-party
-          key: linux-amd64-deps-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
-          restore-keys: |
-            linux-amd64-deps-v2-
+          path: ${{ github.workspace }}/third-party/boost
+          key: linux-amd64-boost${{ env.BOOST_VERSION }}
+
+      - name: Cache OpenSSL
+        id: cache-openssl
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/third-party/openssl
+          key: linux-amd64-openssl${{ env.OPENSSL_VERSION }}
+
+      - name: Cache jemalloc
+        id: cache-jemalloc
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/third-party/jemalloc
+          key: linux-amd64-jemalloc${{ env.JEMALLOC_VERSION }}
 
       - name: Build Boost
-        if: steps.cache-third.outputs.cache-hit != 'true'
+        if: steps.cache-boost.outputs.cache-hit != 'true'
         run: |
           mkdir -p third-party && cd third-party
           wget -q "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION//./_}.tar.bz2"
           tar jxf boost_*.tar.bz2 && rm boost_*.tar.bz2
+          # Idempotent: a restored cache or a re-run can leave third-party/boost
+          # behind, and a bare `mv` into a non-empty directory fails. build-macos,
+          # build-linux-cross and build-android already clear it first.
+          rm -rf boost
           mv boost_* boost
           cd boost && ./bootstrap.sh && ./b2 cxxflags=-fPIC -j$(nproc)
           # Boost 1.89+ system is header-only; create empty archive for linker compatibility
           touch /tmp/empty.c && cc -c /tmp/empty.c -o /tmp/empty.o && ar rcs stage/lib/libboost_system.a /tmp/empty.o && rm -f /tmp/empty.c /tmp/empty.o
 
       - name: Build OpenSSL
-        if: steps.cache-third.outputs.cache-hit != 'true'
+        if: steps.cache-openssl.outputs.cache-hit != 'true'
         run: |
           mkdir -p third-party && cd third-party
           wget -q "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
@@ -71,13 +95,32 @@ jobs:
           cd openssl && ./Configure && make -j$(nproc)
 
       - name: Build jemalloc
-        if: steps.cache-third.outputs.cache-hit != 'true'
+        if: steps.cache-jemalloc.outputs.cache-hit != 'true'
         run: |
           mkdir -p third-party && cd third-party
           wget -q "https://github.com/jemalloc/jemalloc/releases/download/${JEMALLOC_VERSION}/jemalloc-${JEMALLOC_VERSION}.tar.bz2"
           tar jxf jemalloc-*.tar.bz2 && rm jemalloc-*.tar.bz2
           mv jemalloc-* jemalloc
           cd jemalloc && ./autogen.sh --with-jemalloc-prefix=je_ && make -j$(nproc)
+
+      # Trim each cached tree down to the headers and archives the link step
+      # reads, so the cache stops carrying ~450 MB of source that any future miss
+      # would refetch in seconds. third-party/xtcp and third-party/.cache are no
+      # longer cached at all: prepare_xtcp.sh re-fetches its small checksummed
+      # archive every run and is idempotent, which is cheaper than the hard
+      # failure a stale xtcp tree restored from cache would cause.
+      - name: Trim re-downloadable sources before caching
+        run: |
+          set -euo pipefail
+          TP="${{ github.workspace }}/third-party"
+          # Keep boost/boost (the include root CMake points at) and boost/stage.
+          rm -rf "$TP/boost/libs" "$TP/boost/doc" "$TP/boost/tools" \
+                 "$TP/boost/status" "$TP/boost/bin.v2"
+          # include/openssl/*.h are symlinks into ../crypto and ../ssl, so the
+          # .h files have to survive; only the .o files are disposable.
+          rm -rf "$TP/openssl/fuzz" "$TP/openssl/test" "$TP/openssl/openssl"
+          find "$TP/openssl" "$TP/jemalloc" -name '*.o' -delete
+          rm -rf "$TP/jemalloc/autom4te.cache"
 
       - name: Compute version label
         id: ver
@@ -172,23 +215,27 @@ jobs:
             build-essential cmake curl wget \
             libbenchmark-dev libssl-dev
 
-      # Restore only.  The build matrix owns this cache key, so this job must not
-      # write a Boost-only tree back into it.
-      - name: Restore third-party libraries
-        id: cache-third
+      # Restore only, and Boost only: this job links against the system OpenSSL
+      # and jemalloc (apt's libssl-dev plus find_library), so third-party/boost
+      # is the only tree it needs. The build matrix owns these keys, so this job
+      # must not write anything back.
+      - name: Restore Boost
+        id: cache-boost
         uses: actions/cache/restore@v5
         with:
-          path: ${{ github.workspace }}/third-party
-          key: linux-amd64-deps-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
-          restore-keys: |
-            linux-amd64-deps-v2-
+          path: ${{ github.workspace }}/third-party/boost
+          key: linux-amd64-boost${{ env.BOOST_VERSION }}
 
       - name: Build Boost
-        if: steps.cache-third.outputs.cache-hit != 'true'
+        if: steps.cache-boost.outputs.cache-hit != 'true'
         run: |
           mkdir -p third-party && cd third-party
           wget -q "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION//./_}.tar.bz2"
           tar jxf boost_*.tar.bz2 && rm boost_*.tar.bz2
+          # Idempotent: a restored cache or a re-run can leave third-party/boost
+          # behind, and a bare `mv` into a non-empty directory fails. build-macos,
+          # build-linux-cross and build-android already clear it first.
+          rm -rf boost
           mv boost_* boost
           cd boost && ./bootstrap.sh && ./b2 cxxflags=-fPIC -j$(nproc)
 

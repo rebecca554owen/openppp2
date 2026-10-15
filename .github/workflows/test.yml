@@ -18,7 +18,7 @@ jobs:
   lifecycle-sanitizers:
     name: Lifecycle ASan and UBSan
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - name: Install dependencies
@@ -31,7 +31,7 @@ jobs:
   cpp-tsan:
     name: C++ ThreadSanitizer
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - name: Install dependencies
@@ -43,7 +43,7 @@ jobs:
 
   cpp-linux:
     name: C++ unit tests (Linux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
@@ -130,7 +130,7 @@ jobs:
 
   go:
     name: Go unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: go/guardian
@@ -158,7 +158,7 @@ jobs:
 
   flutter:
     name: Flutter unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: android
@@ -188,7 +188,7 @@ jobs:
 
   ios-simulator:
     name: iOS unit tests (simulator)
-    runs-on: macos-latest
+    runs-on: macos-26
     defaults:
       run:
         working-directory: ios/App

@@ -19,10 +19,9 @@ concurrency:
 
 env:
   BOOST_VERSION: "1.92.0"
-  OPENSSL_VERSION: "4.0.2"
-  JEMALLOC_VERSION: "5.3.1"
+  OPENSSL_VERSION: "4.0.3"
+  JEMALLOC_VERSION: "5.4.0"
   LIBUNWIND_VERSION: "1.8.1"
-  RUNNER_IMAGE: "ubuntu-22.04"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -45,17 +44,46 @@ jobs:
             gcc-${{ matrix.apt_pkg }} g++-${{ matrix.apt_pkg }} \
             binutils-${{ matrix.apt_pkg }}
 
-      - name: Cache third-party libraries (source-built)
-        id: cache-third
+      # Caches the built archives only. The Boost and OpenSSL source trees plus
+      # the .o files `make` leaves behind used to make this a ~1 GB entry for a
+      # single architecture, which is more than this repository's entire Android
+      # cache budget. Changing what is cached means bumping one of the version
+      # variables above -- actions/cache never overwrites an existing key.
+      # One cache entry per dependency, so bumping one version leaves the other
+      # three alone instead of rebuilding all of them from source. Keys are
+      # exact-match only on purpose: a restore-keys prefix hit restores the tree
+      # but still reports cache-hit=false, so the build step reruns on top of
+      # what was just restored.
+      - name: Cache Boost (source-built)
+        id: cache-boost
         uses: actions/cache@v5
         with:
-          path: ${{ github.workspace }}/third-party
-          key: linux-${{ matrix.third_dir }}-deps-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
-          restore-keys: |
-            linux-${{ matrix.third_dir }}-deps-v2-
+          path: ${{ github.workspace }}/third-party/boost
+          key: linux-${{ matrix.third_dir }}-boost${{ env.BOOST_VERSION }}
+
+      - name: Cache OpenSSL (source-built)
+        id: cache-openssl
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/third-party/openssl
+          key: linux-${{ matrix.third_dir }}-openssl${{ env.OPENSSL_VERSION }}
+
+      - name: Cache jemalloc (source-built)
+        id: cache-jemalloc
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/third-party/jemalloc
+          key: linux-${{ matrix.third_dir }}-jemalloc${{ env.JEMALLOC_VERSION }}
+
+      - name: Cache libunwind (source-built)
+        id: cache-libunwind
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/third-party/libunwind
+          key: linux-${{ matrix.third_dir }}-libunwind${{ env.LIBUNWIND_VERSION }}
 
       - name: Build Boost (cross-compiled)
-        if: steps.cache-third.outputs.cache-hit != 'true'
+        if: steps.cache-boost.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
           boost_version_underscore="${BOOST_VERSION//./_}"
@@ -99,7 +127,7 @@ jobs:
           touch /tmp/empty.c && ${{ matrix.tool_prefix }}gcc -c /tmp/empty.c -o /tmp/empty.o && ${{ matrix.tool_prefix }}ar rcs stage/lib/libboost_system.a /tmp/empty.o && rm -f /tmp/empty.c /tmp/empty.o
 
       - name: Build OpenSSL (cross-compiled)
-        if: steps.cache-third.outputs.cache-hit != 'true'
+        if: steps.cache-openssl.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
           openssl_root="$GITHUB_WORKSPACE/third-party/openssl"
@@ -114,7 +142,7 @@ jobs:
           make -j"$(nproc)"
 
       - name: Build jemalloc (cross-compiled)
-        if: steps.cache-third.outputs.cache-hit != 'true'
+        if: steps.cache-jemalloc.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
           jemalloc_root="$GITHUB_WORKSPACE/third-party/jemalloc"
@@ -129,7 +157,7 @@ jobs:
           make -j"$(nproc)"
 
       - name: Build libunwind (cross-compiled)
-        if: steps.cache-third.outputs.cache-hit != 'true'
+        if: steps.cache-libunwind.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
           cd "$RUNNER_TEMP"
@@ -162,6 +190,28 @@ jobs:
             ${{ matrix.tool_prefix }}readelf -h "$d/$obj" | grep -q "Machine:.*${{ matrix.readelf_hint }}"
             rm -rf "$d"
           done
+
+      # Trim the tree down to the headers and archives the link step reads. The
+      # Boost/OpenSSL source trees plus the .o files `make` scatters through
+      # them are worth ~850 MB here and are refetched in seconds when missing.
+      # This runs on cache hits too, where every build step above was skipped,
+      # so each removal has to stay a no-op when the path is already gone.
+      - name: Trim re-downloadable sources before caching
+        run: |
+          set -euo pipefail
+          TP="${{ github.workspace }}/third-party"
+          # Keep boost/boost (the include root CMake points at) and boost/stage.
+          rm -rf "$TP/boost/libs" "$TP/boost/doc" "$TP/boost/tools" \
+                 "$TP/boost/status" "$TP/boost/bin.v2"
+          # Keep include/ and the two archives; include/openssl/*.h are symlinks
+          # into ../crypto and ../ssl, so those .h files must survive -- which
+          # is why only the .o files go.
+          rm -rf "$TP/openssl/fuzz" "$TP/openssl/test" "$TP/openssl/openssl"
+          find "$TP/openssl" "$TP/jemalloc" -name '*.o' -delete
+          rm -rf "$TP/jemalloc/autom4te.cache"
+          # libunwind is only ever consumed through -L.../libunwind/lib.
+          find "$TP/libunwind" -mindepth 1 -maxdepth 1 \
+            ! -name lib ! -name include -exec rm -rf {} +
 
       - name: Compute version label
         id: ver
