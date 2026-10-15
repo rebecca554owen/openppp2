@@ -523,31 +523,68 @@ namespace ppp {
         }
 
         /**
-         * @brief Emits a telemetry warning when the configured cipher algorithm is an explicit GCM (AEAD) name.
+         * @brief Warns that an explicit GCM cipher on the legacy data path reuses its
+         *        nonce across sessions.
+         *
+         * The record layer (AuthenticatedRecordProtector) is the only path that gives
+         * GCM a per-record sequence-derived nonce.  Without transport-auth the data
+         * path falls back to EVP::initKey, which derives the IV deterministically from
+         * the password via EVP_BytesToKey(EVP_md5()) — the same IV for every session
+         * under the same key.  Reusing a GCM nonce across sessions leaks the GHASH
+         * subkey and enables forgeries, so a deployment in that combination is
+         * compromised, not merely unoptimised.
+         *
+         * This warns rather than refuses to start: the condition is per role, and a
+         * peer that never runs that role is unaffected. Refusing would break working
+         * configurations, so the message names the role and the exact migration.
+         *
+         * @param field Configuration field name ("protocol" / "transport").
+         * @param method Cipher algorithm name.
+         * @param role "client" or "server" — which role would take the legacy path.
+         * @param role_active Whether transport-auth is enabled for @p role.
+         */
+        /**
+         * @brief Emits the explicit-GCM advisory when a role would run the legacy data path.
          *
          * A plain GCM name (e.g. "aes-256-gcm") is kept as-is and never promoted to the
-         * unauthenticated SIMD GCM variant; the authenticated record layer is only
-         * installed after the transport-auth handshake completes, so explicit GCM
-         * configuration without transport-auth ARP activation cannot carry tags on the
-         * legacy equal-length data path.  Names starting with "simd-" request the
-         * unauthenticated SIMD variant on purpose and are not warned about.
+         * unauthenticated SIMD GCM variant.  That name only works once the authenticated
+         * record layer is installed, i.e. once transport-auth has completed for the role
+         * that carries it — and the legacy equal-length data path cannot carry tags at
+         * all, because it also derives the GCM IV deterministically from the password.
+         *
+         * The warning is therefore role-scoped, exactly like the nonce-reuse advisory:
+         * Loaded() normalises both roles at once, and a role with transport-auth enabled
+         * runs the record layer, so telling its operator to enable transport-auth would be
+         * telling them to do the thing they already did.  Names starting with "simd-"
+         * request the unauthenticated variant on purpose and are not warned about.
          *
          * @param field Configuration field name ("protocol" / "transport").
          * @param method Cipher algorithm name (e.g. "aes-256-gcm").
+         * @param role "client" or "server" — which role would take the legacy path.
+         * @param role_active Whether transport-auth is enabled for @p role.
          */
-        static void WarnExplicitGcmCipher(const ppp::string& field, const ppp::string& method) noexcept {
+        static void WarnLegacyGcmNonceReuse(const ppp::string& field,
+            const ppp::string& method, const char* role, bool role_active) noexcept {
+            if (role_active) {
+                return;   // record layer installed; per-record nonce, no reuse
+            }
             if (method.empty() || method.compare(0, 5, "simd-") == 0) {
-                return;
+                return;   // simd- names select the unauthenticated variant on purpose
             }
-
             if (ToLower(method).find("gcm") == ppp::string::npos) {
-                return;
+                return;   // not an AEAD cipher; the legacy path is fine for it
             }
 
-            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "config",
-                "key.%s uses explicit gcm cipher; data path requires transport-auth ARP activation, keep simd-*-cfb otherwise",
-                field.c_str());
+            ppp::telemetry::Warn("config",
+                "key.%s is an explicit gcm cipher but transport-auth is not enabled for the %s "
+                "role: the legacy data path is equal-length and cannot carry tags, and it "
+                "derives its IV deterministically from the password (EVP_BytesToKey/EVP_md5), "
+                "so every %s session under the same key reuses the same GCM nonce. That leaks "
+                "the GHASH subkey and permits forgery. Migrate by enabling transport-auth for "
+                "%s, or set key.%s to a non-AEAD cipher (e.g. aes-256-cfb / simd-aes-*-cfb).",
+                field.c_str(), role, role, role, field.c_str());
         }
+
 
         /**
          * @brief Trims selected string fields from configuration groups.
@@ -1153,11 +1190,19 @@ namespace ppp {
                 WarnLegacyCipherAlgorithm(config.key.protocol);
                 WarnLegacyCipherAlgorithm(config.key.transport);
 
-                /* Explicit GCM (AEAD) algorithm names are preserved (never promoted to
-                 * the unauthenticated SIMD GCM variant); warn that the authenticated
-                 * data path requires transport-auth ARP activation. */
-                WarnExplicitGcmCipher("protocol", config.key.protocol);
-                WarnExplicitGcmCipher("transport", config.key.transport);
+                /* Legacy-path GCM hazard. Loaded() normalises both roles at once, so each
+                 * field is checked against the role that would actually use it: a
+                 * server-only process never runs the client path, and vice versa.  Each
+                 * warning therefore describes a reachable combination, and a role that
+                 * already has transport-auth enabled stays silent. */
+                WarnLegacyGcmNonceReuse("protocol", config.key.protocol,
+                    "client", config.client.transport_auth.enabled);
+                WarnLegacyGcmNonceReuse("transport", config.key.transport,
+                    "client", config.client.transport_auth.enabled);
+                WarnLegacyGcmNonceReuse("protocol", config.key.protocol,
+                    "server", config.server.transport_auth.enabled);
+                WarnLegacyGcmNonceReuse("transport", config.key.transport,
+                    "server", config.server.transport_auth.enabled);
 
                 /* EVP::initKey currently derives keys via EVP_BytesToKey(..., EVP_md5(), ...).
                  * This informational warning documents the legacy KDF debt without changing behavior. */

@@ -180,6 +180,7 @@ namespace ppp {
 
             const char* LevelColor(Level level) noexcept {
                 switch (level) {
+                    case Level::kWarn:  return "\x1b[31m";
                     case Level::kInfo:  return "\x1b[32m";
                     case Level::kVerb:  return "\x1b[36m";
                     case Level::kDebug: return "\x1b[33m";
@@ -665,6 +666,7 @@ namespace ppp {
 
                 static std::string LevelName(Level level) noexcept {
                     switch (level) {
+                        case Level::kWarn:  return "WARN";
                         case Level::kInfo:  return "INFO";
                         case Level::kVerb:  return "VERB";
                         case Level::kDebug: return "DEBUG";
@@ -873,7 +875,12 @@ namespace ppp {
 
                     lock.unlock();
                     for (const LogEvent& ev : log_batch) {
-                        if (static_cast<int>(ev.level) <= g_min_level.load(std::memory_order_relaxed)) {
+                        // kWarn bypasses the verbosity filter: it reports a
+                        // configuration that silently changed the effective
+                        // runtime, and g_min_level defaults to 0, which would
+                        // otherwise drop the only level that says so.
+                        if (ev.level == Level::kWarn ||
+                            static_cast<int>(ev.level) <= g_min_level.load(std::memory_order_relaxed)) {
                             PrintLog(ev);
                         }
                     }
@@ -910,7 +917,10 @@ namespace ppp {
                         LogEvent ev = std::move(log_queue_.front());
                         log_queue_.pop();
                         lock.unlock();
-                        if (static_cast<int>(ev.level) <= g_min_level.load(std::memory_order_relaxed)) {
+                        // kWarn bypasses the verbosity filter; see ProcessLogs'
+                        // caller for why.
+                        if (ev.level == Level::kWarn ||
+                            static_cast<int>(ev.level) <= g_min_level.load(std::memory_order_relaxed)) {
                             PrintLog(ev);
                         }
                         lock.lock();
@@ -963,6 +973,7 @@ namespace ppp {
                     }
                     const char* level_str = "INFO";
                     switch (ev.level) {
+                        case Level::kWarn:  level_str = "WARN";  break;
                         case Level::kVerb:  level_str = "VERB";  break;
                         case Level::kDebug: level_str = "DEBUG"; break;
                         case Level::kTrace: level_str = "TRACE"; break;
@@ -1143,6 +1154,22 @@ namespace ppp {
                 g_log_file.clear();
             }
             GetBackend().RefreshConfig();
+        }
+
+        void Warn(const char* component, const char* fmt, ...) noexcept {
+            // Deliberately not gated on g_enabled, and deliberately not filtered by
+            // g_min_level: this carries warnings about configuration that silently
+            // changed the effective runtime, and telemetry defaults to off in every
+            // deployment.  g_min_level also carries persisted numeric levels
+            // ("level": 0 in appsettings.json), so honouring it here would only
+            // reintroduce a way to silence these.
+            char buffer[1024];
+            va_list args;
+            va_start(args, fmt);
+            std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+            va_end(args);
+            buffer[sizeof(buffer) - 1] = '\0';
+            GetBackend().EnqueueLog(Level::kWarn, component ? component : "", buffer);
         }
 
         void Log(Level level, const char* component, const char* fmt, ...) noexcept {
