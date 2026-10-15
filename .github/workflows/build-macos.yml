@@ -16,14 +16,14 @@ concurrency:
 
 env:
   BOOST_VERSION: "1.92.0"
-  OPENSSL_VERSION: "4.0.2"
+  OPENSSL_VERSION: "4.0.3"
   JEMALLOC_VERSION: "5.3.1"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
     name: macOS ${{ matrix.arch }}
-    runs-on: macos-latest
+    runs-on: macos-26
     strategy:
       fail-fast: false
       matrix:
@@ -47,14 +47,19 @@ jobs:
             echo "b2_props=architecture=x86 address-model=64 abi=sysv" >> $GITHUB_OUTPUT
           fi
 
+      # Built artifacts only. The Boost and OpenSSL source trees were ~230 MB of
+      # this entry's ~280 MB, and `make` never needs them again once the archives
+      # exist -- any miss just refetches them in seconds. Changing what is cached
+      # means bumping one of the version variables above; actions/cache never
+      # overwrites an existing key.
       - name: Cache third-party libraries
         id: cache-third
         uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/third-party
-          key: macos-${{ matrix.arch }}-deps-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+          key: macos-${{ matrix.arch }}-deps-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
           restore-keys: |
-            macos-${{ matrix.arch }}-deps-v2-
+            macos-${{ matrix.arch }}-deps-
 
       - name: Build Boost
         if: steps.cache-third.outputs.cache-hit != 'true'
@@ -104,6 +109,23 @@ jobs:
           ln -sf lib/libssl.a openssl/libssl.a
           ln -sf lib/libcrypto.a openssl/libcrypto.a
           cd ../..
+
+      # Trim the tree down to what the link step reads. OpenSSL is consumed
+      # through third-party/openssl (include/ plus lib/ from `make install_sw`),
+      # so its entire build tree is disposable here. Runs on cache hits too,
+      # where every build step above was skipped, so each removal must stay a
+      # no-op when the path is already gone.
+      - name: Trim re-downloadable sources before caching
+        run: |
+          set -euo pipefail
+          TP="${{ github.workspace }}/third-party"
+          # Keep boost/boost (the include root CMake points at) and boost/stage.
+          rm -rf "$TP/boost/libs" "$TP/boost/doc" "$TP/boost/tools" \
+                 "$TP/boost/status" "$TP/boost/bin.v2"
+          rm -rf "$TP/openssl-src"
+          # Keep jemalloc/include and jemalloc/lib; drop the .o files.
+          find "$TP/jemalloc" -name '*.o' -delete
+          rm -rf "$TP/jemalloc/autom4te.cache"
 
       - name: Compute version label
         id: ver

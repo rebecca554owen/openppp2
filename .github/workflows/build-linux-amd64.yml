@@ -16,7 +16,7 @@ concurrency:
 
 env:
   BOOST_VERSION: "1.92.0"
-  OPENSSL_VERSION: "4.0.2"
+  OPENSSL_VERSION: "4.0.3"
   JEMALLOC_VERSION: "5.3.1"
   RUNNER_IMAGE: "ubuntu-22.04"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -41,14 +41,18 @@ jobs:
             autoconf clang libbenchmark-dev \
             liburing-dev libbpf-dev
 
+      # Built archives only. The Boost and OpenSSL source trees, plus the .o
+      # files left behind by `make`, used to turn this into a ~600 MB entry.
+      # Changing what is cached means bumping one of the version variables
+      # above; actions/cache never overwrites an existing key.
       - name: Cache third-party libraries
         id: cache-third
         uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/third-party
-          key: linux-amd64-deps-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+          key: linux-amd64-deps-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
           restore-keys: |
-            linux-amd64-deps-v2-
+            linux-amd64-deps-
 
       - name: Build Boost
         if: steps.cache-third.outputs.cache-hit != 'true'
@@ -78,6 +82,24 @@ jobs:
           tar jxf jemalloc-*.tar.bz2 && rm jemalloc-*.tar.bz2
           mv jemalloc-* jemalloc
           cd jemalloc && ./autogen.sh --with-jemalloc-prefix=je_ && make -j$(nproc)
+
+      # Trim the tree down to the headers and archives the link step reads, so
+      # the cache stops carrying ~450 MB of source that any future miss would
+      # refetch in seconds. third-party/xtcp and third-party/.cache are left
+      # alone: prepare_xtcp.sh keeps a revision marker there and a hit then
+      # skips the download entirely.
+      - name: Trim re-downloadable sources before caching
+        run: |
+          set -euo pipefail
+          TP="${{ github.workspace }}/third-party"
+          # Keep boost/boost (the include root CMake points at) and boost/stage.
+          rm -rf "$TP/boost/libs" "$TP/boost/doc" "$TP/boost/tools" \
+                 "$TP/boost/status" "$TP/boost/bin.v2"
+          # include/openssl/*.h are symlinks into ../crypto and ../ssl, so the
+          # .h files have to survive; only the .o files are disposable.
+          rm -rf "$TP/openssl/fuzz" "$TP/openssl/test" "$TP/openssl/openssl"
+          find "$TP/openssl" "$TP/jemalloc" -name '*.o' -delete
+          rm -rf "$TP/jemalloc/autom4te.cache"
 
       - name: Compute version label
         id: ver
@@ -179,9 +201,9 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: ${{ github.workspace }}/third-party
-          key: linux-amd64-deps-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+          key: linux-amd64-deps-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
           restore-keys: |
-            linux-amd64-deps-v2-
+            linux-amd64-deps-
 
       - name: Build Boost
         if: steps.cache-third.outputs.cache-hit != 'true'
