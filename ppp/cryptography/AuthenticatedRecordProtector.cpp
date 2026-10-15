@@ -43,7 +43,7 @@ AuthenticatedRecordProtector::AuthenticatedRecordProtector(
         // v2.2.0: verify the AEAD key length matches the derived 32-byte key.
         // aes-128/192-* would otherwise silently truncate the key material.
         if (EVP_CIPHER_key_length(cipher_) != static_cast<int>(KeyLength)) {
-            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "arp",
+            ppp::telemetry::Warn("arp",
                 "key.transport '%s' AEAD key length %d != %d; falling back to aes-256-gcm",
                 cipher_name_.data(), EVP_CIPHER_key_length(cipher_),
                 static_cast<int>(KeyLength));
@@ -56,7 +56,7 @@ AuthenticatedRecordProtector::AuthenticatedRecordProtector(
         }
     }
 
-    ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "arp",
+    ppp::telemetry::Warn("arp",
         "key.transport '%s' is not an OpenSSL AEAD cipher; falling back to aes-256-gcm",
         cipher_name_.data());
     cipher_ = EVP_get_cipherbyname("aes-256-gcm");

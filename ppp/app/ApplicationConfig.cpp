@@ -451,8 +451,9 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
         // leaving the session stuck before Connected.
         if (tcp_stack_specified && tcp_stack_value == "xtcp") {
             tcp_stack_value = "native";
-            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "client",
-                "--tcp-stack=xtcp is Linux-only; falling back to the native stack");
+            ppp::telemetry::Warn("client",
+                "--tcp-stack=xtcp is Linux-only; falling back to the native stack "
+                "(this build ignores the XTCP datapath)");
         }
 #endif
         const TcpStackModeResult tcp_stack = ResolveTcpStackMode({
