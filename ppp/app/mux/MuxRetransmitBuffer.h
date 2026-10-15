@@ -84,11 +84,17 @@ public:
     }
 
     /**
-     * Release every entry of @p connection_id covered by the ACK ranges and
-     * collect fast-retransmit candidates: entries whose sequence sits at least
+     * Release every entry of @p connection_id covered by the ACK and collect
+     * fast-retransmit candidates: entries whose sequence sits at least
      * @p fast_threshold below @p largest (approximating "N later frames were
      * acked above the hole", the QUIC dup-ACK rule). A candidate is reported at
      * most once per advancing @p largest.
+     * @param cumulative_below_largest When true, every entry at or below @p largest
+     *        is released regardless of the ranges.  Only valid for a peer whose
+     *        largest means "consumed up to here" (compat mode).  Pass false when
+     *        largest is merely the highest sequence received and may sit above a
+     *        hole (flow_v2), so releasing on it would discard frames the peer
+     *        never received.
      * @return RTT sample in ms from the first newly-acked entry that was never
      *         retransmitted (Karn's rule); 0 when no usable sample exists.
      */
@@ -98,25 +104,35 @@ public:
         const std::vector<MuxAckRange>& ranges,
         std::uint64_t now,
         std::uint32_t fast_threshold,
-        std::vector<std::uint64_t>& fast_candidates) {
+        std::vector<std::uint64_t>& fast_candidates,
+        bool cumulative_below_largest = true) {
         std::uint64_t rtt_sample = 0;
 
         // Collect keys first: erasing while iterating the map is fine, but the
         // candidate scan below walks the whole map anyway, so do one pass.
-        // Cumulative release: the receiver delivers data strictly in order, so
-        // every sequence at or below the reported largest has been consumed —
-        // even if its SACK range was lost or dropped by the peer's tracker
-        // wrap reset. Ranges then cover any sparse holes above largest.
+        //
+        // Cumulative release below `largest` is only valid when the peer reports
+        // largest as "everything up to here has been consumed".  That holds in
+        // compat mode, where a single ordered stream is in play.  It does NOT hold
+        // under flow_v2: per-connection streams reorder independently, so `largest`
+        // is the highest sequence received and can sit above a hole.  Releasing
+        // everything at or below it there would drop a frame the peer never got
+        // and would never be retransmitted — the flow would stall silently and no
+        // retransmit entry would remain to age out.  Callers therefore pass
+        // cumulative_below_largest=false for flow_v2 and only the SACK ranges are
+        // honoured.
         std::vector<std::uint64_t> acked;
         for (auto it = entries_.begin(); it != entries_.end(); ++it) {
             if (KeyCid(it->first) != connection_id) {
                 continue;
             }
             const std::uint32_t seq = static_cast<std::uint32_t>(it->first & 0xFFFFFFFFu);
-            const std::int32_t behind = static_cast<std::int32_t>(largest - seq);
-            if (behind >= 0) {
-                acked.push_back(it->first);
-                continue;
+            if (cumulative_below_largest) {
+                const std::int32_t behind = static_cast<std::int32_t>(largest - seq);
+                if (behind >= 0) {
+                    acked.push_back(it->first);
+                    continue;
+                }
             }
             for (const MuxAckRange& range : ranges) {
                 // Wrap-safe membership: signed 32-bit distance from range start

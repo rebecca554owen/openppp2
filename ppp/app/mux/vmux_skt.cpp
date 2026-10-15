@@ -971,8 +971,15 @@ namespace vmux {
 
                                 if (NULLPTR == rewrite_buffer_ || rewrite_buffer_size_ < rewritten_size) {
                                     auto allocator = mux_ ? mux_->AppConfiguration->GetBufferAllocator() : NULLPTR;
-                                    rewrite_buffer_ = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, vmux_net::max_buffers_size);
-                                    rewrite_buffer_size_ = (NULLPTR != rewrite_buffer_) ? vmux_net::max_buffers_size : 0;
+                                    // Size the destination to the actual rewritten
+                                    // length, not to the vmux frame cap: the rewriter
+                                    // can emit more than it consumed (an 8 KiB header
+                                    // line is relayed verbatim in Passthrough), and a
+                                    // fixed max_buffers_size buffer would then be
+                                    // memcpy'd past its end.  RinetdConnection's
+                                    // bridge already allocates per actual size.
+                                    rewrite_buffer_ = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, (std::size_t)rewritten_size);
+                                    rewrite_buffer_size_ = (NULLPTR != rewrite_buffer_) ? (int)rewritten_size : 0;
                                 }
 
                                 if (NULLPTR == rewrite_buffer_) {

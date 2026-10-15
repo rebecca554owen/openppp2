@@ -2274,7 +2274,8 @@ namespace vmux {
             const uint32_t key_cid = (ordering_mode_ == ordering_compat) ? 0u : block.connection_id;
             std::vector<uint64_t> candidates;
             const uint64_t sample = rtx_.Ack(key_cid, block.largest, block.ranges, now,
-                (uint32_t)PPP_MUX_FAST_RETX_THRESHOLD, candidates);
+                (uint32_t)PPP_MUX_FAST_RETX_THRESHOLD, candidates,
+                ordering_mode_ == ordering_compat);
             if (sample > 0) {
                 srtt_ms_ = (srtt_ms_ == 0) ? sample : (srtt_ms_ * 7 + sample) / 8;
             }
