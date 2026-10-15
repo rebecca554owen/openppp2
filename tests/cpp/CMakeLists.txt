@@ -732,6 +732,14 @@ openppp2_add_cpp_test(icmp_path_mtu_test SOURCES
     "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
+openppp2_add_cpp_test(telemetry_warn_visibility_test SOURCES
+    telemetry_warn_visibility_test.cpp
+    support/telemetry_warn_visibility_stubs.cpp
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp")
+target_link_libraries(telemetry_warn_visibility_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+
 openppp2_add_cpp_test(yield_context_test SOURCES
     yield_context_test.cpp
     support/yield_context_test_stubs.cpp

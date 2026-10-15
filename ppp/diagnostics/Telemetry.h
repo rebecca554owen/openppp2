@@ -61,6 +61,22 @@ namespace ppp {
         };
 
         void LogWithAttributes(Level level, const char* component, const Attribute* attrs, size_t attr_count, const char* fmt, ...) noexcept;
+
+        /**
+         * @brief Emits a configuration-grade warning the operator must see.
+         * @param component Subsystem name.
+         * @param fmt printf-style format string.
+         * @note  Unlike Log(), this is NOT gated on the telemetry `enabled` flag.
+         *        Telemetry is off by default and only a developer turns it on, so a
+         *        warning routed through Log() disappears in a default deployment —
+         *        which silently hid three real cases: a non-AEAD key.transport being
+         *        downgraded to aes-256-gcm, `--tcp-stack=xtcp` degrading to native off
+         *        Linux, and the explicit-GCM advisory in AppConfiguration.  Those all
+         *        change what the operator believes is running, so they are reported
+         *        through the console backend regardless of telemetry settings.
+         */
+        void Warn(const char* component, const char* fmt, ...) noexcept;
+
         void TraceSpan(const char* name, const char* session_id) noexcept;
         void SetEnabled(bool enabled) noexcept;
         void SetCountEnabled(bool enabled) noexcept;
