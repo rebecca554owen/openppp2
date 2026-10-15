@@ -103,7 +103,7 @@ namespace ppp {
                     ITransmission::Dispose();
                 }
                 /** @brief Performs websocket client handshake then transmission-level handshake. */
-                virtual Int128                                              HandshakeClient(YieldContext& y, bool& mux) noexcept {
+                virtual Int128                                              HandshakeClient(YieldContext& y, bool& mux) noexcept override {
                     if (!HandshakeWebsocket(false, y)) {
                         return 0;
                     }
@@ -111,7 +111,7 @@ namespace ppp {
                     return ITransmission::HandshakeClient(y, mux);
                 }
                 /** @brief Performs websocket server handshake then transmission-level handshake. */
-                virtual bool                                                HandshakeServer(YieldContext& y, const Int128& session_id, bool mux) noexcept {
+                virtual bool                                                HandshakeServer(YieldContext& y, const Int128& session_id, bool mux) noexcept override {
                     if (!HandshakeWebsocket(true, y)) {
                         return false;
                     }
@@ -125,7 +125,7 @@ namespace ppp {
 
             protected:
                 /** @brief Reads bytes via QoS pipeline using this transmission implementation. */
-                virtual std::shared_ptr<Byte>                               DoReadBytes(YieldContext& y, int length) noexcept {
+                virtual std::shared_ptr<Byte>                               DoReadBytes(YieldContext& y, int length) noexcept override {
                     if (disposed_.load(std::memory_order_acquire)) {
                         return NULLPTR;
                     }
@@ -134,7 +134,7 @@ namespace ppp {
                     return ITransmissionQoS::DoReadBytes(y, length, self, *this, this->QoS);
                 }
                 /** @brief Writes bytes asynchronously through websocket and updates statistics on success. */
-                virtual bool                                                DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept {
+                virtual bool                                                DoWriteBytes(std::shared_ptr<Byte> packet, int offset, int packet_length, const AsynchronousWriteBytesCallback& cb) noexcept override {
                     using AsynchronousWriteCallback = typename IWebsocket::AsynchronousWriteCallback;
 
                     if (disposed_.load(std::memory_order_acquire)) {
@@ -179,6 +179,13 @@ namespace ppp {
                  * @param handshake_type Handshake role/type requested by caller.
                  * @param y Coroutine yield context.
                  * @return true if handshake succeeds; otherwise false.
+                 *
+                 * @note This is the template's own pure virtual, declared over IWebsocket.
+                 *       Specialisations in IWebsocketTransmission / ISslWebsocketTransmission
+                 *       narrow the parameter to the concrete socket type, which makes those
+                 *       overloads rather than overrides — so `override` is invalid here and
+                 *       clang's -Winconsistent-missing-override warns about all of them by
+                 *       name alone.  Verified: adding the keyword fails to compile.
                  */
                 virtual bool                                                HandshakeWebsocket(
                     const AppConfigurationPtr&                              configuration,
