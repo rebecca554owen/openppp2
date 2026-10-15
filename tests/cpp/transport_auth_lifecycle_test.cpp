@@ -7,14 +7,18 @@
 #include <ppp/p2p/P2PRelayOffer.h>
 #include <ppp/transmissions/ITcpipTransmission.h>
 #include <ppp/transmissions/IWebsocketTransmission.h>
+#include <ppp/transmissions/NoisePskAuthenticatedCarrierBinding.h>
 
 #include <boost/asio/post.hpp>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace asio = boost::asio;
@@ -285,6 +289,107 @@ BOOST_AUTO_TEST_CASE(noise_rejects_non_carriers_accepts_loopback_and_migration_i
         BOOST_TEST(websocket->GetAuthenticatedCarrierMethod() ==
             transmissions::AuthenticatedCarrierMethod::None);
     });
+}
+
+BOOST_AUTO_TEST_CASE(noise_binding_key_id_copy_survives_concurrent_invalidate) {
+    auto context = std::make_shared<asio::io_context>();
+    auto strand = std::make_shared<transmissions::NoisePskAuthenticatedCarrierBinding::StrandPtr::element_type>(
+        asio::make_strand(*context));
+
+    // Same canonical key id CompleteNoiseResult() installs.
+    const std::string canonical = "transport-auth-test";
+
+    // Regression: the binding used to hand out a raw pointer into the
+    // handshake result's key id and let the caller read it *after* the lock
+    // was released, while InvalidateAuthenticatedCarrierBinding() on the
+    // teardown path cleanses those very bytes under that lock.  A torn key id
+    // would build a binding context different from the peer's and silently
+    // break AEAD record derivation, so a copy must either return the exact
+    // canonical bytes or fail cleanly with a zero length.
+    //
+    // Each round gets a fresh binding on purpose: Invalidate() is one-shot
+    // per binding (it clears valid_ before it ever takes the lock), so one
+    // shared binding would close the window after its first teardown and hide
+    // the very race this test exists to catch.
+    std::atomic_bool torn{false};
+    std::size_t copies = 0;
+    std::size_t failures = 0;
+
+    for (int round = 0; round < 200 && !torn.load(std::memory_order_acquire); ++round) {
+        auto binding = std::make_shared<transmissions::NoisePskAuthenticatedCarrierBinding>(
+            context, strand, CompleteNoiseResult());
+        BOOST_REQUIRE(binding->IsValid());
+
+        std::atomic_bool start{false};
+        std::atomic_bool stop{false};
+        std::atomic<std::size_t> round_copies{0};
+        std::atomic<std::size_t> round_failures{0};
+
+        std::vector<std::thread> readers;
+        for (int i = 0; i < 3; ++i) {
+            readers.emplace_back([&]() {
+                while (!start.load(std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
+                while (!stop.load(std::memory_order_acquire)) {
+                    std::array<std::uint8_t, noise::NoiseKeyIdMaxSize> buffer{};
+                    std::size_t length = 0;
+                    if (binding->CopyTransportAuthKeyId(
+                            buffer.data(), buffer.size(), length)) {
+                        round_copies.fetch_add(1, std::memory_order_relaxed);
+                        if (length != canonical.size() ||
+                            std::memcmp(buffer.data(), canonical.data(), length) != 0) {
+                            torn.store(true, std::memory_order_release);
+                        }
+                    } else {
+                        round_failures.fetch_add(1, std::memory_order_relaxed);
+                        if (length != 0) {
+                            torn.store(true, std::memory_order_release);
+                        }
+                    }
+                }
+            });
+        }
+
+        start.store(true, std::memory_order_release);
+        // Let the readers actually get spinning, then tear the binding down
+        // exactly once, then give any in-flight reader time to land.  Both
+        // spins are bounded: after Invalidate() the readers can only fail,
+        // so waiting on a copy counter here would never terminate.
+        for (int spin = 0; spin < 2000; ++spin) {
+            std::this_thread::yield();
+        }
+        binding->Invalidate();
+        for (int spin = 0; spin < 2000; ++spin) {
+            std::this_thread::yield();
+        }
+        stop.store(true, std::memory_order_release);
+        for (auto& reader : readers) {
+            reader.join();
+        }
+
+        copies += round_copies.load(std::memory_order_relaxed);
+        failures += round_failures.load(std::memory_order_relaxed);
+        BOOST_TEST(!binding->IsValid());
+    }
+
+    BOOST_TEST(!torn.load(std::memory_order_acquire));
+    BOOST_TEST(copies > 0);
+
+    // A null or undersized destination buffer is rejected without touching it.
+    auto sink = std::make_shared<transmissions::NoisePskAuthenticatedCarrierBinding>(
+        context, strand, CompleteNoiseResult());
+    BOOST_REQUIRE(sink->IsValid());
+    std::size_t length = 12345;
+    BOOST_TEST(!sink->CopyTransportAuthKeyId(NULLPTR,
+        noise::NoiseKeyIdMaxSize, length));
+    BOOST_TEST(length == 0);
+    length = 12345;
+    std::array<std::uint8_t, 4> too_small{};
+    BOOST_TEST(!sink->CopyTransportAuthKeyId(too_small.data(),
+        too_small.size(), length));
+    BOOST_TEST(length == 0);
+    BOOST_TEST(too_small[0] == 0);
 }
 
 BOOST_AUTO_TEST_CASE(production_transport_descriptors_are_explicit) {

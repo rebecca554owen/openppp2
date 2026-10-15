@@ -2078,7 +2078,13 @@ namespace ppp {
             // The canonical transport-auth key id comes from the installed
             // binding (i.e. from the negotiated handshake result), never from
             // a second configuration read or from a fixed legacy slot.
-            const std::uint8_t* transport_auth_key_id = NULLPTR;
+            //
+            // Copied out of the binding rather than borrowed: a concurrent
+            // InvalidateAuthenticatedCarrierBinding() on the teardown path
+            // cleanses the binding's key id, and this read happens after the
+            // shared_ptr copy is released from authenticated_carrier_mutex_.
+            std::uint8_t transport_auth_key_id[
+                ppp::cryptography::noise::NoiseKeyIdMaxSize];
             std::size_t transport_auth_key_id_length = 0;
             {
                 std::shared_ptr<NoisePskAuthenticatedCarrierBinding> binding;
@@ -2087,8 +2093,9 @@ namespace ppp {
                     binding = noise_authenticated_carrier_binding_;
                 }
                 if (!binding ||
-                    !binding->GetTransportAuthKeyId(transport_auth_key_id,
-                                                    transport_auth_key_id_length)) {
+                    !binding->CopyTransportAuthKeyId(transport_auth_key_id,
+                                                     sizeof(transport_auth_key_id),
+                                                     transport_auth_key_id_length)) {
                     ppp::telemetry::Log(Level::kInfo, "arp",
                         "install record protectors: no negotiated transport-auth key id");
                     return false;
