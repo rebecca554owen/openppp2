@@ -17,7 +17,7 @@ concurrency:
 env:
   BOOST_VERSION: "1.92.0"
   OPENSSL_VERSION: "4.0.3"
-  JEMALLOC_VERSION: "5.3.1"
+  JEMALLOC_VERSION: "5.4.0"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -52,17 +52,34 @@ jobs:
       # exist -- any miss just refetches them in seconds. Changing what is cached
       # means bumping one of the version variables above; actions/cache never
       # overwrites an existing key.
-      - name: Cache third-party libraries
-        id: cache-third
+      # One cache entry per dependency, so bumping one version leaves the other
+      # two alone instead of rebuilding all three from source. Keys are
+      # exact-match only on purpose: a restore-keys prefix hit restores the tree
+      # but still reports cache-hit=false, so the build step reruns on top of
+      # what was just restored.
+      - name: Cache Boost
+        id: cache-boost
         uses: actions/cache@v5
         with:
-          path: ${{ github.workspace }}/third-party
-          key: macos-${{ matrix.arch }}-deps-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
-          restore-keys: |
-            macos-${{ matrix.arch }}-deps-
+          path: ${{ github.workspace }}/third-party/boost
+          key: macos-${{ matrix.arch }}-boost${{ env.BOOST_VERSION }}
+
+      - name: Cache OpenSSL
+        id: cache-openssl
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/third-party/openssl
+          key: macos-${{ matrix.arch }}-openssl${{ env.OPENSSL_VERSION }}
+
+      - name: Cache jemalloc
+        id: cache-jemalloc
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/third-party/jemalloc
+          key: macos-${{ matrix.arch }}-jemalloc${{ env.JEMALLOC_VERSION }}
 
       - name: Build Boost
-        if: steps.cache-third.outputs.cache-hit != 'true'
+        if: steps.cache-boost.outputs.cache-hit != 'true'
         run: |
           mkdir -p third-party && cd third-party
           curl -L -o boost.tar.bz2 "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION//./_}.tar.bz2"
@@ -74,7 +91,7 @@ jobs:
           cd ../..
 
       - name: Build jemalloc
-        if: steps.cache-third.outputs.cache-hit != 'true'
+        if: steps.cache-jemalloc.outputs.cache-hit != 'true'
         run: |
           cd third-party
           curl -L -o jemalloc.tar.bz2 "https://github.com/jemalloc/jemalloc/releases/download/${JEMALLOC_VERSION}/jemalloc-${JEMALLOC_VERSION}.tar.bz2"
@@ -87,7 +104,7 @@ jobs:
           cd ../..
 
       - name: Build OpenSSL
-        if: steps.cache-third.outputs.cache-hit != 'true'
+        if: steps.cache-openssl.outputs.cache-hit != 'true'
         run: |
           cd third-party
           curl -L -o openssl.tar.gz "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"

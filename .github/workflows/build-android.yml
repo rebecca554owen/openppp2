@@ -77,21 +77,36 @@ jobs:
       # reasoning applies to BOOST_VERSION and OPENSSL_VERSION -- actions/cache
       # never overwrites an existing key, so an unchanged key would keep serving
       # a stale entry forever.
-      - name: Cache built dependencies
-        id: cache-ndk
+      # One cache entry per dependency, so bumping Boost or OpenSSL leaves the
+      # other alone. Keys are exact-match only on purpose: a restore-keys prefix
+      # hit restores the tree but still reports cache-hit=false, so the build step
+      # reruns on top of what was just restored. And because a partial hit forces
+      # the rebuild anyway, the prefix match saves nothing -- a version bump should
+      # be a clean cold build of that one dependency.
+      #
+      # NDK_VERSION is deliberately not part of either key. The NDK itself is no
+      # longer cached, but it is the toolchain that produces these archives, so in
+      # principle the key should carry it. It is left out because each release is
+      # cut from a new tag, and a new tag is a new cache scope in its own right --
+      # the guard could only ever fire if NDK_VERSION were bumped in place without
+      # cutting a release. If you bump NDK_VERSION, bump these keys along with it.
+      - name: Cache Boost
+        id: cache-boost
         uses: actions/cache@v5
         with:
-          path: ${{ runner.temp }}/third-party
-          # NDK_VERSION is deliberately not part of the key. The NDK itself is no
-          # longer cached, but it is the toolchain that produces these archives, so
-          # in principle the key should carry it. It is left out because each
-          # release is cut from a new tag, and a new tag is a new cache scope in
-          # its own right -- the guard could only ever fire if NDK_VERSION were
-          # bumped in place without cutting a release. If you bump NDK_VERSION,
-          # bump this key along with it.
-          key: android-${{ matrix.abi }}-deps-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}
-          restore-keys: |
-            android-${{ matrix.abi }}-deps-
+          # boost-src carries the headers that BOOST_ANDROID_INCLUDE_DIR points at;
+          # boost/<abi> carries the archives. Both have to come back together.
+          path: |
+            ${{ runner.temp }}/third-party/boost-src
+            ${{ runner.temp }}/third-party/boost
+          key: android-${{ matrix.abi }}-boost${{ env.BOOST_VERSION }}
+
+      - name: Cache OpenSSL
+        id: cache-openssl
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/third-party/openssl
+          key: android-${{ matrix.abi }}-openssl${{ env.OPENSSL_VERSION }}
 
       # Intentionally not cached and not guarded by the cache-hit check: the
       # download is cheap, and skipping it on a hit is what used to leave the
@@ -129,7 +144,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build OpenSSL for Android ${{ matrix.abi }}
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        if: steps.cache-openssl.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           archive="$TP/openssl-${OPENSSL_VERSION}.tar.gz"
@@ -161,7 +176,7 @@ jobs:
           make install_sw
 
       - name: Build Boost for Android ${{ matrix.abi }}
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        if: steps.cache-boost.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           boost_lib_version="$(printf '%s' "$BOOST_VERSION" | sed 's/\./_/g')"
