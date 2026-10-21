@@ -190,6 +190,7 @@ namespace ppp {
                     bool                                                    enabled;        ///< QUIC-style reliability sub-protocol (ACK + fast retransmit + PTO); negotiated, falls back when the peer lacks it.
                     struct {
                         int                                                 bytes;          ///< Session-wide retransmit buffer byte cap; strictly > 0.
+                        int                                                 flow_bytes;     ///< Per-flow retransmit budget (flow v2); strictly > 0. Must not exceed the peer's per-connection reorder cap.
                         int                                                 max_attempts;   ///< Per-frame retransmit attempts before flow reset / session rebuild; strictly > 0.
                     }                                                       rtx;
                     struct {

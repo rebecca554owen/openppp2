@@ -383,7 +383,7 @@ static constexpr int                                                        PPP_
 static constexpr int                                                        PPP_MUX_INACTIVE_TIMEOUT        = 60;
 static constexpr int                                                        PPP_MUX_MIN_CONGESTIONS         = 1 << 20;
 static constexpr int                                                        PPP_MUX_DEFAULT_CONGESTIONS     = 128 << 20; /* 134217728 */
-static constexpr int                                                        PPP_MUX_FLOW_REORDER_BYTES      = 1 << 20;  /* 1 MiB per-connection reorder cap (flow v2) */
+static constexpr int                                                        PPP_MUX_FLOW_REORDER_BYTES      = 8 << 20;  /* 8 MiB per-connection reorder cap (flow v2) */
 static constexpr int                                                        PPP_MUX_FLOW_REORDER_TIMEOUT    = 400;      /* gap wait timeout in ms (flow v2); near link RTT to bound stuck->self-heal */
 static constexpr int                                                        PPP_MUX_TX_FLOW_QUANTUM_BYTES  = 64 << 10; /* soft per-flow drain quantum before yielding to another cid */
 static constexpr int                                                        PPP_MUX_LINK_BYTE_HIGH_WATER   = 256 << 10; /* per-link outstanding write bytes before refusing new sends */
@@ -394,17 +394,20 @@ static constexpr int                                                        PPP_
 static constexpr int                                                        PPP_MUX_TX_CTRL_BUDGET_FRAMES     = 32;       /* max ctrl frames drained before data per turn */
 static constexpr int                                                        PPP_MUX_FLOW_UNKNOWN_CID_MAX      = 64;       /* unknown-cid budget (P0 drop path) */
 static constexpr int                                                        PPP_MUX_FLOW_MAX_OPEN             = 4096;     /* max open logical flows + pre-open */
-static constexpr int                                                        PPP_MUX_FLOW_SESSION_REORDER_BYTES = 16 << 20; /* 16 MiB session-wide reorder cap */
+static constexpr int                                                        PPP_MUX_FLOW_SESSION_REORDER_BYTES = 64 << 20; /* 64 MiB session-wide reorder cap */
 static constexpr int                                                        PPP_MUX_FLOW_MAX_CONTEXTS       = 4096;     /* hard cap on concurrent flow-v2 receive contexts (DoS bound) */
+static constexpr int                                                        PPP_MUX_CLOSED_FLOW_LIFETIME_MS = 30000;    /* ms a finished flow is remembered, so a retransmitted FIN can be acknowledged again */
 static constexpr int                                                        PPP_MUX_FLOW_AGGREGATE_BYTES    = 16 << 20; /* 16 MiB aggregate reorder memory across all flow contexts */
 static constexpr int                                                        PPP_MUX_TX_QUEUE_HIGH_WATER     = 4096;     /* data tx_queue_ depth at which the acceleration read-pump is throttled (D11 backpressure) */
 static constexpr int                                                        PPP_MUX_TX_BACKLOG_STALL_TIMEOUT = 8000;    /* ms the data tx queue may stay backlogged before the session is rebuilt (D11 watchdog) */
 static constexpr int                                                        PPP_MUX_TURBO_FACTOR_MAX        = 3;        /* turbo dynamic pool: max multiplier of the --tun-mux base (pool_hard_max = base * this) */
 static constexpr int                                                        PPP_MUX_TURBO_CONTROL_COOLDOWN  = 3000;     /* ms minimum interval between turbo pool grow/shrink steps (hysteresis vs jitter) */
 static constexpr int                                                        PPP_MUX_RELIABILITY_RTX_BYTES   = 32 << 20;  /* 32 MiB session-wide retransmit buffer byte cap */
+static constexpr int                                                        PPP_MUX_RELIABILITY_RTX_FLOW_BYTES = 4 << 20; /* 4 MiB per-flow retransmit budget (flow v2): sender's share of the peer's per-flow reorder cap */
 static constexpr int                                                        PPP_MUX_RELIABILITY_RTX_MAX_ATTEMPTS = 8;   /* per-frame retransmit attempts before flow/session teardown */
 static constexpr int                                                        PPP_MUX_RELIABILITY_ACK_DELAY   = 10;       /* ms max delayed-ACK wait before flushing an ACK frame */
 static constexpr int                                                        PPP_MUX_RELIABILITY_GAP_TIMEOUT = 3000;     /* ms gap timeout when reliability is negotiated (replaces the 400ms default) */
+static constexpr int                                                        PPP_MUX_RELIABILITY_GAP_TIMEOUT_MAX = 30000; /* ms ceiling for the gap timeout, which is also raised to cover the peer's retransmit window */
 static constexpr int                                                        PPP_MUX_RELIABILITY_PTO_INIT    = 500;      /* ms initial probe-timeout before any RTT sample */
 static constexpr int                                                        PPP_MUX_RELIABILITY_PTO_MIN     = 200;      /* ms lower clamp for the probe-timeout */
 static constexpr int                                                        PPP_MUX_RELIABILITY_PTO_MAX     = 3000;     /* ms upper clamp for the probe-timeout */
@@ -412,7 +415,6 @@ static constexpr int                                                        PPP_
 static constexpr int                                                        PPP_MUX_RELIABILITY_RXT_BURST   = 32;       /* max frames retransmitted per maintenance turn */
 static constexpr int                                                        PPP_MUX_ACK_MAX_RANGES          = 24;       /* hard cap on tracked ACK ranges per sequence space (wire bloat / DoS bound) */
 static constexpr int                                                        PPP_MUX_ACK_MAX_BLOCKS          = 8;        /* hard cap on per-flow blocks carried by one ACK frame */
-static constexpr int                                                        PPP_MUX_FAST_RETX_THRESHOLD     = 3;        /* acked-seq distance above a hole that triggers fast retransmit */
 static constexpr int                                                        PPP_MUX_FEC_GROUP               = 8;        /* data frames per XOR parity group */
 static constexpr int                                                        PPP_MUX_FEC_FLUSH               = 20;       /* ms a partial FEC group may age before being flushed */
 static constexpr int                                                        PPP_MUX_FEC_MAX_FRAME           = 60000;    /* frames larger than this are not FEC-protected (parity must fit one vmux frame) */
