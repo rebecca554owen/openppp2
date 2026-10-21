@@ -472,6 +472,14 @@ openppp2_add_cpp_test(vmux_ack_tracker_test SOURCES
     vmux_ack_tracker_test.cpp)
 openppp2_add_cpp_test(vmux_retransmit_buffer_test SOURCES
     vmux_retransmit_buffer_test.cpp)
+openppp2_add_cpp_test(vmux_backlog_watchdog_test SOURCES
+    vmux_backlog_watchdog_test.cpp)
+target_link_libraries(vmux_backlog_watchdog_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(mux_carrier_clean_close_test SOURCES
+    mux_carrier_clean_close_test.cpp)
+target_compile_definitions(mux_carrier_clean_close_test PRIVATE
+    OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
+target_link_libraries(mux_carrier_clean_close_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(vmux_fec_codec_test SOURCES
     vmux_fec_codec_test.cpp)
 openppp2_add_cpp_test(vmux_flow_reorder_test SOURCES

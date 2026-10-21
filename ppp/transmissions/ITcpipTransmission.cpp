@@ -14,6 +14,10 @@
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 
+#include <cerrno>
+#include <sys/socket.h>
+#include <unistd.h>
+
 using ppp::net::Socket;
 using ppp::net::IPEndPoint;
 
@@ -175,6 +179,53 @@ namespace ppp {
 
         bool ITcpipTransmission::IsReceiveClosed() const noexcept {
             return receive_closed_.load();
+        }
+
+        bool ITcpipTransmission::DrainReceive() noexcept {
+            std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::atomic_load(&socket_);
+            if (!socket || !socket->is_open()) {
+                return false;
+            }
+            // Read the kernel receive buffer empty WITHOUT touching the socket's
+            // stream state: the carrier's own read path owns the byte stream,
+            // and these bytes are the ones this side no longer needs. Leaving
+            // them queued is what makes close() emit RST instead of FIN, and the
+            // peer then treats a normal end of stream as a failure and tears
+            // the whole mux session down.
+            //
+            // shutdown(SHUT_RD) is NOT a substitute: it discards the buffered
+            // bytes but leaves the connection in a state where close() still
+            // emits RST. The queue has to be read empty.
+            const int fd = static_cast<int>(socket->native_handle());
+            if (fd < 0) {
+                return false;
+            }
+            char scratch[4096];
+            size_t drained = 0;
+            for (;;) {
+                const ssize_t n = ::recv(fd, scratch, sizeof(scratch), MSG_DONTWAIT);
+                if (n > 0) {
+                    drained += static_cast<size_t>(n);
+                    continue;
+                }
+                if (n == 0) {
+                    // Peer FIN observed while draining: the stream is finished.
+                    break;
+                }
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    break;  // Queue is empty.
+                }
+                if (errno == EINTR) {
+                    continue;
+                }
+                // The socket is gone (reset by the peer): nothing left to drain.
+                break;
+            }
+            if (drained > 0) {
+                ppp::telemetry::Count("tcpip.drain_receive.bytes", (int64_t)drained);
+            }
+            ppp::telemetry::Count("tcpip.drain_receive", 1);
+            return true;
         }
 
         /**

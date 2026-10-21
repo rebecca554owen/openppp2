@@ -17,6 +17,7 @@
 #include <ppp/app/mux/MuxRuntimeState.h>
 #include <ppp/app/mux/MuxAckTracker.h>
 #include <ppp/app/mux/MuxRetransmitBuffer.h>
+#include <ppp/app/mux/MuxBacklogWatchdog.h>
 #include <ppp/app/mux/MuxFecCodec.h>
 
 namespace vmux {
@@ -227,16 +228,33 @@ namespace vmux {
          *
          * Holds one connection's independent DSN delivery state: the next
          * expected per-flow DSN, a bounded reorder buffer keyed by DSN, the
-         * tick the oldest buffered frame was queued (gap timeout base), the
+         * tick at which the CURRENT hole opened (gap timeout base), the
          * current buffered byte total (memory bound), a priming flag, and a
          * fin-seen flag used to release the context after the FIN is delivered.
          */
         struct flow_rx_context {
             uint32_t                                                                flow_rx_next_         = 0;     ///< Next expected per-flow DSN.
             ppp::app::mux::MuxFlowReorderBuffer<rx_packet>                         flow_reorder_;                ///< Strictly bounded reorder buffer for this flow only.
-            uint64_t                                                                oldest_buffered_tick_ = 0;     ///< Tick the oldest buffered frame was queued; 0 = no active gap timer.
+            uint64_t                                                                gap_opened_tick_      = 0;     ///< Tick the current hole (DSN == flow_rx_next_) opened; gap timeout base.
             bool                                                                    primed_               = false; ///< True once the initial expected DSN (1) has been established.
             bool                                                                    fin_seen_             = false; ///< True once a cmd_fin has been delivered for this connection.
+        };
+
+        /**
+         * @brief A flow whose FIN was delivered and whose receive context was released.
+         *
+         * The peer retransmits its FIN until the acknowledgement arrives, and
+         * that acknowledgement can be lost. Remembering the last delivered DSN
+         * for a while lets a retransmitted frame be acknowledged AGAIN instead
+         * of resurrecting a flow context whose DSN frontier would restart from
+         * one: the retransmitted frame would then sit in the reorder buffer
+         * forever, unanswered, and burn the peer's attempt budget until it
+         * resets the flow — which stops the ACK stream for that flow and, with
+         * it, the whole transfer.
+         */
+        struct closed_flow_record final {
+            uint32_t                                                                last_dsn = 0;       ///< Highest DSN delivered for this flow.
+            uint64_t                                                                tick = 0;           ///< Tick the flow was released.
         };
 
         /**
@@ -557,6 +575,18 @@ namespace vmux {
         void                                                                        flow_evict_expired(uint64_t now) noexcept;
         /** @brief Fail the session when a compat global reorder gap timed out. */
         void                                                                        compat_evict_expired(uint64_t now) noexcept;
+        /**
+         * @brief The gap timeout a receiver must use before declaring a hole permanent.
+         * @details At least the peer's total retransmit window: the peer keeps
+         *          retrying with an exponential backoff, so a receiver that
+         *          gives up earlier tears the direction down while the sender
+         *          is still legitimately trying.
+         */
+        uint64_t                                                                    effective_gap_timeout() const noexcept;
+        /** @brief Deadline after which a frame that spent its retransmit budget fails its flow. */
+        uint64_t                                                                    rtx_fail_after_ms() const noexcept;
+        /** @brief Fail the flows whose frames spent the retransmit budget and aged past the deadline. */
+        void                                                                        fail_exhausted_frames(uint64_t now) noexcept;
         /** @brief Fail one logical flow without delivering past an unrecovered gap. */
         void                                                                        fail_flow(uint32_t connection_id, const char* reason) noexcept;
         flow_rx_context*                                                            try_get_or_create_flow(uint32_t connection_id) noexcept;
@@ -564,6 +594,10 @@ namespace vmux {
         void                                                                        note_flow_unbuffered(size_t bytes) noexcept;
         /** @brief Release a flow context once its FIN was delivered and buffer drained. */
         void                                                                        maybe_release_flow(uint32_t connection_id, flow_rx_context& fx) noexcept;
+        /** @brief Remember a finished flow so a retransmitted frame for it can be acknowledged again. */
+        void                                                                        remember_closed_flow(uint32_t connection_id, uint32_t last_dsn, uint64_t now) noexcept;
+        /** @brief Acknowledge a frame of an already finished flow (the peer is still retransmitting it). */
+        void                                                                        acknowledge_closed_flow(uint32_t connection_id, uint32_t seq, uint64_t now) noexcept;
 
         /**
          * @brief Reliability sub-protocol (negotiated; strand-affine).
@@ -578,12 +612,33 @@ namespace vmux {
         void                                                                        note_ack_pending(uint32_t connection_id, uint32_t seq, uint64_t now) noexcept;
         /** @brief Emit a cmd_ack frame when the delayed-ACK policy says so (strand-affine). */
         void                                                                        maybe_send_ack(uint64_t now, bool force) noexcept;
+        /**
+         * @brief Answer a retransmission of an already-delivered frame (strand-affine).
+         * @details The peer retransmits only when it has not seen our
+         *          acknowledgement. Re-answering makes a lost or delayed
+         *          acknowledgement recoverable instead of fatal.
+         */
+        void                                                                        reack_delivered(uint32_t connection_id, uint32_t seq, uint64_t now) noexcept;
         /** @brief Process an inbound cmd_ack payload: release acked frames, drive fast retransmit. */
         void                                                                        packet_input_ack(Byte* buffer, int buffer_size, uint64_t now) noexcept;
         /** @brief Process an inbound cmd_fec payload: cache the group, attempt single-loss recovery. */
         void                                                                        packet_input_fec(const vmux_linklayer_ptr& linklayer, Byte* buffer, int buffer_size, uint64_t now) noexcept;
         /** @brief Retain a just-sent reliable frame in the retransmit buffer (strand-affine). @return true when this was the first send of the frame. */
         bool                                                                        track_sent_frame(const std::shared_ptr<Byte>& packet, int packet_length, uint64_t now) noexcept;
+        /**
+         * @brief True when one more frame of @p length may be put on the wire
+         *        for the sequence space @p key_cid without overrunning the peer's
+         *        reorder budget.
+         * @details The peer can only reorder a bounded amount: it buffers the
+         *          frames that arrive ahead of a gap. If the sender keeps
+         *          feeding it, the peer's reorder buffer overruns and it drops
+         *          the surplus — or, worse, resets the flow. The sender's
+         *          retained ("sent but not yet delivered") bytes ARE that
+         *          budget, so this gate is what keeps the two sides in step.
+         *          compat has a single global sequence space, so its budget is
+         *          the session-wide one; flow v2 budgets each flow separately.
+         */
+        bool                                                                        rtx_budget_allows(uint32_t key_cid, int length) const noexcept;
         /** @brief Record ACK/FEC state for one inbound frame before dispatch (strand-affine). */
         void                                                                        note_inbound_reliability_frame(const vmux_linklayer_ptr& linklayer, const std::shared_ptr<Byte>& frame, vmux_hdr* h, int length, uint64_t now) noexcept;
         /** @brief Latch the negotiated reliability/FEC flags and their config bounds (pre-establishment). */
@@ -710,6 +765,23 @@ namespace vmux {
         size_t                                                                      count_live_carriers(const vmux_linklayer_ptr& except = NULLPTR) const noexcept;
         /** @brief True when the link still has room under the per-link byte high-water. */
         static bool                                                                 link_has_byte_credit(const vmux_linklayer_ptr& linklayer, int packet_length) noexcept;
+        /**
+         * @brief Prepares a carrier for a clean close before the socket goes away.
+         *
+         * Closing a socket that still holds unread bytes makes the kernel emit
+         * RST instead of FIN. The peer then reports the carrier as failed,
+         * discards the bytes it had not read yet and tears the whole mux
+         * session down -- even when the carrier was closing after a normal end
+         * of stream. Draining the unread bytes first lets the close emit FIN,
+         * so the peer observes a clean EOF.
+         *
+         * Only the bytes this side received and no longer needs are dropped;
+         * the send direction is untouched, so the peer still receives every byte
+         * that was queued for it.
+         *
+         * @param connection Carrier transport to prepare.
+         */
+        static void                                                                 drain_carrier_receive(const IMuxTransportPtr& connection) noexcept;
         /** @brief Enqueue one data frame into the per-flow DRR queue (strand-affine). */
         void                                                                        enqueue_flow_tx(uint32_t connection_id, tx_packet&& packet) noexcept;
         /** @brief Total queued data frames across all per-flow TX queues. */
@@ -851,6 +923,7 @@ namespace vmux {
 
         receiver_ordering_mode                                                      ordering_mode_ = ordering_compat; ///< Negotiated receiver ordering mode (flow v2).
         vmux_flow_map                                                               flows_;             ///< connection_id -> per-flow receive context (flow v2 only).
+        vmux::unordered_map<uint32_t, closed_flow_record>                            closed_flows_;      ///< connection_id -> last delivered DSN of a finished flow (bounded, flow v2 only; strand-affine).
         vmux::unordered_map<uint32_t, uint32_t>                                     tx_flow_seq_;       ///< connection_id -> next per-flow DSN to send (flow v2 only).
         size_t                                                                      flow_reorder_cap_bytes_ = 0; ///< Per-connection reorder buffer byte cap (from config).
         size_t                                                                      session_reorder_cap_bytes_ = 0; ///< Session-wide reorder byte cap (from config).
@@ -862,8 +935,9 @@ namespace vmux {
         size_t                                                                      max_open_flows_ = 0; ///< Max open logical flows (from config).
         size_t                                                                      tx_ctrl_budget_frames_ = (size_t)PPP_MUX_TX_CTRL_BUDGET_FRAMES; ///< Ctrl frames per drain turn.
         uint64_t                                                                    flow_reorder_timeout_   = 0; ///< Gap wait timeout in ms (flow_v2 per-flow; compat global rx_queue_).
-        uint64_t                                                                    rx_gap_oldest_tick_     = 0; ///< Compat: tick of oldest buffered OOO frame (0 = no global gap).
-        uint64_t                                                                    tx_backlog_since_       = 0; ///< Tick the data tx queue first stayed at/over high-water (0 = not backlogged); drives the D11 stall watchdog.
+        uint64_t                                                                    rx_gap_oldest_tick_     = 0; ///< Compat: tick at which the current global hole (seq == status_.rx_ack_) opened.
+        bool                                                                        rx_gap_advertised_     = false; ///< Compat: true once the current hole was advertised to the peer with a forced ACK.
+        ppp::app::mux::MuxBacklogWatchdog                                           tx_backlog_watchdog_;   ///< D11 stall watchdog: a full queue that keeps draining is slow, not wedged.
         size_t                                                                      tx_queue_high_water_    = (size_t)PPP_MUX_TX_QUEUE_HIGH_WATER; ///< Aggregate data-frame high-water (tx_data_frames_) for D11 backpressure.
         uint64_t                                                                    tx_backlog_stall_ms_    = (uint64_t)PPP_MUX_TX_BACKLOG_STALL_TIMEOUT; ///< Backlog stall timeout in ms (from config; D11 watchdog).
         bool                                                                        turbo_                  = false; ///< flow-mode turbo enabled (from config; best-link-first first packet).
@@ -891,7 +965,11 @@ namespace vmux {
         bool                                                                        reliability_on_ = false;   ///< Negotiated reliability sub-protocol active.
         bool                                                                        fec_on_ = false;           ///< Negotiated FEC active (implies reliability_on_).
         size_t                                                                      rtx_cap_bytes_ = (size_t)PPP_MUX_RELIABILITY_RTX_BYTES;   ///< Retransmit buffer byte cap (from config).
+        size_t                                                                      rtx_flow_cap_bytes_ = 0; ///< Per-flow retransmit budget (flow v2); the sender's share of the peer's per-flow reorder cap.
         uint32_t                                                                    rtx_max_attempts_ = (uint32_t)PPP_MUX_RELIABILITY_RTX_MAX_ATTEMPTS; ///< Per-frame retransmit attempt cap (from config).
+        uint64_t                                                                    rtx_fail_grace_ms_ = (uint64_t)PPP_MUX_RELIABILITY_RTX_FAIL_GRACE_MS; ///< Minimum unacknowledged age before a spent-budget frame fails its flow (from config).
+        uint64_t                                                                    rtx_fail_margin_ms_ = (uint64_t)PPP_MUX_RELIABILITY_RTX_FAIL_MARGIN_MS; ///< Receiver patience that must outlast the sender's fail deadline.
+        uint64_t                                                                    rtx_exhausted_backoff_ms_ = (uint64_t)PPP_MUX_RELIABILITY_RTX_EXHAUSTED_BACKOFF_MS; ///< Re-send spacing once the attempt budget is spent.
         uint64_t                                                                    ack_delay_ms_ = (uint64_t)PPP_MUX_RELIABILITY_ACK_DELAY;  ///< Delayed-ACK wait in ms (from config).
         uint64_t                                                                    reliability_gap_timeout_ms_ = (uint64_t)PPP_MUX_RELIABILITY_GAP_TIMEOUT; ///< Gap timeout when reliability is active (from config).
         int                                                                         fec_group_k_ = PPP_MUX_FEC_GROUP;       ///< Data frames per FEC parity group (from config).
