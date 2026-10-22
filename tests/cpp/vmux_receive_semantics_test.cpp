@@ -524,7 +524,37 @@ void TestGapTimeoutResetsFlowWithoutHoleDelivery() {
     ctx->restart();
 }
 
-void TestReorderOverflowResetsFlow() {
+void TestFlowGapTimeoutFiresWhenFirstDsnNeverArrives() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 21;
+    constexpr std::uint64_t timeout_ms = 50;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, timeout_ms);
+
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+    const char p2[] = "B";
+
+    // The very first DSN of the flow never arrives, so the flow has no
+    // delivery to date its hole from. The hole must be dated from the first
+    // frame seen above it: otherwise the gap timeout never fires for this
+    // flow, it hangs until the session idle timeout, and the peer burns its
+    // whole retransmit budget meanwhile.
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 2, p2, 1, 1000), "dsn2 inject");
+    Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 0, "dsn2 must wait for dsn1");
+    Require(vmux::vmux_net_test_access::FlowBufferedBytes(*mux, cid) > 0, "dsn2 buffered");
+    Require(vmux::vmux_net_test_access::FlowExists(*mux, cid), "flow exists");
+
+    vmux::vmux_net_test_access::EvictExpired(*mux, 1000 + timeout_ms + 1);
+    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid),
+            "gap timeout must erase a flow whose first dsn never arrived");
+
+    // close() is posted async; poll executor so finalize can run.
+    auto ctx = mux->get_context();
+    Require(static_cast<bool>(ctx), "context");
+    ctx->poll();
+    ctx->restart();
+}
+
+void TestReorderOverflowDropsSurplusKeepsFlow() {
     auto mux = MakeMux();
     constexpr std::uint32_t cid = 9;
     // Small cap: header(9)+payload must fit one future frame, second future overflows.
@@ -544,10 +574,17 @@ void TestReorderOverflowResetsFlow() {
     Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 1, "no hole delivery on buffer");
     Require(vmux::vmux_net_test_access::FlowExists(*mux, cid), "still open after first buffer");
 
-    // Another future frame cannot fit: overflow -> fail_flow.
+    // Another future frame cannot fit: the surplus frame is DROPPED (never
+    // buffered, never acknowledged) and the flow survives. The peer keeps its
+    // retransmit copy and re-sends the frame once the gap in front of it
+    // closes; killing the flow here would turn a transient inter-carrier skew
+    // into a session teardown.
+    const std::size_t buffered_before = vmux::vmux_net_test_access::FlowBufferedBytes(*mux, cid);
     Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 4, payload, 16, 2002), "dsn4 overflow");
     Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 1, "no force-advance delivery of buffered frames");
-    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid), "overflow must reset flow");
+    Require(vmux::vmux_net_test_access::FlowExists(*mux, cid), "overflow must keep the flow alive");
+    Require(vmux::vmux_net_test_access::FlowBufferedBytes(*mux, cid) == buffered_before,
+            "the surplus frame must not be buffered");
 }
 
 void TestFrameOversizeResetsFlow() {
@@ -614,7 +651,7 @@ void TestCompatOooRefreshesActivity() {
     Require(vmux::vmux_net_test_access::LastActive(*mux) == 5000, "ooo must call active(now)");
 }
 
-void TestCompatGapTimeoutClosesSession() {
+void TestCompatGapTimeoutFailsConnectionsKeepsSession() {
     auto mux = MakeMux();
     constexpr std::uint64_t timeout_ms = 50;
     vmux::vmux_net_test_access::ConfigureCompat(*mux, timeout_ms);
@@ -625,12 +662,12 @@ void TestCompatGapTimeoutClosesSession() {
     Require(!vmux::vmux_net_test_access::IsDisposed(*mux), "not timed out yet");
 
     vmux::vmux_net_test_access::CompatEvict(*mux, 10000 + timeout_ms + 1);
-    // close_exec posts finalize async; poll once
-    auto ctx = mux->get_context();
-    Require(static_cast<bool>(ctx), "ctx");
-    ctx->poll();
-    ctx->restart();
-    Require(vmux::vmux_net_test_access::IsDisposed(*mux), "compat gap timeout must dispose session");
+    // The hole is local to the peer's->our direction. The session survives so
+    // the opposite direction -- which may be carrying a bulk transfer -- keeps
+    // flowing; only the connections stuck behind the hole are failed and the
+    // frames that can never be delivered in order are dropped.
+    Require(!vmux::vmux_net_test_access::IsDisposed(*mux), "compat gap timeout must keep the session alive");
+    Require(vmux::vmux_net_test_access::CompatReorderSize(*mux) == 0, "the undeliverable frames are dropped");
 }
 
 void TestCompatReorderCapDropsSurplusKeepsSession() {
@@ -892,10 +929,11 @@ int main() {
         TestInOrderStillDelivers();
         TestFirstObservedFutureDsnWaitsForDsnOne();
         TestGapTimeoutResetsFlowWithoutHoleDelivery();
-        TestReorderOverflowResetsFlow();
+        TestFlowGapTimeoutFiresWhenFirstDsnNeverArrives();
+        TestReorderOverflowDropsSurplusKeepsFlow();
         TestFrameOversizeResetsFlow();
         TestCompatOooRefreshesActivity();
-        TestCompatGapTimeoutClosesSession();
+        TestCompatGapTimeoutFailsConnectionsKeepsSession();
         TestCompatReorderCapDropsSurplusKeepsSession();
         TestUnknownCidDoesNotGrowFlowsUnbounded();
         TestInitiatorOpenBarrierBlocksPush();

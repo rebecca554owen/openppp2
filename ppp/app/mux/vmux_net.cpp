@@ -1034,9 +1034,6 @@ namespace vmux {
 
         linklayer->queued_bytes_ += (size_t)packet_length;
         linklayer->total_sent_bytes_ += (uint64_t)packet_length;
-        {
-            vmux_hdr* dh = (vmux_hdr*)packet.get();
-        }
         const int accounted_length = packet_length;
 
         bool queued = transmission_write(self, transmission, packet, packet_length,
@@ -2063,7 +2060,14 @@ namespace vmux {
             else {
                 if (seq <= closed->second.last_dsn) {
                     ppp::telemetry::Count("mux.rx.closed_flow.reack", 1);
-                    acknowledge_closed_flow(cid, seq, now);
+                    // Acknowledge with the flow's real delivery frontier, not
+                    // with the sequence that happened to be retransmitted: the
+                    // tracker for this flow is gone, so the frontier is the
+                    // only thing that can release the peer's whole retained
+                    // set. Answering with the retransmitted sequence alone
+                    // would leave the later frames of the flow retained on the
+                    // peer side, which then burns its attempt budget.
+                    acknowledge_closed_flow(cid, closed->second.last_dsn, now);
                 }
                 else {
                     // Beyond the last delivered DSN of a closed flow: not a
@@ -2091,8 +2095,6 @@ namespace vmux {
 
 
         if (seq == fx.flow_rx_next_) {
-            if (!fx.flow_reorder_.empty()) {
-            }
             // In-order: deliver immediately, then replay any contiguous buffered frames.
             if (cmd == cmd_fin) {
                 fx.fin_seen_ = true;
@@ -2251,6 +2253,16 @@ namespace vmux {
                 entry_cap);
             if (inserted) {
                 session_reorder_bytes_ += (size_t)length;
+                // The hole at flow_rx_next_ just became observable: start its
+                // clock now. Without this, a flow whose very first DSN never
+                // arrives has no delivery to date the hole from, gap_opened_tick_
+                // stays zero and the gap timeout never fires for it -- the flow
+                // would hang until the session idle timeout while the peer burns
+                // its whole retransmit budget. The compat path has the same
+                // fallback for its global hole.
+                if (fx.gap_opened_tick_ == 0) {
+                    fx.gap_opened_tick_ = now;
+                }
             }
             // Duplicate future DSN (or other non-overflow reject): keep original, drop duplicate.
 
@@ -2311,7 +2323,6 @@ namespace vmux {
         }
 
         for (uint32_t cid : expired) {
-            flow_rx_context& fx = flows_[cid];
             fail_flow(cid, "gap_timeout");
         }
     }
@@ -2338,7 +2349,14 @@ namespace vmux {
         if (timeout == 0) {
             timeout = (uint64_t)PPP_MUX_FLOW_REORDER_TIMEOUT;
         }
-        if (reliability_on_ && reliability_gap_timeout_ms_ > 0) {
+        if (!reliability_on_) {
+            // Without the reliability sub-protocol the peer does not
+            // retransmit at all, so there is no retransmit window to wait
+            // for: the configured timeout stands. Raising it here would
+            // stretch every gap to tens of seconds for no reason.
+            return timeout;
+        }
+        if (reliability_gap_timeout_ms_ > 0) {
             timeout = reliability_gap_timeout_ms_;
         }
 
@@ -2952,7 +2970,18 @@ namespace vmux {
             if (!ack_trackers_.empty()) {
                 maybe_send_ack(now_tick(), true);
             }
-            ack_trackers_.erase(connection_id);
+            // Erase the tracker only when its acknowledgement actually went
+            // out: a queued-but-unsent acknowledgement would be dropped
+            // together with the tracker and never retried, so the peer would
+            // keep retransmitting frames we already delivered. A tracker that
+            // is still pending stays in the map and the periodic
+            // acknowledgement carries it.
+            {
+                const auto it = ack_trackers_.find(connection_id);
+                if (it != ack_trackers_.end() && !it->second.pending()) {
+                    ack_trackers_.erase(it);
+                }
+            }
         }
         if (!fec_on_) {
             return;
@@ -4623,8 +4652,12 @@ namespace vmux {
 
             // This connection id is live again: drop the record of its previous
             // incarnation, so the frames of the new flow are not mistaken for
-            // retransmissions of the old one.
+            // retransmissions of the old one. The old flow's acknowledgement
+            // tracker goes with it: a stale tracker would make the next
+            // acknowledgement for this id report the previous flow's frontier
+            // and release frames the peer never delivered.
             closed_flows_.erase(connection_id);
+            ack_trackers_.erase(connection_id);
             skt = ppp::make_shared_object<vmux_skt>(self, connection_id, statistics_);
             if (NULLPTR == skt) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetConnectSocketAllocFailed);
