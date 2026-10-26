@@ -119,7 +119,11 @@ namespace ppp {
                     std::atomic_load(&transmission->record_protector_recv_);
                 if (protector && protector->IsValid()) {
                     ppp::telemetry::Count("record.read.used", 1);
-                    ppp::telemetry::Log(Level::kInfo, "arp",
+                    // Per-record trace: at line rate this fires thousands of times
+                    // per second and floods the log/journal (99.9% of the output).
+                    // Keep it out of the INFO stream; the counter above still
+                    // records the volume.
+                    ppp::telemetry::Log(Level::kDebug, "arp",
                         "record read entry protector=1");
                     auto header = ITransmissionBridge::ReadBytes(transmission, y,
                         ppp::cryptography::AuthenticatedRecordProtector::RecordHeaderLength);
@@ -145,7 +149,9 @@ namespace ppp {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolFrameInvalid);
                         return NULLPTR;
                     }
-                    ppp::telemetry::Log(Level::kInfo, "arp",
+                    // Per-record trace (see above): the success case is a
+                    // per-frame event and must not reach the INFO stream.
+                    ppp::telemetry::Log(Level::kDebug, "arp",
                         "record header OK clen=%u", ciphertext_len);
 
                     const int record_len = static_cast<int>(ciphertext_len) +
@@ -168,12 +174,18 @@ namespace ppp {
                     std::memcpy(packet.get() + 12, record.get(), record_len);
                     int plaintext_len = 0;
                     packet = DecryptBinary(transmission, packet.get(), 12 + record_len, plaintext_len);
-                    ppp::telemetry::Log(Level::kInfo, "arp",
-                        "record open %s clen=%u plen=%d err=%d",
-                        NULLPTR != packet ? "OK" : "FAILED", ciphertext_len,
-                        plaintext_len, (int)ppp::diagnostics::GetLastErrorCode());
+                    // Split the per-frame success trace from the failure report:
+                    // "OK" fires once per record (line rate => log flood), while
+                    // "FAILED" is a real error and must stay in the INFO stream.
                     if (NULLPTR != packet) {
+                        ppp::telemetry::Log(Level::kDebug, "arp",
+                            "record open OK clen=%u plen=%d", ciphertext_len, plaintext_len);
                         outlen = plaintext_len;
+                    }
+                    else {
+                        ppp::telemetry::Log(Level::kInfo, "arp",
+                            "record open FAILED clen=%u err=%d", ciphertext_len,
+                            (int)ppp::diagnostics::GetLastErrorCode());
                     }
                     return packet;
                 }
