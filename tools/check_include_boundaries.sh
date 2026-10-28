@@ -40,7 +40,8 @@ fi
 # 107 -> 109: PMTU hardening adds VirtualEthernetPathMtu.h + VirtualEthernetTcpMss.h.
 # 109 -> 111: v2.2.0 AEAD adds AuthenticatedRecordProtector.h + RecordKeyDerivation.h.
 # 111 -> 112: the HTTP proxy request rewriter adds HttpProxyRequestRewriter.h.
-STDAFX_BASELINE=112
+# 112 -> 113: the HTTP proxy unavailable response adds HttpProxyUnavailableResponse.h.
+STDAFX_BASELINE=113
 stdafx_count=$({ list_headers 'stdafx' ppp 2>/dev/null || true; } | wc -l | tr -d ' ')
 if [[ "$stdafx_count" -gt "$STDAFX_BASELINE" ]]; then
   echo "FAIL: stdafx in ppp/**/*.h increased ($stdafx_count > $STDAFX_BASELINE)"

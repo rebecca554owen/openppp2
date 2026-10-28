@@ -1,4 +1,5 @@
 #include <ppp/app/client/proxys/VEthernetLocalProxySwitcher.h>
+#include <ppp/app/client/proxys/HttpProxyUnavailableResponse.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/app/client/proxys/VEthernetLocalProxyConnection.h>
 #include <ppp/app/client/VEthernetExchanger.h>
@@ -111,6 +112,14 @@ namespace ppp {
                         [self, this]() noexcept {
                             Finalize();
                         });
+                }
+
+                /**
+                 * @brief Returns the response for a client that arrives too early.
+                 * @return nullptr: close the connection without a response.
+                 */
+                const char* VEthernetLocalProxySwitcher::MyUnavailableResponse() noexcept {
+                    return NULLPTR;
                 }
 
                 /**
@@ -229,7 +238,10 @@ namespace ppp {
                                 return posted;
                             }
 
-                            ppp::net::Socket::Closesocket(sockfd);
+                            // The session is not established (or the runtime is gone):
+                            // answer the client before closing, so that it sees a
+                            // retryable status instead of a connection reset.
+                            WriteAndCloseProxySocket(sockfd, MyUnavailableResponse());
                             ppp::diagnostics::SetLastErrorCode(error_code);
                             return false;
                         };
