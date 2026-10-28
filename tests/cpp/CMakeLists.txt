@@ -591,6 +591,8 @@ openppp2_add_cpp_test(dns_wire_validation_test SOURCES dns_wire_validation_test.
 openppp2_add_cpp_test(base64_test SOURCES base64_test.cpp "${OPENPPP2_ROOT}/common/base64/base64.cpp")
 openppp2_add_cpp_test(http_proxy_request_rewriter_test SOURCES http_proxy_request_rewriter_test.cpp)
 target_link_libraries(http_proxy_request_rewriter_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(http_proxy_unavailable_response_test SOURCES http_proxy_unavailable_response_test.cpp)
+target_link_libraries(http_proxy_unavailable_response_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(sysctl_validation_test SOURCES sysctl_validation_test.cpp)
 openppp2_add_cpp_test(dns_redirect_plan_test SOURCES
     dns_redirect_plan_test.cpp
