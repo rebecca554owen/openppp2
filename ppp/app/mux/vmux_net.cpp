@@ -174,12 +174,21 @@ namespace vmux {
             std::lock_guard<std::mutex> scope(runtime_state_mutex_);
             // turbo_ may already be latched from config; include it so flow+turbo
             // negotiates ordering correctly and presentation shows adaptive pool.
+            // A fresh session has no latched flag yet (it is written by
+            // set_ordering_mode, i.e. after this decision), so the configured
+            // turbo has to be read here — otherwise flow+turbo would negotiate
+            // compat (global) ordering and the per-flow DSN path that turbo
+            // exists for would never engage.
+            const bool turbo_requested = ppp::app::mux::EffectiveTurbo(
+                runtime_state_.requested_mode,
+                NULLPTR != AppConfiguration && AppConfiguration->mux.turbo,
+                turbo_ || runtime_state_.turbo);
             state = ppp::app::mux::NegotiateMuxRuntimeState(
                 runtime_state_.requested_mode,
                 local_supports_flow_v2,
                 peer_supports_flow_v2,
                 runtime_state_.active_links,
-                turbo_ || runtime_state_.turbo,
+                turbo_requested,
                 local_reliability,
                 peer_reliability,
                 local_fec,
@@ -203,11 +212,18 @@ namespace vmux {
         ppp::app::mux::MuxRuntimeState state;
         {
             std::lock_guard<std::mutex> scope(runtime_state_mutex_);
+            // Same reasoning as apply_negotiation: a fresh session has no latched
+            // turbo flag yet, so read the configured value to keep the turbo
+            // presentation and the fallback reason in sync with the preset.
+            const bool turbo_requested = ppp::app::mux::EffectiveTurbo(
+                runtime_state_.requested_mode,
+                NULLPTR != AppConfiguration && AppConfiguration->mux.turbo,
+                turbo_ || runtime_state_.turbo);
             state = ppp::app::mux::ApplyAgreedMuxRuntimeState(
                 runtime_state_.requested_mode,
                 agreed_flow_v2,
                 runtime_state_.active_links,
-                turbo_ || runtime_state_.turbo,
+                turbo_requested,
                 agreed_reliability,
                 agreed_fec);
             runtime_state_ = state;

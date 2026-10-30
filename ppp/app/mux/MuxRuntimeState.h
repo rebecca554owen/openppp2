@@ -42,6 +42,26 @@ inline bool ModeRequiresFlowV2(const std::string& mode, bool turbo) noexcept {
 }
 
 /**
+ * @brief Effective turbo flag for the receiver-ordering decision.
+ * @param mode Effective scheduler mode token of the session.
+ * @param config_turbo Configured turbo flag (mux.turbo / --mux-mode-turbo).
+ * @param latched_turbo Turbo flag already latched by an earlier negotiation.
+ * @return True when the session must run the flow turbo path.
+ * @details The latched flag is only written *after* the first ordering decision
+ *          (see vmux_net::set_ordering_mode), so a fresh session has to read the
+ *          configured value instead. Relying on the latched flag alone made
+ *          `flow` + `mux.turbo` negotiate compat (global) ordering on every
+ *          new session, i.e. the per-flow DSN path that turbo exists for never
+ *          engaged. The configured flag only counts under the flow preset.
+ */
+inline bool EffectiveTurbo(const std::string& mode, bool config_turbo, bool latched_turbo) noexcept {
+    if (latched_turbo) {
+        return true;
+    }
+    return config_turbo && mode == "flow";
+}
+
+/**
  * Negotiate effective preset + receiver ordering + reliability capabilities.
  * @param local_supports_flow_v2 Implementation capability (independent of current preset).
  * @param peer_supports_flow_v2 Peer advertised capability bit.
