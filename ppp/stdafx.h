@@ -407,7 +407,10 @@ static constexpr int                                                        PPP_
 static constexpr int                                                        PPP_MUX_RELIABILITY_RTX_MAX_ATTEMPTS = 8;   /* per-frame retransmit attempts before flow/session teardown */
 static constexpr int                                                        PPP_MUX_RELIABILITY_ACK_DELAY   = 10;       /* ms max delayed-ACK wait before flushing an ACK frame */
 static constexpr int                                                        PPP_MUX_RELIABILITY_GAP_TIMEOUT = 3000;     /* ms gap timeout when reliability is negotiated (replaces the 400ms default) */
-static constexpr int                                                        PPP_MUX_RELIABILITY_GAP_TIMEOUT_MAX = 30000; /* ms ceiling for the gap timeout, which is also raised to cover the peer's retransmit window */
+static constexpr int                                                        PPP_MUX_RELIABILITY_GAP_TIMEOUT_MAX = 180000; /* ms ceiling for the gap timeout, which is also raised to cover the peer's retransmit window */
+static constexpr int                                                        PPP_MUX_RELIABILITY_RTX_FAIL_GRACE_MS = 30000; /* ms a frame that spent its attempt budget must stay unacknowledged before its flow is failed */
+static constexpr int                                                        PPP_MUX_RELIABILITY_RTX_FAIL_MARGIN_MS = 5000; /* ms the receiver's gap timeout must outlast the sender's fail deadline, so the sender always fails the flow first */
+static constexpr int                                                        PPP_MUX_RELIABILITY_RTX_EXHAUSTED_BACKOFF_MS = 5000; /* ms re-send spacing once the attempt budget is spent */
 static constexpr int                                                        PPP_MUX_RELIABILITY_PTO_INIT    = 500;      /* ms initial probe-timeout before any RTT sample */
 static constexpr int                                                        PPP_MUX_RELIABILITY_PTO_MIN     = 200;      /* ms lower clamp for the probe-timeout */
 static constexpr int                                                        PPP_MUX_RELIABILITY_PTO_MAX     = 3000;     /* ms upper clamp for the probe-timeout */

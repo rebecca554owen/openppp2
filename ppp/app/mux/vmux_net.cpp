@@ -897,6 +897,9 @@ namespace vmux {
 
     /** @brief Begins terminal close and finalizes on the VMUX strand (inline when the executor is stopped). */
     void vmux_net::close_exec() noexcept {
+        // A rebuilt session starts with an empty queue: forget any armed
+        // stall window so the fresh session is not judged by the old one.
+        tx_backlog_watchdog_.Reset();
         std::shared_ptr<vmux_net> self = weak_from_this().lock();
         if (NULLPTR == self || !self->begin_close()) {
             return;
@@ -1378,21 +1381,28 @@ namespace vmux {
                     // rather than hang forever serving nothing. Control frames have
                     // their own priority queue, so this only triggers on a genuine
                     // data-path wedge.
+                    // D11 stall watchdog: a FULL transmit queue is not a STUCK one.
+                    // On a slow but healthy path the carriers keep draining and the
+                    // depth keeps falling, so the queue legitimately stays at the
+                    // high-water mark for a long time. The old rule ("depth stayed
+                    // at/over the high-water mark for N ms => rebuild") read every
+                    // congested path as a dead one: it tore down all eleven
+                    // carriers, threw away their congestion window, and the
+                    // rebuilt session started from slow-start on the same slow
+                    // path. The watchdog now requires that the depth stopped
+                    // falling AND that no carrier write completed recently.
                     size_t tx_depth = tx_data_frames_;
-                    if (tx_depth >= tx_queue_high_water_) {
-                        if (tx_backlog_since_ == 0) {
-                            tx_backlog_since_ = now;
-                        }
-                        elif((now - tx_backlog_since_) >= tx_backlog_stall_ms_) {
-                            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
-                                "tx backlog stall watchdog: depth=%d held >= %dms, rebuilding session",
-                                (int)tx_depth, (int)tx_backlog_stall_ms_);
-                            ppp::telemetry::Count("mux.tx.backlog.stall", 1);
-                            close_exec();
-                        }
-                    }
-                    else {
-                        tx_backlog_since_ = 0;
+                    if (tx_backlog_watchdog_.Observe(
+                            tx_depth,
+                            tx_queue_high_water_,
+                            now,
+                            tx_backlog_stall_ms_,
+                            status_.last_tx_drain_.load(std::memory_order_acquire))) {
+                        ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
+                            "tx backlog stall watchdog: depth=%d held >= %dms, rebuilding session",
+                            (int)tx_depth, (int)tx_backlog_stall_ms_);
+                        ppp::telemetry::Count("mux.tx.backlog.stall", 1);
+                        close_exec();
                     }
 
                     ppp::telemetry::Gauge("mux.sched.mode", static_cast<int64_t>(mode_));
@@ -2376,8 +2386,12 @@ namespace vmux {
             timeout = reliability_gap_timeout_ms_;
         }
 
-        const uint64_t peer_window = ppp::app::mux::MuxRetransmitBuffer::TotalBackoffWindow(
-            current_pto(), rtx_max_attempts_);
+        // The peer keeps retrying until its fail deadline, so the receiver must
+        // outlast that deadline: otherwise the receiver would evict a flow the
+        // sender is still legitimately retrying, and the two sides would race.
+        // The sender failing its own flow is the clean outcome, so the receiver
+        // gets a margin on top of the sender's deadline.
+        const uint64_t peer_window = rtx_fail_after_ms() + rtx_fail_margin_ms_;
         if (peer_window > timeout) {
             timeout = peer_window;
             const uint64_t ceiling = (uint64_t)PPP_MUX_RELIABILITY_GAP_TIMEOUT_MAX;
@@ -2386,6 +2400,70 @@ namespace vmux {
             }
         }
         return timeout;
+    }
+
+    uint64_t vmux_net::rtx_fail_after_ms() const noexcept {
+        // The sender's fail deadline: the attempt budget has to be spent
+        // first (which already takes at least the full backoff window), and
+        // the grace floor keeps a congested carrier from being declared dead
+        // while it is still making progress.
+        const uint64_t budget = ppp::app::mux::MuxRetransmitBuffer::TotalBackoffWindow(
+            current_pto(), rtx_max_attempts_);
+        return (rtx_fail_grace_ms_ > budget) ? rtx_fail_grace_ms_ : budget;
+    }
+
+    void vmux_net::fail_exhausted_frames(uint64_t now) noexcept {
+        std::vector<std::uint64_t> exhausted;
+        rtx_.CollectExhausted(now, rtx_max_attempts_, rtx_fail_after_ms(), exhausted);
+        for (const std::uint64_t key : exhausted) {
+            ppp::app::mux::MuxRtxEntry* entry = rtx_.Find(key);
+            if (NULLPTR == entry) {
+                continue; // Already released by an ACK or a flow reset.
+            }
+            const uint32_t cid = ppp::app::mux::MuxRetransmitBuffer::KeyCid(key);
+            const uint32_t attempts = entry->attempts;
+            const uint64_t age = (now >= entry->first_sent_tick) ? (now - entry->first_sent_tick) : 0;
+            ppp::telemetry::Count("mux.rtx.exhausted", 1);
+            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
+                "rtx exhausted: cid=%u seq=%u attempts=%u age=%llums; failing that connection only",
+                (unsigned)cid,
+                (unsigned)(key & 0xFFFFFFFFu),
+                (unsigned)attempts,
+                (unsigned long long)age);
+            if (ordering_mode_ == ordering_flow_v2) {
+                fail_flow(cid, "rtx_exhausted");
+                continue;
+            }
+
+            // compat: the retransmit space is session-global, so the key
+            // carries no connection id -- the frame header does.
+            //
+            // Tearing the whole session down over ONE unrecoverable frame
+            // is what turns a single lost acknowledgement into a dead
+            // tunnel: every unrelated transfer in the session dies with
+            // it, including a gigabyte-scale download in flight. Fail only
+            // the logical connection that owns the frame, drop the frame
+            // (it can never be acknowledged, and keeping it would hold the
+            // session's send budget hostage) and keep the session alive.
+            {
+                uint32_t frame_cid = 0;
+                if (entry->length >= (int)sizeof(vmux_hdr) && NULLPTR != entry->buffer) {
+                    const vmux_hdr* fh = (const vmux_hdr*)entry->buffer.get();
+                    frame_cid = ntohl(fh->connection_id);
+                }
+                rtx_.Erase(key);
+                vmux_skt_ptr skt = get_connection(frame_cid);
+                if (NULLPTR != skt) {
+                    // Suppress the outbound FIN: post() would consume a
+                    // global sequence number and, on failure, call
+                    // close_exec() -- killing the session for a
+                    // single-connection failure.
+                    skt->status_.fin_ = true;
+                    skt->close();
+                }
+                ppp::telemetry::Count("mux.rtx.exhausted.connection", 1);
+            }
+        }
     }
 
     void vmux_net::compat_evict_expired(uint64_t now) noexcept {
@@ -2449,11 +2527,13 @@ namespace vmux {
             const int rtx_bytes = AppConfiguration->mux.reliability.rtx.bytes;
             const int rtx_flow_bytes = AppConfiguration->mux.reliability.rtx.flow_bytes;
             const int rtx_attempts = AppConfiguration->mux.reliability.rtx.max_attempts;
+            const int rtx_grace = AppConfiguration->mux.reliability.rtx.grace_ms;
             const int ack_delay = AppConfiguration->mux.reliability.ack.delay;
             const int gap_timeout = AppConfiguration->mux.reliability.gap.timeout;
             rtx_cap_bytes_ = (rtx_bytes > 0) ? (size_t)rtx_bytes : (size_t)PPP_MUX_RELIABILITY_RTX_BYTES;
             rtx_flow_cap_bytes_ = (rtx_flow_bytes > 0) ? (size_t)rtx_flow_bytes : (size_t)PPP_MUX_RELIABILITY_RTX_FLOW_BYTES;
             rtx_max_attempts_ = (rtx_attempts > 0) ? (uint32_t)rtx_attempts : (uint32_t)PPP_MUX_RELIABILITY_RTX_MAX_ATTEMPTS;
+            rtx_fail_grace_ms_ = (rtx_grace > 0) ? (uint64_t)rtx_grace : (uint64_t)PPP_MUX_RELIABILITY_RTX_FAIL_GRACE_MS;
             ack_delay_ms_ = (ack_delay > 0) ? (uint64_t)ack_delay : (uint64_t)PPP_MUX_RELIABILITY_ACK_DELAY;
             reliability_gap_timeout_ms_ = (gap_timeout > 0) ? (uint64_t)gap_timeout : (uint64_t)PPP_MUX_RELIABILITY_GAP_TIMEOUT;
 
@@ -2811,57 +2891,20 @@ namespace vmux {
                     continue;
                 }
             }
-            if (entry->attempts >= rtx_max_attempts_) {
-                // Unrecoverable frame: degrade exactly like an unrecovered gap.
-                // Deferred teardown: this runs inside reliability_tick's syncobj_
-                // scope; an inline finalize() would self-deadlock the strand.
-                ppp::telemetry::Count("mux.rtx.exhausted", 1);
-                ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
-                    "rtx exhausted: cid=%u seq=%u attempts=%u; failing that connection only",
-                    (unsigned)ppp::app::mux::MuxRetransmitBuffer::KeyCid(key),
-                    (unsigned)(key & 0xFFFFFFFFu),
-                    (unsigned)entry->attempts);
-                const uint32_t cid = ppp::app::mux::MuxRetransmitBuffer::KeyCid(key);
-                if (ordering_mode_ == ordering_flow_v2) {
-                    fail_flow(cid, "rtx_exhausted");
-                    continue;
-                }
-
-                // compat: the retransmit space is session-global, so the key
-                // carries no connection id — the frame header does.
-                //
-                // Tearing the whole session down over ONE unrecoverable frame
-                // is what turns a single lost acknowledgement into a dead
-                // tunnel: every unrelated transfer in the session dies with
-                // it, including a gigabyte-scale download in flight. Fail only
-                // the logical connection that owns the frame, drop the frame
-                // (it can never be acknowledged, and keeping it would hold the
-                // session's send budget hostage) and keep the session alive.
-                //
-                // The peer keeps its own view of the sequence space; if the
-                // frame really was lost, the peer's receive frontier stalls on
-                // it and the peer reaches its own recovery path. The opposite
-                // direction — the bulk transfer — is unaffected either way.
-                {
-                    uint32_t frame_cid = 0;
-                    if (entry->length >= (int)sizeof(vmux_hdr) && NULLPTR != entry->buffer) {
-                        const vmux_hdr* fh = (const vmux_hdr*)entry->buffer.get();
-                        frame_cid = ntohl(fh->connection_id);
-                    }
-                    rtx_.Erase(key);
-                    vmux_skt_ptr skt = get_connection(frame_cid);
-                    if (NULLPTR != skt) {
-                        // Suppress the outbound FIN: post() would consume a
-                        // global sequence number and, on failure, call
-                        // close_exec() — killing the session for a
-                        // single-connection failure.
-                        skt->status_.fin_ = true;
-                        skt->close();
-                    }
-                    ppp::telemetry::Count("mux.rtx.exhausted.connection", 1);
-                }
-                continue;
-            }
+            // A frame that spent its attempt budget is NOT failed here.
+            //
+            // The attempt budget is derived from the probe timeout, which on a
+            // fast path is a few hundred milliseconds, while the carrier
+            // underneath may still need tens of seconds of RTO backoff to
+            // deliver the frame. Failing the flow on the attempt count alone
+            // killed connections the carrier was about to deliver -- measured
+            // on a congested public path that was roughly two killed flows per
+            // minute, every hour.
+            //
+            // The frame therefore keeps being re-sent (on a relaxed cadence,
+            // so the retransmissions do not crowd out the bulk traffic) until
+            // it is acknowledged or until the fail deadline passes. See
+            // fail_exhausted_frames().
 
             // Pick any free link with byte credit; retransmissions keep the
             // ORIGINAL sequence number so the receiver deduplicates them.
@@ -2929,11 +2972,18 @@ namespace vmux {
         if (base_.established_ && reliability_on_) {
             maybe_send_ack(now, false);
 
-            rtx_.CollectExpired(now, current_pto(), (size_t)PPP_MUX_RELIABILITY_RXT_BURST, rtx_pending_);
+            rtx_.CollectExpired(now, current_pto(), (size_t)PPP_MUX_RELIABILITY_RXT_BURST, rtx_pending_,
+                rtx_max_attempts_, rtx_exhausted_backoff_ms_);
             if (!rtx_pending_.empty()) {
                 ppp::telemetry::Count("mux.rtx.pto", 1);
                 retransmit_pending(now);
             }
+
+            // Frames that spent the attempt budget AND aged past the fail
+            // deadline: their flow is dead now. Deferred teardown: this runs
+            // inside reliability_tick's syncobj_ scope; an inline finalize()
+            // would self-deadlock the strand.
+            fail_exhausted_frames(now);
 
             if (fec_on_ && fec_encoder_.count() > 0 &&
                 (fec_flush_due_ || (now - fec_encoder_.first_add_tick()) >= fec_flush_ms_)) {

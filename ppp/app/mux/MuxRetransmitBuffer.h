@@ -199,7 +199,8 @@ public:
      * waiting forever.
      */
     void CollectExpired(std::uint64_t now, std::uint64_t pto, std::size_t max_count,
-        std::vector<std::uint64_t>& expired) const {
+        std::vector<std::uint64_t>& expired, std::uint32_t exhausted_after = 0,
+        std::uint64_t exhausted_backoff_ms = 0) const {
         for (const std::uint64_t key : order_) {
             if (expired.size() >= max_count) {
                 break;
@@ -212,9 +213,59 @@ public:
             if (now < entry.last_sent_tick) {
                 continue;
             }
-            if ((now - entry.last_sent_tick) >= BackoffWindow(pto, entry.attempts)) {
+            std::uint64_t window = BackoffWindow(pto, entry.attempts);
+            // A frame that already spent its attempt budget is not dead yet: it
+            // is kept alive until the fail deadline, but it is re-sent on a
+            // relaxed cadence so the peer keeps seeing the hole (and the
+            // carrier keeps getting a chance to drain) without the
+            // retransmissions themselves crowding out the bulk traffic.
+            if (exhausted_after > 0 && entry.attempts >= exhausted_after &&
+                exhausted_backoff_ms > window) {
+                window = exhausted_backoff_ms;
+            }
+            if ((now - entry.last_sent_tick) >= window) {
                 expired.push_back(key);
             }
+        }
+    }
+
+    /**
+     * Collect keys whose retransmit attempt budget is spent AND that have
+     * been unacknowledged for at least @p min_age_ms.
+     *
+     * The age floor is what keeps a congested-but-alive carrier from being
+     * declared dead: the attempt budget is derived from the probe timeout,
+     * which on a fast path is a few hundred milliseconds, while the
+     * transport underneath may need tens of seconds of RTO backoff to
+     * deliver the frame. Failing the flow on the attempt count alone kills
+     * connections that the carrier was about to deliver.
+     *
+     * @param now          Current tick in milliseconds.
+     * @param max_attempts Attempt budget a frame must have spent.
+     * @param min_age_ms   Minimum unacknowledged age in milliseconds.
+     * @param exhausted    Output vector; cleared by the caller beforehand.
+     */
+    void CollectExhausted(std::uint64_t now, std::uint32_t max_attempts, std::uint64_t min_age_ms,
+        std::vector<std::uint64_t>& exhausted) const {
+        if (max_attempts == 0) {
+            return;
+        }
+        for (const std::uint64_t key : order_) {
+            const auto it = entries_.find(key);
+            if (it == entries_.end()) {
+                continue;
+            }
+            const MuxRtxEntry& entry = it->second;
+            if (entry.attempts < max_attempts) {
+                continue;
+            }
+            if (now < entry.first_sent_tick) {
+                continue;
+            }
+            if ((now - entry.first_sent_tick) < min_age_ms) {
+                continue;
+            }
+            exhausted.push_back(key);
         }
     }
 

@@ -472,6 +472,9 @@ openppp2_add_cpp_test(vmux_ack_tracker_test SOURCES
     vmux_ack_tracker_test.cpp)
 openppp2_add_cpp_test(vmux_retransmit_buffer_test SOURCES
     vmux_retransmit_buffer_test.cpp)
+openppp2_add_cpp_test(vmux_backlog_watchdog_test SOURCES
+    vmux_backlog_watchdog_test.cpp)
+target_link_libraries(vmux_backlog_watchdog_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(vmux_fec_codec_test SOURCES
     vmux_fec_codec_test.cpp)
 openppp2_add_cpp_test(vmux_flow_reorder_test SOURCES

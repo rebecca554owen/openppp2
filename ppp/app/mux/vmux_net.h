@@ -17,6 +17,7 @@
 #include <ppp/app/mux/MuxRuntimeState.h>
 #include <ppp/app/mux/MuxAckTracker.h>
 #include <ppp/app/mux/MuxRetransmitBuffer.h>
+#include <ppp/app/mux/MuxBacklogWatchdog.h>
 #include <ppp/app/mux/MuxFecCodec.h>
 
 namespace vmux {
@@ -582,6 +583,10 @@ namespace vmux {
          *          is still legitimately trying.
          */
         uint64_t                                                                    effective_gap_timeout() const noexcept;
+        /** @brief Deadline after which a frame that spent its retransmit budget fails its flow. */
+        uint64_t                                                                    rtx_fail_after_ms() const noexcept;
+        /** @brief Fail the flows whose frames spent the retransmit budget and aged past the deadline. */
+        void                                                                        fail_exhausted_frames(uint64_t now) noexcept;
         /** @brief Fail one logical flow without delivering past an unrecovered gap. */
         void                                                                        fail_flow(uint32_t connection_id, const char* reason) noexcept;
         flow_rx_context*                                                            try_get_or_create_flow(uint32_t connection_id) noexcept;
@@ -915,7 +920,7 @@ namespace vmux {
         uint64_t                                                                    flow_reorder_timeout_   = 0; ///< Gap wait timeout in ms (flow_v2 per-flow; compat global rx_queue_).
         uint64_t                                                                    rx_gap_oldest_tick_     = 0; ///< Compat: tick at which the current global hole (seq == status_.rx_ack_) opened.
         bool                                                                        rx_gap_advertised_     = false; ///< Compat: true once the current hole was advertised to the peer with a forced ACK.
-        uint64_t                                                                    tx_backlog_since_       = 0; ///< Tick the data tx queue first stayed at/over high-water (0 = not backlogged); drives the D11 stall watchdog.
+        ppp::app::mux::MuxBacklogWatchdog                                           tx_backlog_watchdog_;   ///< D11 stall watchdog: a full queue that keeps draining is slow, not wedged.
         size_t                                                                      tx_queue_high_water_    = (size_t)PPP_MUX_TX_QUEUE_HIGH_WATER; ///< Aggregate data-frame high-water (tx_data_frames_) for D11 backpressure.
         uint64_t                                                                    tx_backlog_stall_ms_    = (uint64_t)PPP_MUX_TX_BACKLOG_STALL_TIMEOUT; ///< Backlog stall timeout in ms (from config; D11 watchdog).
         bool                                                                        turbo_                  = false; ///< flow-mode turbo enabled (from config; best-link-first first packet).
@@ -945,6 +950,9 @@ namespace vmux {
         size_t                                                                      rtx_cap_bytes_ = (size_t)PPP_MUX_RELIABILITY_RTX_BYTES;   ///< Retransmit buffer byte cap (from config).
         size_t                                                                      rtx_flow_cap_bytes_ = 0; ///< Per-flow retransmit budget (flow v2); the sender's share of the peer's per-flow reorder cap.
         uint32_t                                                                    rtx_max_attempts_ = (uint32_t)PPP_MUX_RELIABILITY_RTX_MAX_ATTEMPTS; ///< Per-frame retransmit attempt cap (from config).
+        uint64_t                                                                    rtx_fail_grace_ms_ = (uint64_t)PPP_MUX_RELIABILITY_RTX_FAIL_GRACE_MS; ///< Minimum unacknowledged age before a spent-budget frame fails its flow (from config).
+        uint64_t                                                                    rtx_fail_margin_ms_ = (uint64_t)PPP_MUX_RELIABILITY_RTX_FAIL_MARGIN_MS; ///< Receiver patience that must outlast the sender's fail deadline.
+        uint64_t                                                                    rtx_exhausted_backoff_ms_ = (uint64_t)PPP_MUX_RELIABILITY_RTX_EXHAUSTED_BACKOFF_MS; ///< Re-send spacing once the attempt budget is spent.
         uint64_t                                                                    ack_delay_ms_ = (uint64_t)PPP_MUX_RELIABILITY_ACK_DELAY;  ///< Delayed-ACK wait in ms (from config).
         uint64_t                                                                    reliability_gap_timeout_ms_ = (uint64_t)PPP_MUX_RELIABILITY_GAP_TIMEOUT; ///< Gap timeout when reliability is active (from config).
         int                                                                         fec_group_k_ = PPP_MUX_FEC_GROUP;       ///< Data frames per FEC parity group (from config).

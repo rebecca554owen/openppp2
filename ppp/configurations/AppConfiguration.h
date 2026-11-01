@@ -192,6 +192,7 @@ namespace ppp {
                         int                                                 bytes;          ///< Session-wide retransmit buffer byte cap; strictly > 0.
                         int                                                 flow_bytes;     ///< Per-flow retransmit budget (flow v2); strictly > 0. Must not exceed the peer's per-connection reorder cap.
                         int                                                 max_attempts;   ///< Per-frame retransmit attempts before flow reset / session rebuild; strictly > 0.
+                        int                                                 grace_ms;      ///< Minimum unacknowledged age (ms) before a spent-budget frame fails its flow; strictly > 0.
                     }                                                       rtx;
                     struct {
                         int                                                 delay;          ///< Max delayed-ACK wait in milliseconds; strictly > 0.
