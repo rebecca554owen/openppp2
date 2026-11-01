@@ -337,43 +337,31 @@ void TestProductionNdiTsoMetadata() {
     }
 }
 
-void TestPartialChecksumCapabilityIsExplicitAndRetained() {
-    const char* previous = std::getenv("OPENPPP2_XTCP_TUN_CSUM_PARTIAL");
-    const bool had_previous = previous != nullptr;
-    const std::string previous_value = previous ? previous : "";
-    const char* previous_tso = std::getenv("OPENPPP2_XTCP_NDI_TSO_TX");
-    const bool had_previous_tso = previous_tso != nullptr;
-    const std::string previous_tso_value = previous_tso ? previous_tso : "";
-    unsetenv("OPENPPP2_XTCP_NDI_TSO_TX");
-    setenv("OPENPPP2_XTCP_TUN_CSUM_PARTIAL", "1", 1);
 
-    bool retained_partial = false;
+// The pinned upstream XTCP stack always computes the full RFC 1071
+// checksum (fused copy + checksum), so the backend never advertises a
+// partial-checksum capability and always hands the TAP a complete checksum.
+void TestChecksumIsAlwaysComplete() {
     using Backend = ppp::app::client::xtcp::XtcpNdiBackend;
+    bool retained_partial = true;
     Backend backend([](std::shared_ptr<Byte>&&, int,
         std::optional<ppp::tap::TxGsoMetadata>) noexcept { return true; }, true, {},
         [&retained_partial](const Byte*, int, ppp::tap::RetainedPacketOwner&& owner) noexcept {
             retained_partial = owner.ChecksumPartial();
             return true;
         });
-    CHECK(0 != (backend.Caps() & xtcp::ndi::kCapChecksumPartialTx));
     CHECK(0 == (backend.Caps() & xtcp::ndi::kCapTsoTx));
 
     xtcp::buf::BufRef owned = xtcp::buf::BufRef::Acquire(40);
     CHECK(!owned.IsEmpty());
     std::memset(owned.Data(), 0, 40);
-    owned.Meta().checksum_partial = true;
     xtcp::ndi::Packet packet;
     packet.data = owned.Data();
     packet.len = 40;
     packet.eth_type = 0x0800;
     packet.owned = std::move(owned);
     CHECK(backend.Tx(std::move(packet)));
-    CHECK(retained_partial);
-
-    if (had_previous) setenv("OPENPPP2_XTCP_TUN_CSUM_PARTIAL", previous_value.c_str(), 1);
-    else unsetenv("OPENPPP2_XTCP_TUN_CSUM_PARTIAL");
-    if (had_previous_tso) setenv("OPENPPP2_XTCP_NDI_TSO_TX", previous_tso_value.c_str(), 1);
-    else unsetenv("OPENPPP2_XTCP_NDI_TSO_TX");
+    CHECK(!retained_partial);
 }
 
 struct RejectedPacket final {
@@ -612,7 +600,7 @@ int main() {
     TestSynchronousBorrowedNdiOutput();
     TestNdiDiagnosticsCanBeDisabled();
     TestProductionNdiTsoMetadata();
-    TestPartialChecksumCapabilityIsExplicitAndRetained();
+    TestChecksumIsAlwaysComplete();
     TestRuntimeOutputRejectionPacketShapes();
     xtcp::buf::ShutdownPools();
     TestRuntimeRejectsNullContext();

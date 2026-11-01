@@ -950,6 +950,15 @@ if(ENABLE_XTCP_TESTS)
     if(NOT TARGET xtcp_static)
         message(FATAL_ERROR "XTCP source tree did not define the required xtcp_static target")
     endif()
+    # Feature probe: only some XTCP revisions expose a per-connection timer
+    # deadline (XtcpStack::NextTimerDeadlineUs).
+    set(XTCP_HAS_TIMER_DEADLINE OFF)
+    if(EXISTS "${XTCP_SOURCE_DIR}/include/xtcp/core/stack.h")
+        file(READ "${XTCP_SOURCE_DIR}/include/xtcp/core/stack.h" _xtcp_stack_header)
+        if(_xtcp_stack_header MATCHES "NextTimerDeadlineUs")
+            set(XTCP_HAS_TIMER_DEADLINE ON)
+        endif()
+    endif()
 
     foreach(_xtcp_test
             xtcp_dependency_contract_test
@@ -974,8 +983,10 @@ if(ENABLE_XTCP_TESTS)
         "${OPENPPP2_ROOT}/ppp/app/client/xtcp/XtcpRuntime.cpp")
     target_compile_definitions(xtcp_runtime_adapter_test PRIVATE
         PPP_ENABLE_XTCP=1
-        PPP_XTCP_HAS_TIMER_DEADLINE=1
         PPP_XTCP_RUNTIME_TESTING=1)
+    if(XTCP_HAS_TIMER_DEADLINE)
+        target_compile_definitions(xtcp_runtime_adapter_test PRIVATE PPP_XTCP_HAS_TIMER_DEADLINE=1)
+    endif()
     target_link_libraries(xtcp_runtime_adapter_test PRIVATE
         xtcp_static Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 
@@ -992,8 +1003,10 @@ if(ENABLE_XTCP_TESTS)
         "${OPENPPP2_ROOT}/ppp/app/client/xtcp/XtcpPoolLease.cpp"
         "${OPENPPP2_ROOT}/ppp/app/client/xtcp/XtcpRuntime.cpp")
     target_compile_definitions(xtcp_runtime_bridge_test PRIVATE
-        PPP_ENABLE_XTCP=1
-        PPP_XTCP_HAS_TIMER_DEADLINE=1)
+        PPP_ENABLE_XTCP=1)
+    if(XTCP_HAS_TIMER_DEADLINE)
+        target_compile_definitions(xtcp_runtime_bridge_test PRIVATE PPP_XTCP_HAS_TIMER_DEADLINE=1)
+    endif()
     target_include_directories(xtcp_runtime_bridge_test PRIVATE
         "${XTCP_SOURCE_DIR}/tests")
     target_link_libraries(xtcp_runtime_bridge_test PRIVATE

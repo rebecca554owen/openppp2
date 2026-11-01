@@ -39,9 +39,6 @@ XtcpNdiBackend::XtcpNdiBackend(OutputHandler output, bool tx_gso_supported,
     }
     const char* gate = std::getenv("OPENPPP2_XTCP_NDI_TSO_TX");
     tx_gso_enabled_ = tx_gso_supported && gate != nullptr && gate[0] == '1' && gate[1] == '\0';
-    const char* checksum_gate = std::getenv("OPENPPP2_XTCP_TUN_CSUM_PARTIAL");
-    tx_checksum_partial_enabled_ = tx_gso_supported && !tx_gso_enabled_ && retained_output_ != nullptr &&
-        checksum_gate != nullptr && checksum_gate[0] == '1' && checksum_gate[1] == '\0';
 }
 
 bool XtcpNdiBackend::Tx(::xtcp::ndi::Packet&& packet) noexcept {
@@ -95,17 +92,11 @@ bool XtcpNdiBackend::Tx(::xtcp::ndi::Packet&& packet) noexcept {
     }
     if (packet.data != nullptr && packet.len != 0) {
         if (!packet.owned.IsEmpty()) {
-            if (packet.owned.Meta().checksum_partial &&
-                (!tx_checksum_partial_enabled_ || retained_output == nullptr)) {
-                if (observe) rejected_.fetch_add(1, std::memory_order_relaxed);
-                return false;
-            }
             if (retained_output != nullptr && !gso) {
                 // Clone is an atomic refcount increment only. The retained
                 // output may defer the buffer, while rejection leaves the
                 // original packet ownership untouched.
-                ppp::tap::RetainedPacketOwner retained(packet.owned.Clone(),
-                    packet.owned.Meta().checksum_partial);
+                ppp::tap::RetainedPacketOwner retained(packet.owned.Clone());
                 emitted = (*retained_output)(packet.data, static_cast<int>(packet.len),
                     std::move(retained));
                 if (emitted) {
@@ -216,9 +207,6 @@ void XtcpNdiBackend::SetRxHandler(::xtcp::ndi::RxHandler handler) noexcept {
 ::xtcp::ndi::BackendCaps XtcpNdiBackend::Caps() const noexcept {
     ::xtcp::ndi::BackendCaps caps = ::xtcp::ndi::kCapNone;
     if (tx_gso_enabled_) caps = static_cast<::xtcp::ndi::BackendCaps>(caps | ::xtcp::ndi::kCapTsoTx);
-    if (tx_checksum_partial_enabled_) {
-        caps = static_cast<::xtcp::ndi::BackendCaps>(caps | ::xtcp::ndi::kCapChecksumPartialTx);
-    }
     return caps;
 }
 

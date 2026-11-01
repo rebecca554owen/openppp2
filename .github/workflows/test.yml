@@ -86,13 +86,21 @@ jobs:
       - name: MSVC project source parity
         run: bash tools/check_vcxproj_sources.sh
 
+      - name: Prepare pinned XTCP source
+        # The XTCP contract tests below are the only coverage of the pinned
+        # stack's API contract (receive backpressure / zero-window resume,
+        # NDI ownership, dependency pinning). Without this step they were
+        # never compiled nor executed by any CI job.
+        run: bash tools/prepare_xtcp.sh
+
       - name: Configure
         run: |
           cmake -S tests/cpp -B build/test \
             -G Ninja \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
-            -DENABLE_COVERAGE=ON
+            -DENABLE_COVERAGE=ON \
+            -DENABLE_XTCP_TESTS=ON
 
       - name: Build
         run: cmake --build build/test

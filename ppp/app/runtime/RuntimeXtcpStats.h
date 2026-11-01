@@ -147,13 +147,10 @@ namespace ppp {
                 std::uint64_t resume_requested = 0;       /**< Direct receive resume requests: second leg or shared budget */
                 std::uint64_t resume_effective = 0;       /**< Blocked XTCP receive windows actually reopened */
                 std::uint64_t resume_result_not_blocked = 0; /**< Resume attempts made before/after the core latch */
-                std::uint64_t resume_result_window_full = 0; /**< Resume attempts held by OOO receive-window usage */
                 std::uint64_t resume_result_connection_missing = 0; /**< Resume attempts whose core connection vanished */
                 std::uint64_t resume_pending = 0;         /**< Gauge: direct flows awaiting receive resume */
                 std::uint64_t resume_coalesced = 0;       /**< Duplicate writable notifications merged */
                 std::uint64_t resume_terminal = 0;        /**< Resume requests terminated by close/stale/missing */
-                std::uint64_t resume_retry = 0;           /**< Bounded deferred resume handoffs */
-                std::uint64_t resume_window_full_retry = 0; /**< Window-full results retried because app still rejected */
                 std::uint64_t direct_download_chunks = 0; /**< Direct second-leg chunks accepted by the runtime */
                 std::uint64_t direct_download_rejected = 0;/**< Direct second-leg chunks rejected by runtime budget */
                 std::uint64_t direct_upload_rejected = 0; /**< XTCP receive chunks rejected by local/global direct upload admission */
