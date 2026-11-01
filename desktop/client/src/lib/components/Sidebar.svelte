@@ -31,7 +31,7 @@
       </button>
     {/each}
   </nav>
-  <div class="version mono">ppp 2.2.14 · windows</div>
+  <div class="version mono">ppp 2.2.15 · windows</div>
 </aside>
 
 <style>
