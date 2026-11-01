@@ -33,7 +33,7 @@
 
 ## CI 和构建证据
 
-`build-linux-amd64.yml` 当前构建 Boost 1.86.0、OpenSSL 3.0.13 和 jemalloc 5.3.0 后，再向根 CMake 提供第三方目录。Windows x64 workflow 则以 vcpkg 的静态 triplet 安装 Boost、OpenSSL 和 jemalloc，然后构建 Windows 项目。
+`build-linux-amd64.yml` 当前构建 Boost 1.92.0、OpenSSL 4.1.0 和 jemalloc 5.4.0 后，再向根 CMake 提供第三方目录。Windows x64 workflow 则以 vcpkg 的静态 triplet 安装 Boost、OpenSSL 和 jemalloc，然后构建 Windows 项目。
 
 这两条工作流说明当前维护的构建输入不同，不能把 Linux 的 1.86.0 结果等同于任意 vcpkg 快照，更不能自动外推到所有 1.87+ 版本。
 
