@@ -72,7 +72,6 @@ private:
     bool stopped_ = false;
     std::atomic<bool> tx_stopped_{false};
     bool tx_gso_enabled_ = false;
-    bool tx_checksum_partial_enabled_ = false;
     std::atomic<bool> diagnostics_enabled_{true};
     // A2-0 output-path diagnostics. Written on the stack owner thread only;
     // read via SnapshotTxStats().

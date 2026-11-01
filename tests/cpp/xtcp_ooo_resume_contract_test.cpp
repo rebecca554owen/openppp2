@@ -1,3 +1,10 @@
+// XTCP-ZERO-WINDOW-CONTRACT: the pinned upstream XTCP tree has no explicit
+// receive-resume API. App backpressure is expressed the RFC 1122 way: the
+// receiver rolls RCV.NXT back and advertises a ZERO window; the peer
+// resumes the flow by re-sending the unacknowledged data (RTO
+// retransmission or an RFC 1122 persist probe). This test pins that
+// contract - including the ACK that carries the reopened frontier - which
+// the openppp2 runtime relies on after the pin move.
 #include <xtcp/buf/bufref.h>
 #include <xtcp/core/tcp.h>
 
@@ -19,6 +26,8 @@ void Put32(Byte* p, UInt32 v) {
     p[0] = Byte(v >> 24); p[1] = Byte(v >> 16);
     p[2] = Byte(v >> 8); p[3] = Byte(v);
 }
+
+constexpr UInt32 kWindow = 65535;
 
 struct CallbackResult {
     UInt32 len = 0;
@@ -100,59 +109,55 @@ struct Probe {
     }
 };
 
-void FutureTailResumeContract(UInt32 irs) {
+// An out-of-order tail is buffered; the in-order segment is accepted; the
+// tail is rejected while it drains, so the receiver advertises a zero
+// window. The peer re-sends the tail and the flow resumes; the reopened
+// frontier is acknowledged.
+void FutureTailZeroWindowContract(UInt32 irs) {
     Probe probe(TcpState::kEstablished, irs);
     probe.Segment(irs + 1001, 1, 1000);
-    CHECK(probe.conn.ReceiveState().ooo_bytes == 1000);
+    CHECK(probe.conn.AdvertisedWindow() == kWindow - 1000);
 
     probe.Segment(irs + 1, 0, 1000);
     CHECK(!probe.callback_results.empty());
     CHECK(probe.callback_results.front().accepted == true);
-
+    CHECK(probe.callback_results.back().accepted == false);
     CHECK(probe.received.size() == 1000);
     CHECK(probe.conn.RcvNxt() == irs + 1001);
-    CHECK(probe.conn.ReceiveState().rcv_blocked == true);
-    CHECK(probe.conn.ReceiveState().ooo_bytes == 1000);
+    CHECK(probe.conn.AdvertisedWindow() == 0);
 
     probe.allow_tail = true;
     probe.InstallHandler();
-    CHECK(probe.conn.ResumeReceiveDetailed() == ReceiveResumeResult::kResumed);
+    probe.Segment(irs + 1001, 1, 1000);
     CHECK(probe.received == probe.Expected(2000, 1000));
     CHECK(probe.callback_results.size() >= 1);
     CHECK(probe.conn.RcvNxt() == irs + 2001);
-    CHECK(probe.conn.ReceiveState().ooo_bytes == 0);
+    CHECK(probe.conn.AdvertisedWindow() == kWindow);
     UInt32 ack = 0;
     CHECK(probe.LastTcpAck(ack));
     CHECK(ack == irs + 2001);
 }
 
-void WindowFullFrontierResumeContract(UInt32 irs) {
+// A large out-of-order tail shrinks the advertised window; the same
+// reject/re-send cycle must reopen it without losing a byte.
+void LargeTailZeroWindowContract(UInt32 irs) {
     Probe probe(TcpState::kEstablished, irs);
-    probe.Segment(irs + 1000, 1, 32000);
-    probe.Segment(irs + 1500, 1, 33535);
-    CHECK(probe.conn.ReceiveState().ooo_bytes == 65535);
-    CHECK(probe.conn.ReceiveState().advertised_window == 0);
+    const UInt32 tail = 32000;
+    probe.Segment(irs + 1001, 1, tail);
+    CHECK(probe.conn.AdvertisedWindow() == kWindow - tail);
 
     probe.Segment(irs + 1, 0, 1000);
-    CHECK(!probe.callback_results.empty());
-    CHECK(probe.callback_results.front().accepted == true);
-
+    CHECK(probe.callback_results.back().accepted == false);
     CHECK(probe.received.size() == 1000);
     CHECK(probe.conn.RcvNxt() == irs + 1001);
-    CHECK(probe.conn.ReceiveState().rcv_blocked == true);
-    CHECK(probe.conn.ReceiveState().ooo_bytes == 65534);
-    CHECK(probe.conn.ReceiveState().advertised_window == 0);
+    CHECK(probe.conn.AdvertisedWindow() == 0);
 
     probe.allow_tail = true;
     probe.InstallHandler();
-    CHECK(probe.conn.ResumeReceiveDetailed() == ReceiveResumeResult::kResumed);
-    CHECK(probe.received == probe.Expected(35034, 1000));
-    CHECK(probe.callback_results.size() >= 1);
-    CHECK(probe.conn.RcvNxt() == irs + 35035);
-    CHECK(probe.conn.ReceiveState().ooo_bytes == 0);
-    UInt32 ack = 0;
-    CHECK(probe.LastTcpAck(ack));
-    CHECK(ack == irs + 35035);
+    probe.Segment(irs + 1001, 1, tail);
+    CHECK(probe.received == probe.Expected(1000 + tail, 1000));
+    CHECK(probe.conn.RcvNxt() == irs + 1001 + tail);
+    CHECK(probe.conn.AdvertisedWindow() == kWindow);
 }
 
 }  // namespace
@@ -160,10 +165,10 @@ void WindowFullFrontierResumeContract(UInt32 irs) {
 int main() {
     xtcp::buf::InitPools();
     for (UInt32 irs : {200U, 0xfffffff0U}) {
-        FutureTailResumeContract(irs);
-        WindowFullFrontierResumeContract(irs);
+        FutureTailZeroWindowContract(irs);
+        LargeTailZeroWindowContract(irs);
     }
     xtcp::buf::ShutdownPools();
-    std::printf("OOO resume contract: 4 cases, %d failures\n", failures);
+    std::printf("OOO zero-window contract: 4 cases, %d failures\n", failures);
     return failures ? 1 : 0;
 }

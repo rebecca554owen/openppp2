@@ -826,10 +826,14 @@ void TestDirectBackpressureResume() {
         client_isn + 1, syn_ack.seq + 1, kAck,
         payload.data(), static_cast<std::uint32_t>(payload.size())));
     CHECK(WaitFor([&]() { return bridge.Stats().direct_upload_rejected == 1; }));
-    TcpView reopened;
+    // The pinned upstream XTCP tree has no explicit resume API: the rejection
+    // rolls RCV.NXT back and the receiver advertises a ZERO window
+    // (RFC 1122 s4.2.3.4). The peer resumes the flow by re-sending the
+    // unacknowledged data.
+    TcpView zero_window;
     CHECK(bridge.WaitOutput([](const TcpView& view) {
-        return (view.flags & kAck) != 0 && view.window != 0;
-    }, reopened));
+        return (view.flags & kAck) != 0 && view.window == 0;
+    }, zero_window));
     bridge.Submit(xtcp::harness::BuildIp4Tcp(
         kClientIp, kServiceIp, kClientPort, kServicePort,
         client_isn + 1, syn_ack.seq + 1, kAck,
@@ -844,7 +848,6 @@ void TestDirectBackpressureResume() {
     CHECK(stats.resume_requested >= 3);
     CHECK(stats.resume_result_not_blocked >= 1);
     CHECK(stats.resume_coalesced >= 1);
-    CHECK(stats.resume_retry >= 1);
     CHECK(stats.direct_upload_rejected == 1);
     CHECK(stats.direct_upload_accepted_chunks == 1);
     CHECK(stats.direct_upload_accepted_bytes == payload.size());
@@ -895,14 +898,19 @@ void TestDirectBackpressureFullOooWindow() {
 
     bridge.WritableLastFlow();
     constexpr std::size_t kExpectedBytes = 16 + 32000 + 32000 + 1535;
-    // One writable edge must deliver the retained frontier and drain the
-    // already-SACKed contiguous OOO segments without waiting for a duplicate
-    // retransmission or a second application-capacity notification.
-    CHECK(WaitFor([&]() { return second_leg->Received().size() == kExpectedBytes; }));
+    // One writable edge must release the application latch. Upstream XTCP
+    // keeps the OOO occupancy in the protocol window, so the buffered
+    // segments drain only after the peer re-sends the unacknowledged
+    // in-order chunk (RFC 1122 persist / RTO retransmission).
     CHECK(WaitFor([&]() {
         const RuntimeXtcpStats stats = bridge.Stats();
         return stats.resume_pending == 0 && stats.resume_effective != 0;
     }));
+    bridge.Submit(xtcp::harness::BuildIp4Tcp(
+        kClientIp, kServiceIp, kClientPort, kServicePort,
+        client_isn + 1, syn_ack.seq + 1, kAck,
+        rejected.data(), static_cast<std::uint32_t>(rejected.size())));
+    CHECK(WaitFor([&]() { return second_leg->Received().size() == kExpectedBytes; }));
 }
 
 void TestDirectResumeStaleAndCloseCancellation() {
@@ -1329,12 +1337,15 @@ void TestGlobalUploadBudgetWakesOtherFlowAndSurvivesRestart() {
     CHECK(WaitFor([&]() { return bridge.Stats().upload_budget_rejected == 2; }));
     CHECK(bridge.echo_->EchoedBytes() == 0);
     third->ReleaseUploads();
+    // Upstream XTCP has no explicit resume API: the rejection advertised a
+    // zero window, and the peer resumes the flow by re-sending the
+    // unacknowledged data. The reopened window is advertised afterwards.
+    bridge.Submit(xtcp::harness::BuildIp4Tcp(kClientIp, kServiceIp, 41003, kServicePort,
+        connector_next, server_next, kAck, data.data(), 16));
     TcpView reopened;
     CHECK(bridge.WaitOutput([](const TcpView& view) {
         return view.dport == 41003 && (view.flags & kAck) != 0 && view.window != 0;
     }, reopened));
-    bridge.Submit(xtcp::harness::BuildIp4Tcp(kClientIp, kServiceIp, 41003, kServicePort,
-        connector_next, server_next, kAck, data.data(), 16));
     CHECK(WaitFor([&]() { return bridge.echo_->EchoedBytes() == 16; }));
     CHECK(WaitFor([&]() { return bridge.Stats().upload_budget_bytes == 0; }));
     CHECK(bridge.Stats().upload_budget_items == 0);
