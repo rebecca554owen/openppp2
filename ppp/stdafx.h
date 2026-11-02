@@ -259,7 +259,7 @@
 #endif
 
 #ifndef PPP_APPLICATION_VERSION
-#define PPP_APPLICATION_VERSION ("2.2.15.0") /* 2.2.15.0 */
+#define PPP_APPLICATION_VERSION ("2.2.16.0") /* 2.2.16.0 */
 #endif
 
 #ifndef PPP_APPLICATION_NAME
