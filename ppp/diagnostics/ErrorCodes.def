@@ -702,3 +702,4 @@ X(ConfigPlaintextEnabled, "Plaintext mode is enabled (key.plaintext=true); packe
 X(ConfigLegacyCipherAlgorithm, "Protocol or transport cipher uses a legacy algorithm (RC4, DES, Blowfish, CAST5, SEED, IDEA) that is considered broken or deprecated; upgrade to AES or ChaCha20", ErrorSeverity::kWarning)
 X(ConfigLegacyCipherShortKey, "Protocol or transport cipher key length is below 128 bits; short cipher keys are vulnerable to brute-force attacks", ErrorSeverity::kWarning)
 X(ConfigLegacyKdfMd5, "Protocol or transport cipher key derivation uses MD5 internally (EVP_BytesToKey); this is a legacy KDF and should be upgraded when the project supports a configurable KDF", ErrorSeverity::kWarning)
+X(VmuxSocketSendAfterFin, "Vmux socket send requested after the flow's FIN was already sent; the peer drops such frames without acknowledging them, so the sender would burn its retransmit budget on a dead flow", ErrorSeverity::kError)

@@ -282,6 +282,68 @@ struct vmux_net_test_access {
         return skt->send_to_peer(packet, packet_length, nullptr);
     }
 
+    /**
+     * @brief Sends a data frame on a flow whose FIN already went out.
+     * @param sent  Set to whether the frame was accepted.
+     * @return The diagnostic code the send failed with (read on the strand, so
+     *         it is the one the send itself published).
+     */
+    static std::uint32_t SendToPeerAfterFin(
+        const std::shared_ptr<vmux_skt>& skt,
+        const void* packet,
+        int packet_length,
+        bool* sent) {
+        return RunOnStrand(*skt->mux_, [&]() {
+            skt->status_.fin_ = true;
+            const bool ok = skt->send_to_peer(packet, packet_length, nullptr);
+            if (NULLPTR != sent) {
+                *sent = ok;
+            }
+            return static_cast<std::uint32_t>(ppp::diagnostics::GetLastErrorCode());
+        });
+    }
+
+    /** @brief Number of frames queued for one connection's transmit path. */
+    static std::size_t FlowTxQueueSize(vmux_net& mux, std::uint32_t connection_id) {
+        return RunOnStrand(mux, [&]() {
+            auto it = mux.tx_flows_.find(connection_id);
+            return it == mux.tx_flows_.end() ? 0 : it->second.queue.size();
+        });
+    }
+
+    struct CtrlFrameInfo {
+        bool                                     present = false;
+        std::uint8_t                             cmd = 0;
+        std::uint32_t                            connection_id = 0;
+        std::uint8_t                             payload = 0;
+    };
+
+    /** @brief The syn-ok command byte (private inside vmux_net; reachable through friendship). */
+    static constexpr std::uint8_t kCmdSynOk = static_cast<std::uint8_t>(vmux_net::cmd_syn_ok);
+
+    /** @brief The last frame queued on the high-priority control path. */
+    static CtrlFrameInfo LastCtrlFrame(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() {
+            CtrlFrameInfo info;
+            if (mux.tx_ctrl_queue_.empty()) {
+                return info;
+            }
+            const vmux_net::tx_packet& packet = mux.tx_ctrl_queue_.back();
+            if (NULLPTR == packet.buffer ||
+                packet.length < static_cast<int>(sizeof(vmux_net::vmux_hdr))) {
+                return info;
+            }
+            const auto* h = reinterpret_cast<const vmux_net::vmux_hdr*>(packet.buffer.get());
+            info.present = true;
+            info.cmd = h->cmd;
+            info.connection_id = ntohl(h->connection_id);
+            if (packet.length > static_cast<int>(sizeof(vmux_net::vmux_hdr))) {
+                info.payload = static_cast<std::uint8_t>(reinterpret_cast<const std::uint8_t*>(h + 1)[0]);
+            }
+            return info;
+        });
+    }
+
     static bool PostCommand(vmux_net& mux, bool on_strand) {
         auto invoke = [&]() {
             vmux_net::PostInternalAsynchronousCallback callback;
@@ -922,8 +984,57 @@ void TestStrandAffineSendAndPostRejectOffStrand() {
         "frame post_internal remains synchronous on strand");
 }
 
+// A frame of a flow the receiver does not have must be refused explicitly.
+//
+// The receiver may not acknowledge it as delivered (it never took the data),
+// so dropping it in silence left the sender retransmitting into the void:
+// it burned its whole attempt budget (30 s with the current grace) and then
+// reset a flow that was already gone, over every carrier.
+void TestReceiverRefusesUnknownFlow() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 4242;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    // No socket for this cid here: the peer still has the flow, we do not.
+    const char payload[] = "X";
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 1, payload, 1, 1000), "inject");
+
+    const auto info = vmux::vmux_net_test_access::LastCtrlFrame(*mux);
+    Require(info.present, "the refusal must be queued for the peer");
+    Require(info.cmd == vmux::vmux_net_test_access::kCmdSynOk, "the refusal rides the syn-ok channel");
+    Require(info.connection_id == cid, "the refusal names the refused flow");
+    Require(info.payload != 'A', "the refusal must not look like an accept");
+}
+
+// A data frame must never follow the flow's FIN.
+//
+// The FIN says "no more data from me", so the peer treats the flow as closed
+// and drops every later frame WITHOUT acknowledging it. The sender would then
+// retransmit it until its attempt budget ran out.
+void TestSenderRefusesDataAfterFin() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 77;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+    const char payload[] = "late";
+
+    bool sent = true;
+    const std::uint32_t code =
+        vmux::vmux_net_test_access::SendToPeerAfterFin(skt, payload, 4, &sent);
+    Require(!sent, "a data frame after the FIN must be refused");
+    // The FIN guard must be the reason. Without it the send would fail later,
+    // on the missing local socket, and this test would pass vacuously.
+    Require(code == static_cast<std::uint32_t>(ppp::diagnostics::ErrorCode::VmuxSocketSendAfterFin),
+            "the write must be refused by the FIN guard");
+    Require(vmux::vmux_net_test_access::FlowTxQueueSize(*mux, cid) == 0,
+            "no data frame may be queued after the FIN");
+}
+
 int main() {
     try {
+        TestReceiverRefusesUnknownFlow();
+        TestSenderRefusesDataAfterFin();
         TestTxFlowDrrPrefersOtherCidAfterQuantum();
         TestTxFlowDrrDrainsBytesWithinQuantumBeforeRotating();
         TestInOrderStillDelivers();

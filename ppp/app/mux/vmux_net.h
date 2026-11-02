@@ -598,6 +598,8 @@ namespace vmux {
         void                                                                        remember_closed_flow(uint32_t connection_id, uint32_t last_dsn, uint64_t now) noexcept;
         /** @brief Acknowledge a frame of an already finished flow (the peer is still retransmitting it). */
         void                                                                        acknowledge_closed_flow(uint32_t connection_id, uint32_t seq, uint64_t now) noexcept;
+        /** @brief Tell the peer that this flow is gone, so it stops retransmitting it. */
+        void                                                                        refuse_flow(uint32_t connection_id) noexcept;
 
         /**
          * @brief Reliability sub-protocol (negotiated; strand-affine).

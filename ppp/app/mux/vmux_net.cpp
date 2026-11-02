@@ -1721,6 +1721,12 @@ namespace vmux {
                     skt->active(now);
                 }
                 else {
+                    // A refusal (the peer does not have this flow): drop the
+                    // flow's retained frames, otherwise the sender keeps
+                    // retransmitting them until its attempt budget runs out --
+                    // 30 s of traffic over every carrier for a flow that is
+                    // already gone.
+                    release_flow_reliability_state(connection_id);
                     skt->close();
                 }
             }
@@ -1964,6 +1970,31 @@ namespace vmux {
     }
 
     /**
+     * @brief Tells the peer that this flow is gone, instead of dropping its frames in silence.
+     * @details A frame the receiver never took must NOT be acknowledged as delivered:
+     *          the peer would then believe the payload arrived. So the receiver
+     *          drops it -- and the peer, unable to tell "the peer is slow" from
+     *          "the peer will never take this flow", keeps retransmitting until
+     *          its attempt budget runs out (30 s with the current grace) and then
+     *          resets a flow that is already dead, over every carrier.
+     *
+     *          The refusal closes that gap. cmd_syn_ok already carries an error
+     *          byte for a refused connection, and the peer treats anything but
+     *          'A' as a failure: it closes its socket, which releases the flow's
+     *          retransmit entries. No new command, no capability negotiation.
+     */
+    void vmux_net::refuse_flow(uint32_t connection_id) noexcept {
+        if (connection_id == 0) {
+            return; // zero is reserved for "no connection"; there is nothing to refuse
+        }
+        const Byte err = 'N'; // no such flow
+        ppp::telemetry::Count("mux.rx.flow.refused", 1);
+        if (!post(cmd_syn_ok, &err, 1, connection_id)) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+        }
+    }
+
+    /**
      * @brief Fails one logical flow without delivering past an unrecovered gap.
      * @details Erases receive/send flow state and closes the logical socket if
      *          present. Buffered out-of-order payloads for this cid are dropped
@@ -2121,6 +2152,9 @@ namespace vmux {
                     // retransmission. Drop it WITHOUT acknowledging, so the
                     // peer keeps its copy of data that was never taken here.
                     ppp::telemetry::Count("mux.rx.closed_flow.drop", 1);
+                    // ... but tell the peer the flow is gone, so it stops
+                    // retransmitting into the void (see refuse_flow).
+                    refuse_flow(cid);
                 }
                 active(now);
                 linklayer_update(linklayer);
@@ -2130,6 +2164,10 @@ namespace vmux {
 
         flow_rx_context* fxp = try_get_or_create_flow(cid);
         if (NULLPTR == fxp) {
+            // The peer still has a flow we do not know: it will keep
+            // retransmitting until its attempt budget runs out. Tell it the
+            // flow is gone instead (see refuse_flow).
+            refuse_flow(cid);
             active(now);
             linklayer_update(linklayer);
             return true;

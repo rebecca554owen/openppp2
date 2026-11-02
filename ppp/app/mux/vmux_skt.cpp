@@ -603,6 +603,22 @@ namespace vmux {
             return false;
         }
 
+        // The FIN of this flow already went out (the local read side reached
+        // EOF), so the peer already treats the flow as closed. A data frame
+        // posted now would carry a DSN beyond the FIN's, and the peer drops
+        // every such frame WITHOUT acknowledging it -- it never took the data.
+        // The sender would then retransmit it until its attempt budget runs
+        // out (30 s with the current grace) and reset a flow that is already
+        // dead, burning every carrier meanwhile.
+        //
+        // The local peer closed its write side, so there is nothing
+        // legitimate left to send: refuse the write.
+        if (status_.fin_) {
+            ppp::telemetry::Count("mux.tx.flow.after_fin", 1);
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendAfterFin);
+            return false;
+        }
+
         std::shared_ptr<boost::asio::ip::tcp::socket> tx_socket = tx_socket_;
         if (NULLPTR == tx_socket || NULLPTR == tx_buffer_) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendContextNotReady);
