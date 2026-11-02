@@ -2,6 +2,7 @@
 #include "vmux_net.h"
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/app/mux/MuxRuntimeCounters.h>
 #include <ppp/transmissions/ITransmissionStatistics.h>
 
 /**

@@ -15,6 +15,7 @@
 #include <ppp/app/server/VirtualEthernetManagedServer.h>
 #include <ppp/app/PppApplicationInternal.h>
 #include <ppp/app/runtime/RuntimeStatsJson.h>
+#include <ppp/app/mux/MuxRuntimeCounters.h>
 #include <ppp/app/tui/TuiRuntimeAdapter.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/LinkTelemetry.h>
@@ -770,6 +771,8 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
             sample.has_acceptance_boundary = true;
             sample.acceptance_boundary = boundary;
         }
+        // The mux counters are read here, at sample time, so the stats file
+        sample.mux_counters = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
         if (WriteRuntimeStatsLine(stats_json_path_, sample) && sample.has_acceptance_boundary) {
             acceptance_boundary_.MarkStatsWritten(
                 sample.monotonic_ms, sample.acceptance_boundary.xtcp_runtime_instance_id);

@@ -1,5 +1,6 @@
 #include <ppp/stdafx.h>
 #include <ppp/app/mux/vmux_net.h>
+#include <ppp/app/mux/MuxRuntimeCounters.h>
 #include <ppp/app/mux/vmux_skt.h>
 #include <ppp/configurations/AppConfiguration.h>
 
