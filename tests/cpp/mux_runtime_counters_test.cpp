@@ -33,6 +33,9 @@ const std::vector<std::string>& ExpectedCounterKeys() {
         "mux.rtx.pto",
         "mux.rtx.exhausted",
         "mux.rtx.exhausted.connection",
+        "mux.rx.flow.refuse_post_failed",
+        "mux.rx.syn_ok.refused",
+        "mux.rx.syn_ok.refused.no_socket",
     };
     return keys;
 }
@@ -56,6 +59,9 @@ BOOST_AUTO_TEST_CASE(registry_accumulates_every_counter) {
     mux::MuxRuntimeCounterRegistry::AddTxRtxPto();
     mux::MuxRuntimeCounterRegistry::AddTxRtxExhausted();
     mux::MuxRuntimeCounterRegistry::AddTxRtxExhaustedConnection(2);
+    mux::MuxRuntimeCounterRegistry::AddRxFlowRefusePostFailed();
+    mux::MuxRuntimeCounterRegistry::AddRxSynOkRefused();
+    mux::MuxRuntimeCounterRegistry::AddRxSynOkRefusedNoSocket(3);
 
     const mux::MuxRuntimeCounters snap = mux::MuxRuntimeCounterRegistry::GetSnapshot();
     BOOST_TEST(snap.tx_frames == 3u);
@@ -72,11 +78,17 @@ BOOST_AUTO_TEST_CASE(registry_accumulates_every_counter) {
     BOOST_TEST(snap.tx_rtx_pto == 1u);
     BOOST_TEST(snap.tx_rtx_exhausted == 1u);
     BOOST_TEST(snap.tx_rtx_exhausted_connection == 2u);
+    BOOST_TEST(snap.rx_flow_refuse_post_failed == 1u);
+    BOOST_TEST(snap.rx_syn_ok_refused == 1u);
+    BOOST_TEST(snap.rx_syn_ok_refused_no_socket == 3u);
 
     mux::MuxRuntimeCounterRegistry::Reset();
     const mux::MuxRuntimeCounters zero = mux::MuxRuntimeCounterRegistry::GetSnapshot();
     BOOST_TEST(zero.tx_frames == 0u);
     BOOST_TEST(zero.tx_rtx_exhausted_connection == 0u);
+    BOOST_TEST(zero.rx_flow_refuse_post_failed == 0u);
+    BOOST_TEST(zero.rx_syn_ok_refused == 0u);
+    BOOST_TEST(zero.rx_syn_ok_refused_no_socket == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(stats_json_exposes_the_mux_counters) {

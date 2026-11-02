@@ -312,6 +312,55 @@ struct vmux_net_test_access {
         });
     }
 
+    /** @brief Flips the "session established" flag (post() refuses without it). */
+    static void SetEstablished(vmux_net& mux, bool value) {
+        RunOnStrandVoid(mux, [&]() { mux.base_.established_ = value; });
+    }
+
+    /**
+     * @brief Delivers a syn-ok frame (the connect/refuse channel) for one flow.
+     * @param err The error byte the peer sent; anything but 'A' is a refusal.
+     */
+    static bool InjectSynOk(
+        vmux_net& mux,
+        std::uint32_t connection_id,
+        ppp::Byte err,
+        std::uint64_t now) {
+        return RunOnStrand(mux, [&]() {
+            const int frame_len = static_cast<int>(sizeof(vmux_net::vmux_hdr)) + 1;
+            std::vector<std::uint8_t> frame(static_cast<std::size_t>(frame_len));
+            auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(frame.data());
+            std::memset(h, 0, sizeof(*h));
+            h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_syn_ok);
+            h->connection_id = htonl(connection_id);
+            reinterpret_cast<std::uint8_t*>(h + 1)[0] = err;
+            std::shared_ptr<ppp::Byte> owner;
+            return mux.packet_input(
+                static_cast<ppp::Byte>(vmux_net::cmd_syn_ok),
+                frame.data(), frame_len, now, owner);
+        });
+    }
+
+    /** @brief Retains one frame in the sender's retransmit buffer. */
+    static bool TrackRtxFrame(
+        vmux_net& mux,
+        std::uint32_t connection_id,
+        std::uint32_t sequence,
+        int length,
+        std::uint64_t now) {
+        return RunOnStrand(mux, [&]() {
+            auto buffer = std::make_shared<std::uint8_t>(
+                static_cast<std::size_t>(length > 0 ? length : 1));
+            return mux.rtx_.Track(
+                connection_id, sequence, buffer, length, now, mux.rtx_cap_bytes_);
+        });
+    }
+
+    /** @brief Bytes still retained for one flow in the retransmit buffer. */
+    static std::size_t RtxBytesForCid(vmux_net& mux, std::uint32_t connection_id) {
+        return RunOnStrand(mux, [&]() { return mux.rtx_.BytesForCid(connection_id); });
+    }
+
     struct CtrlFrameInfo {
         bool                                     present = false;
         std::uint8_t                             cmd = 0;
@@ -1017,6 +1066,75 @@ void TestReceiverRefusesUnknownFlow() {
         "the refusal must be counted for the runtime stats");
 }
 
+// A refusal must release the sender's retained frames even when this side
+// has no socket for the flow any more.
+//
+// Production shape (v2.2.16, 32 judge-dead flows in one evening): the peer's
+// first frame of a flow was refused ("I do not have this flow"), the local
+// socket was already gone, and the refusal handler therefore never reached
+// the release. The retransmit entry survived, the sender retransmitted the
+// dead flow over every carrier until its 30 s attempt budget ran out, and
+// only then declared the flow dead.
+//
+// The counters tell the two shapes apart in production:
+//   mux.rx.syn_ok.refused           -- refusals received
+//   mux.rx.syn_ok.refused.no_socket -- refusals for a flow we no longer have
+void TestRefusalReleasesRetainedFramesWithoutLocalSocket() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 9090;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
+
+    // The sender still holds unacknowledged frames of this flow...
+    Require(vmux::vmux_net_test_access::TrackRtxFrame(*mux, cid, 1, 128, 1000),
+        "the sender must retain the frame");
+    Require(vmux::vmux_net_test_access::RtxBytesForCid(*mux, cid) > 0,
+        "the frame must be retained before the refusal");
+
+    // ...but this side has no socket for it any more.
+    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid),
+        "the flow must be unknown here");
+
+    // The peer refuses the flow.
+    Require(vmux::vmux_net_test_access::InjectSynOk(*mux, cid, 'N', 1100),
+        "the refusal must be accepted");
+
+    Require(vmux::vmux_net_test_access::RtxBytesForCid(*mux, cid) == 0,
+        "a refusal must release the retained frames even without a local socket");
+
+    const auto counters = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(counters.rx_syn_ok_refused == 1,
+        "the refusal must be counted for the runtime stats");
+    Require(counters.rx_syn_ok_refused_no_socket == 1,
+        "a refusal without a local socket must be counted for the runtime stats");
+}
+
+// A refusal that cannot be queued must leave a trace.
+//
+// The refusal is the only signal the peer gets that the flow is gone. When the
+// frame cannot even be queued, the peer keeps retransmitting until its own
+// budget runs out — and nothing in the stats would say why. The counter makes
+// that shape visible in production.
+void TestRefusalThatCannotBePostedIsCounted() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 5150;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    // Without an established session the refusal frame cannot be queued.
+    vmux::vmux_net_test_access::SetEstablished(*mux, false);
+
+    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
+    const char payload[] = "X";
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 1, payload, 1, 1000), "inject");
+
+    const auto counters = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(counters.rx_flow_refused == 1,
+        "the refusal attempt must be counted for the runtime stats");
+    Require(counters.rx_flow_refuse_post_failed == 1,
+        "a refusal that could not be queued must be counted for the runtime stats");
+}
+
 // A data frame must never follow the flow's FIN.
 //
 // The FIN says "no more data from me", so the peer treats the flow as closed
@@ -1051,6 +1169,8 @@ void TestSenderRefusesDataAfterFin() {
 int main() {
     try {
         TestReceiverRefusesUnknownFlow();
+        TestRefusalThatCannotBePostedIsCounted();
+        TestRefusalReleasesRetainedFramesWithoutLocalSocket();
         TestSenderRefusesDataAfterFin();
         TestTxFlowDrrPrefersOtherCidAfterQuantum();
         TestTxFlowDrrDrainsBytesWithinQuantumBeforeRotating();

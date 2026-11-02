@@ -1713,25 +1713,50 @@ namespace vmux {
         }
         elif(cmd == cmd_syn_ok) {
             vmux_skt_ptr skt = get_connection(connection_id);
-            if (NULLPTR != skt) {
-                bool successed = false;
-                if (buffer_size > 0) {
-                    const Byte err = static_cast<Byte>(*buffer);
+            bool successed = false;
+            bool refused = false;
+            if (buffer_size > 0) {
+                const Byte err = static_cast<Byte>(*buffer);
+                refused = (err != 'A');
+                if (NULLPTR != skt) {
                     successed = skt->connect_ok(err == 'A');
                 }
+            }
 
+            if (NULLPTR != skt) {
                 if (successed) {
                     skt->active(now);
                 }
                 else {
-                    // A refusal (the peer does not have this flow): drop the
-                    // flow's retained frames, otherwise the sender keeps
-                    // retransmitting them until its attempt budget runs out --
-                    // 30 s of traffic over every carrier for a flow that is
-                    // already gone.
-                    release_flow_reliability_state(connection_id);
                     skt->close();
                 }
+            }
+
+            if (refused) {
+                ppp::app::mux::MuxRuntimeCounterRegistry::AddRxSynOkRefused();
+                if (NULLPTR == skt) {
+                    // The refusal named a flow this side no longer has. The
+                    // counter tells the two failure shapes apart in production:
+                    // a refusal that arrives without a local socket means the
+                    // sender used to drop it on the floor.
+                    ppp::app::mux::MuxRuntimeCounterRegistry::AddRxSynOkRefusedNoSocket();
+                }
+            }
+
+            if (refused || (NULLPTR != skt && !successed)) {
+                // A refusal (the peer does not have this flow): drop the
+                // flow's retained frames, otherwise the sender keeps
+                // retransmitting them until its attempt budget runs out --
+                // 30 s of traffic over every carrier for a flow that is
+                // already gone.
+                //
+                // This release must happen even when the local socket is
+                // already gone: the peer refused the flow, so its retained
+                // frames are garbage, and the refusal is the only signal the
+                // sender gets that the flow is dead. Guarding the release
+                // behind the socket lookup let a dead flow burn its whole
+                // 30 s budget on every carrier.
+                release_flow_reliability_state(connection_id);
             }
         }
         elif(cmd == cmd_acceleration) {
@@ -1994,6 +2019,9 @@ namespace vmux {
         ppp::telemetry::Count("mux.rx.flow.refused", 1);
         ppp::app::mux::MuxRuntimeCounterRegistry::AddRxFlowRefused();
         if (!post(cmd_syn_ok, &err, 1, connection_id)) {
+            // The refusal could not be queued: the peer will keep
+            // retransmitting this flow until its own budget runs out.
+            ppp::app::mux::MuxRuntimeCounterRegistry::AddRxFlowRefusePostFailed();
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
         }
     }

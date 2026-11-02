@@ -36,6 +36,9 @@ struct MuxRuntimeCounters final {
     std::uint64_t tx_rtx_pto = 0;                   ///< mux.rtx.pto
     std::uint64_t tx_rtx_exhausted = 0;             ///< mux.rtx.exhausted
     std::uint64_t tx_rtx_exhausted_connection = 0;  ///< mux.rtx.exhausted.connection
+    std::uint64_t rx_flow_refuse_post_failed = 0;   ///< mux.rx.flow.refuse_post_failed
+    std::uint64_t rx_syn_ok_refused = 0;            ///< mux.rx.syn_ok.refused
+    std::uint64_t rx_syn_ok_refused_no_socket = 0;  ///< mux.rx.syn_ok.refused.no_socket
 };
 
 /**
@@ -103,6 +106,18 @@ public:
         tx_rtx_exhausted_connection_.fetch_add(n, std::memory_order_relaxed);
     }
 
+    static void AddRxFlowRefusePostFailed(std::uint64_t n = 1) noexcept {
+        rx_flow_refuse_post_failed_.fetch_add(n, std::memory_order_relaxed);
+    }
+
+    static void AddRxSynOkRefused(std::uint64_t n = 1) noexcept {
+        rx_syn_ok_refused_.fetch_add(n, std::memory_order_relaxed);
+    }
+
+    static void AddRxSynOkRefusedNoSocket(std::uint64_t n = 1) noexcept {
+        rx_syn_ok_refused_no_socket_.fetch_add(n, std::memory_order_relaxed);
+    }
+
     /** @brief Reads every counter without locking. */
     static MuxRuntimeCounters GetSnapshot() noexcept {
         MuxRuntimeCounters snap;
@@ -120,6 +135,9 @@ public:
         snap.tx_rtx_pto = tx_rtx_pto_.load(std::memory_order_relaxed);
         snap.tx_rtx_exhausted = tx_rtx_exhausted_.load(std::memory_order_relaxed);
         snap.tx_rtx_exhausted_connection = tx_rtx_exhausted_connection_.load(std::memory_order_relaxed);
+        snap.rx_flow_refuse_post_failed = rx_flow_refuse_post_failed_.load(std::memory_order_relaxed);
+        snap.rx_syn_ok_refused = rx_syn_ok_refused_.load(std::memory_order_relaxed);
+        snap.rx_syn_ok_refused_no_socket = rx_syn_ok_refused_no_socket_.load(std::memory_order_relaxed);
         return snap;
     }
 
@@ -139,6 +157,9 @@ public:
         tx_rtx_pto_.store(0, std::memory_order_relaxed);
         tx_rtx_exhausted_.store(0, std::memory_order_relaxed);
         tx_rtx_exhausted_connection_.store(0, std::memory_order_relaxed);
+        rx_flow_refuse_post_failed_.store(0, std::memory_order_relaxed);
+        rx_syn_ok_refused_.store(0, std::memory_order_relaxed);
+        rx_syn_ok_refused_no_socket_.store(0, std::memory_order_relaxed);
     }
 
 private:
@@ -156,6 +177,9 @@ private:
     inline static std::atomic<std::uint64_t> tx_rtx_pto_{ 0 };
     inline static std::atomic<std::uint64_t> tx_rtx_exhausted_{ 0 };
     inline static std::atomic<std::uint64_t> tx_rtx_exhausted_connection_{ 0 };
+    inline static std::atomic<std::uint64_t> rx_flow_refuse_post_failed_{ 0 };
+    inline static std::atomic<std::uint64_t> rx_syn_ok_refused_{ 0 };
+    inline static std::atomic<std::uint64_t> rx_syn_ok_refused_no_socket_{ 0 };
 };
 
 }  // namespace ppp::app::mux

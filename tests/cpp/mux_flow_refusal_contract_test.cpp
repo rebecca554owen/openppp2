@@ -22,6 +22,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -53,6 +54,146 @@ bool AppearsWithin(const std::string& text,
     return needle_pos != std::string::npos && (needle_pos - anchor_pos) <= window;
 }
 
+// 取命令分发器里某一个 `elif(cmd == ...) { ... }` 分支的源码。
+std::string BranchText(const std::string& text, const std::string& anchor) {
+    const size_t start = text.find(anchor);
+    if (start == std::string::npos) {
+        return std::string();
+    }
+    const size_t next = text.find("elif(cmd == ", start + anchor.size());
+    if (next == std::string::npos) {
+        return text.substr(start);
+    }
+    return text.substr(start, next - start);
+}
+
+// 去掉 // 行注释，避免注释里的花括号干扰后面的结构分析。
+std::string StripLineComments(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    size_t i = 0;
+    while (i < text.size()) {
+        const size_t eol = text.find('\n', i);
+        const size_t end = (eol == std::string::npos) ? text.size() : eol;
+        const std::string line = text.substr(i, end - i);
+        const size_t comment = line.find("//");
+        out.append(comment == std::string::npos ? line : line.substr(0, comment));
+        out.push_back('\n');
+        if (eol == std::string::npos) {
+            break;
+        }
+        i = eol + 1;
+    }
+    return out;
+}
+
+// 取出块头部条件文本（第一对括号里的内容）。
+std::string ExtractCondition(const std::string& header) {
+    const size_t open = header.find('(');
+    if (open == std::string::npos) {
+        return std::string();
+    }
+    int depth = 0;
+    for (size_t i = open; i < header.size(); ++i) {
+        if (header[i] == '(') {
+            ++depth;
+        }
+        else if (header[i] == ')') {
+            --depth;
+            if (depth == 0) {
+                return header.substr(open + 1, i - open - 1);
+            }
+        }
+    }
+    return std::string();
+}
+
+// 按顶层 || 切分条件。
+std::vector<std::string> TopLevelDisjuncts(const std::string& condition) {
+    std::vector<std::string> parts;
+    int depth = 0;
+    std::string current;
+    for (size_t i = 0; i < condition.size(); ++i) {
+        const char c = condition[i];
+        if (c == '(') {
+            ++depth;
+        }
+        else if (c == ')') {
+            --depth;
+        }
+
+        if (c == '|' && depth == 0 && i + 1 < condition.size() && condition[i + 1] == '|') {
+            parts.push_back(current);
+            current.clear();
+            ++i;
+            continue;
+        }
+        current.push_back(c);
+    }
+    parts.push_back(current);
+    return parts;
+}
+
+// 这个块的条件是否**要求**本地 socket 存在。
+//
+// 只要有一个顶层析取项跟 socket 无关，条件就可能在 socket 缺席时成立，
+// 块里的代码就不是被 socket 守卫关住的。
+bool RequiresLocalSocket(const std::string& header) {
+    const std::string condition = ExtractCondition(header);
+    if (condition.empty()) {
+        return false;
+    }
+    const std::vector<std::string> parts = TopLevelDisjuncts(condition);
+    for (const std::string& part : parts) {
+        if (part.find("NULLPTR != skt") == std::string::npos &&
+            part.find("skt != NULLPTR") == std::string::npos) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// call 是否没有被任何「要求本地 socket 存在」的块关住。
+//
+// 遍历分支的花括号，保留每个包围 call 的块的头部文本；只要其中有一个要求
+// socket 存在，就说明 call 被关在里面了。
+bool CallOutsideSocketGuard(const std::string& branch, const std::string& call) {
+    const std::string code = StripLineComments(branch);
+    const size_t call_pos = code.find(call);
+    if (call_pos == std::string::npos) {
+        return false;
+    }
+
+    std::vector<std::string> headers;
+    std::string header;
+    for (size_t i = 0; i < call_pos; ++i) {
+        const char c = code[i];
+        if (c == '{') {
+            headers.push_back(header);
+            header.clear();
+        }
+        else if (c == '}') {
+            if (!headers.empty()) {
+                headers.pop_back();
+            }
+            header.clear();
+        }
+        else if (c == ';') {
+            header.clear();
+        }
+        else {
+            header.push_back(c);
+        }
+    }
+
+    for (const std::string& enclosing : headers) {
+        if (RequiresLocalSocket(enclosing)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -82,9 +223,18 @@ int main() {
                 "a post-FIN frame of a closed flow must be refused, not dropped in silence");
 
         // 4) 被拒方收到拒绝后必须释放该流的重传条目，否则照样烧满 30 s 预算。
-        Require(AppearsWithin(net, "release_flow_reliability_state(connection_id)",
-                              "elif(cmd == cmd_syn_ok)", 1500),
+        const std::string syn_ok_branch = BranchText(net, "elif(cmd == cmd_syn_ok)");
+        Require(!syn_ok_branch.empty(), "the syn-ok branch must exist");
+        Require(syn_ok_branch.find("release_flow_reliability_state(connection_id)") != std::string::npos,
                 "a refused flow must release its retained frames on the sender side");
+
+        // 5) 这个释放必须发生在 socket 查找之外。
+        //
+        //    现网形态：本地 socket 已经没了，对端的拒绝帧是发送端唯一能收到的
+        //    「这条流死了」的信号。把释放关在 socket 守卫里，等于把这条信号
+        //    丢掉，于是发送端把一条已经死掉的流重传满 30 s 预算。
+        Require(CallOutsideSocketGuard(syn_ok_branch, "release_flow_reliability_state(connection_id)"),
+                "the release must not be guarded by the local socket lookup");
 
         std::cout << "mux_flow_refusal_contract_test: ok" << std::endl;
         return 0;
