@@ -6,6 +6,7 @@
 #include <openssl/crypto.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
+#include <ppp/app/mux/MuxRuntimeCounters.h>
 
 #include "ppp/collections/Dictionary.h"
 
@@ -1062,6 +1063,7 @@ namespace vmux {
             return false;
         }
         ppp::telemetry::Count("mux.link.send", 1);
+        ppp::app::mux::MuxRuntimeCounterRegistry::AddTxFrames();
         // Track in-flight writes per link (strand-affine) so runtime link removal
         // (turbo dynamic pool) can retire a link only after its last write
         // completes — a late completion must never touch a freed/retired link's
@@ -1471,6 +1473,7 @@ namespace vmux {
         }
 
         ppp::telemetry::Count("mux.link.recv", 1);
+        ppp::app::mux::MuxRuntimeCounterRegistry::AddRxFrames();
 
         // Reliability control frames are unordered in both modes: handle them
         // inline before any sequence-space reasoning (they carry seq=0).
@@ -1989,6 +1992,7 @@ namespace vmux {
         }
         const Byte err = 'N'; // no such flow
         ppp::telemetry::Count("mux.rx.flow.refused", 1);
+        ppp::app::mux::MuxRuntimeCounterRegistry::AddRxFlowRefused();
         if (!post(cmd_syn_ok, &err, 1, connection_id)) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
         }
@@ -2042,6 +2046,7 @@ namespace vmux {
             return &flows_[connection_id];
         case ppp::app::mux::FlowContextAdmission::RejectUnknown:
             ppp::telemetry::Count("mux.rx.flow.unknown_cid", 1);
+            ppp::app::mux::MuxRuntimeCounterRegistry::AddRxFlowUnknownCid();
             ppp::telemetry::Count("mux.rx.unknown_cid", 1);
             return NULLPTR;
         case ppp::app::mux::FlowContextAdmission::RejectCap:
@@ -2056,6 +2061,7 @@ namespace vmux {
     void vmux_net::fail_flow(uint32_t connection_id, const char* reason) noexcept {
         const char* why = (reason != NULLPTR && reason[0] != '\0') ? reason : "unspecified";
         ppp::telemetry::Count("mux.rx.flow.reset", 1);
+        ppp::app::mux::MuxRuntimeCounterRegistry::AddRxFlowReset();
         ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
             "flow reset cid=%u reason=%s", (unsigned)connection_id, why);
 
@@ -2097,6 +2103,7 @@ namespace vmux {
         }
 
         ppp::telemetry::Count("mux.link.recv", 1);
+        ppp::app::mux::MuxRuntimeCounterRegistry::AddRxFrames();
 
         Byte cmd = h->cmd;
 
@@ -2138,6 +2145,7 @@ namespace vmux {
             else {
                 if (seq <= closed->second.last_dsn) {
                     ppp::telemetry::Count("mux.rx.closed_flow.reack", 1);
+                    ppp::app::mux::MuxRuntimeCounterRegistry::AddRxClosedFlowReack();
                     // Acknowledge with the flow's real delivery frontier, not
                     // with the sequence that happened to be retransmitted: the
                     // tracker for this flow is gone, so the frontier is the
@@ -2152,6 +2160,7 @@ namespace vmux {
                     // retransmission. Drop it WITHOUT acknowledging, so the
                     // peer keeps its copy of data that was never taken here.
                     ppp::telemetry::Count("mux.rx.closed_flow.drop", 1);
+                    ppp::app::mux::MuxRuntimeCounterRegistry::AddRxClosedFlowDrop();
                     // ... but tell the peer the flow is gone, so it stops
                     // retransmitting into the void (see refuse_flow).
                     refuse_flow(cid);
@@ -2363,6 +2372,7 @@ namespace vmux {
             // budget and resetting the flow.
             if (reliability_on_) {
                 ppp::telemetry::Count("mux.rx.flow.reack", 1);
+                ppp::app::mux::MuxRuntimeCounterRegistry::AddRxFlowReack();
                 reack_delivered(cid, seq, now);
             }
             active(now);
@@ -2483,6 +2493,7 @@ namespace vmux {
             const uint32_t attempts = entry->attempts;
             const uint64_t age = (now >= entry->first_sent_tick) ? (now - entry->first_sent_tick) : 0;
             ppp::telemetry::Count("mux.rtx.exhausted", 1);
+            ppp::app::mux::MuxRuntimeCounterRegistry::AddTxRtxExhausted();
             ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
                 "rtx exhausted: cid=%u seq=%u attempts=%u age=%llums; failing that connection only",
                 (unsigned)cid,
@@ -2521,6 +2532,7 @@ namespace vmux {
                     skt->close();
                 }
                 ppp::telemetry::Count("mux.rtx.exhausted.connection", 1);
+                ppp::app::mux::MuxRuntimeCounterRegistry::AddTxRtxExhaustedConnection();
             }
         }
     }
@@ -2539,6 +2551,7 @@ namespace vmux {
         }
 
         ppp::telemetry::Count("mux.rx.compat.gap_timeout", 1);
+        ppp::app::mux::MuxRuntimeCounterRegistry::AddRxGapTimeout();
         ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
             "compat gap timeout: buffered=%d age_ms=%llu; failing the connections stuck behind the hole",
             (int)rx_queue_.size(),
@@ -3035,6 +3048,7 @@ namespace vmux {
                 rtx_max_attempts_, rtx_exhausted_backoff_ms_);
             if (!rtx_pending_.empty()) {
                 ppp::telemetry::Count("mux.rtx.pto", 1);
+                ppp::app::mux::MuxRuntimeCounterRegistry::AddTxRtxPto();
                 retransmit_pending(now);
             }
 
@@ -3379,6 +3393,7 @@ namespace vmux {
 
         if (max_open_flows_ > 0 && skts_.size() >= max_open_flows_) {
             ppp::telemetry::Count("mux.rx.flow.max_open", 1);
+            ppp::app::mux::MuxRuntimeCounterRegistry::AddRxFlowMaxOpen();
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetProcessRxConnectingIdConflict);
             return false;
         }

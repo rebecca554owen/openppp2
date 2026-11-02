@@ -3,6 +3,7 @@
 #include <ppp/threading/BufferswapAllocator.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/app/mux/MuxRuntimeCounters.h>
 #include <ppp/transmissions/ITransmissionStatistics.h>
 
 /**
@@ -615,6 +616,7 @@ namespace vmux {
         // legitimate left to send: refuse the write.
         if (status_.fin_) {
             ppp::telemetry::Count("mux.tx.flow.after_fin", 1);
+            ppp::app::mux::MuxRuntimeCounterRegistry::AddTxFlowAfterFin();
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendAfterFin);
             return false;
         }

@@ -15,6 +15,7 @@
 #include <ppp/app/server/VirtualEthernetManagedServer.h>
 #include <ppp/app/PppApplicationInternal.h>
 #include <ppp/app/runtime/RuntimeStatsJson.h>
+#include <ppp/app/mux/MuxRuntimeCounters.h>
 #include <ppp/app/tui/TuiRuntimeAdapter.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/LinkTelemetry.h>
@@ -738,6 +739,9 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
         sample.link.error_count = link.error_count;
         sample.link.success_count = link.success_count;
         sample.runtime = runtime;
+        // The mux counters are read here, at sample time, so the stats file
+        // carries fresh values even when the mux state itself did not change.
+        sample.mux_counters = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
         WriteRuntimeStatsLine(stats_json_path_, sample);
     }
     const std::vector<std::string> runtime_lines =

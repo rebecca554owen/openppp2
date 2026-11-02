@@ -41,6 +41,26 @@ BOOST_AUTO_TEST_CASE(stats_json_preserves_v1_contract) {
     BOOST_TEST(root["runtime"]["effective_path"].asString() == "direct");
 }
 
+BOOST_AUTO_TEST_CASE(stats_json_carries_the_mux_counters_without_breaking_v1) {
+    runtime::RuntimeStatsSample sample;
+    sample.mux_counters.rx_flow_refused = 2;
+    sample.mux_counters.tx_rtx_exhausted = 9;
+
+    Json::Value root;
+    Json::Reader reader;
+    const std::string encoded = runtime::SerializeRuntimeStats(sample);
+    BOOST_REQUIRE(reader.parse(encoded.data(), encoded.data() + encoded.size(), root));
+    // The v1 contract is unchanged.
+    BOOST_TEST(root["type"].asString() == "ppp-stats");
+    BOOST_TEST(root["version"].asUInt() == 1u);
+    BOOST_REQUIRE(root["runtime"].isObject());
+    // The mux counters ride along in their own object.
+    BOOST_REQUIRE(root["mux_counters"].isObject());
+    BOOST_TEST(root["mux_counters"]["mux.rx.flow.refused"].asUInt64() == 2u);
+    BOOST_TEST(root["mux_counters"]["mux.rtx.exhausted"].asUInt64() == 9u);
+    BOOST_TEST(root["mux_counters"]["mux.link.send"].asUInt64() == 0u);
+}
+
 BOOST_AUTO_TEST_CASE(stats_json_is_a_single_ndjson_record_without_newline) {
     const std::string json = runtime::SerializeRuntimeStats(runtime::RuntimeStatsSample());
     BOOST_TEST(!json.empty());

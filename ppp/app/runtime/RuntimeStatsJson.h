@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ppp/app/runtime/RuntimeSnapshotJson.h>
+#include <ppp/app/mux/MuxRuntimeCounters.h>
 
 #include <json/json.h>
 
@@ -26,6 +27,7 @@ namespace ppp {
                 std::uint64_t tx_bytes = 0;
                 RuntimeLinkStats link;
                 RuntimeSnapshot runtime;
+                ppp::app::mux::MuxRuntimeCounters mux_counters;
             };
 
             inline std::string SerializeRuntimeStats(
@@ -43,6 +45,26 @@ namespace ppp {
                 link["error_count"] = Json::UInt64(sample.link.error_count);
                 link["success_count"] = Json::UInt64(sample.link.success_count);
                 root["link"] = std::move(link);
+
+                // The mux counters keep the telemetry vocabulary: every key is
+                // the telemetry counter it mirrors, so the stats NDJSON and the
+                // telemetry export can be read side by side.
+                Json::Value counters(Json::objectValue);
+                counters["mux.link.send"] = Json::UInt64(sample.mux_counters.tx_frames);
+                counters["mux.link.recv"] = Json::UInt64(sample.mux_counters.rx_frames);
+                counters["mux.rx.flow.unknown_cid"] = Json::UInt64(sample.mux_counters.rx_flow_unknown_cid);
+                counters["mux.rx.flow.refused"] = Json::UInt64(sample.mux_counters.rx_flow_refused);
+                counters["mux.rx.flow.reack"] = Json::UInt64(sample.mux_counters.rx_flow_reack);
+                counters["mux.rx.closed_flow.drop"] = Json::UInt64(sample.mux_counters.rx_closed_flow_drop);
+                counters["mux.rx.closed_flow.reack"] = Json::UInt64(sample.mux_counters.rx_closed_flow_reack);
+                counters["mux.rx.flow.reset"] = Json::UInt64(sample.mux_counters.rx_flow_reset);
+                counters["mux.rx.compat.gap_timeout"] = Json::UInt64(sample.mux_counters.rx_gap_timeout);
+                counters["mux.rx.flow.max_open"] = Json::UInt64(sample.mux_counters.rx_flow_max_open);
+                counters["mux.tx.flow.after_fin"] = Json::UInt64(sample.mux_counters.tx_flow_after_fin);
+                counters["mux.rtx.pto"] = Json::UInt64(sample.mux_counters.tx_rtx_pto);
+                counters["mux.rtx.exhausted"] = Json::UInt64(sample.mux_counters.tx_rtx_exhausted);
+                counters["mux.rtx.exhausted.connection"] = Json::UInt64(sample.mux_counters.tx_rtx_exhausted_connection);
+                root["mux_counters"] = std::move(counters);
 
                 Json::Reader reader;
                 Json::Value runtime(Json::objectValue);

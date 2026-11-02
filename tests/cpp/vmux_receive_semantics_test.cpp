@@ -1,5 +1,6 @@
 #include <ppp/stdafx.h>
 #include <ppp/app/mux/vmux_net.h>
+#include <ppp/app/mux/MuxRuntimeCounters.h>
 #include <ppp/app/mux/vmux_skt.h>
 #include <ppp/configurations/AppConfiguration.h>
 
@@ -995,6 +996,10 @@ void TestReceiverRefusesUnknownFlow() {
     constexpr std::uint32_t cid = 4242;
     vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
 
+    // The runtime counters are the only trace this leaves in production, so
+    // they must move: the stats file is what localizes the failure later.
+    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
+
     // No socket for this cid here: the peer still has the flow, we do not.
     const char payload[] = "X";
     Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 1, payload, 1, 1000), "inject");
@@ -1004,6 +1009,12 @@ void TestReceiverRefusesUnknownFlow() {
     Require(info.cmd == vmux::vmux_net_test_access::kCmdSynOk, "the refusal rides the syn-ok channel");
     Require(info.connection_id == cid, "the refusal names the refused flow");
     Require(info.payload != 'A', "the refusal must not look like an accept");
+
+    const auto counters = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(counters.rx_flow_unknown_cid == 1,
+        "the unknown cid must be counted for the runtime stats");
+    Require(counters.rx_flow_refused == 1,
+        "the refusal must be counted for the runtime stats");
 }
 
 // A data frame must never follow the flow's FIN.
@@ -1018,6 +1029,7 @@ void TestSenderRefusesDataAfterFin() {
 
     auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
     const char payload[] = "late";
+    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
 
     bool sent = true;
     const std::uint32_t code =
@@ -1029,6 +1041,11 @@ void TestSenderRefusesDataAfterFin() {
             "the write must be refused by the FIN guard");
     Require(vmux::vmux_net_test_access::FlowTxQueueSize(*mux, cid) == 0,
             "no data frame may be queued after the FIN");
+    // The refused write must be visible in the runtime counters, so a
+    // production deployment can see how often the FIN guard fires.
+    const auto counters = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(counters.tx_flow_after_fin == 1,
+            "the refused write must be counted for the runtime stats");
 }
 
 int main() {
