@@ -1978,6 +1978,27 @@ namespace vmux {
     }
 
     /**
+     * @brief Remembers a flow whose receive context is about to disappear.
+     * @details See the declaration for the rationale. The last delivered DSN is
+     *          the delivery frontier minus one, which is what the FIN path
+     *          records too: everything below the frontier was delivered, and a
+     *          frame at or above it was never taken here.
+     */
+    void vmux_net::remember_closed_flow_from_context(uint32_t connection_id) noexcept {
+        const auto it = flows_.find(connection_id);
+        if (it == flows_.end()) {
+            // No receive context: either the flow never got one here, or the
+            // FIN path already recorded it and erased the context in the same
+            // step. Nothing to add, and nothing to overwrite.
+            return;
+        }
+
+        const flow_rx_context& fx = it->second;
+        remember_closed_flow(connection_id,
+            fx.flow_rx_next_ > 0 ? fx.flow_rx_next_ - 1 : 0, now_tick());
+    }
+
+    /**
      * @brief Acknowledges a frame of an already finished flow.
      * @details The peer is still retransmitting a frame of a flow that is
      *          already closed here (its acknowledgement was lost). One more
@@ -2096,6 +2117,12 @@ namespace vmux {
         auto fit = flows_.find(connection_id);
         if (fit != flows_.end()) {
             note_flow_unbuffered(fit->second.flow_reorder_.buffered_bytes());
+            // The flow is gone on this side, so remember it before the
+            // context disappears: the peer keeps retransmitting until it hears
+            // that the frames were taken. Without the record those frames look
+            // like frames of a flow this side never had, and they are refused
+            // as unknown instead of acknowledged.
+            remember_closed_flow_from_context(connection_id);
             flows_.erase(fit);
         }
         // The send-side DSN counter is NOT erased here either: the socket is
@@ -3520,6 +3547,17 @@ namespace vmux {
                 skt = tail->second;
                 if (skt.get() == refer_pointer) {
                     skts_.erase(tail);
+                    // The socket is gone on this side, so remember the flow
+                    // before its context disappears: the peer keeps
+                    // retransmitting until it hears that the frames were
+                    // taken. Without the record those frames look like frames
+                    // of a flow this side never had, and they are refused as
+                    // unknown instead of acknowledged.
+                    //
+                    // Only the FIN-convergence path used to leave such a
+                    // record, so a socket that closed first (local error, write
+                    // failure, aging timeout) left nothing behind.
+                    remember_closed_flow_from_context(connection_id);
                     flows_.erase(connection_id);          // drop per-flow receive context (flow v2)
                     tx_flow_seq_.erase(connection_id);    // drop per-flow send DSN counter (flow v2)
                     // The remaining TX frames of this flow are NOT dropped.

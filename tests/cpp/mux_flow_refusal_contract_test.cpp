@@ -194,6 +194,70 @@ bool CallOutsideSocketGuard(const std::string& branch, const std::string& call) 
     return true;
 }
 
+// 去掉 /* ... */ 块注释，避免注释里的花括号干扰后面的结构分析。
+std::string StripBlockComments(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    size_t i = 0;
+    while (i < text.size()) {
+        const size_t open = text.find("/*", i);
+        if (open == std::string::npos) {
+            out.append(text, i, std::string::npos);
+            break;
+        }
+        out.append(text, i, open - i);
+        const size_t close = text.find("*/", open + 2);
+        if (close == std::string::npos) {
+            break;
+        }
+        out.push_back('\n');
+        i = close + 2;
+    }
+    return out;
+}
+
+// 去掉所有注释，只留代码。
+std::string StripComments(const std::string& text) {
+    return StripLineComments(StripBlockComments(text));
+}
+
+// first 是否出现在 second 之前（两者都必须存在）。
+bool AppearsBefore(const std::string& text,
+                   const std::string& first,
+                   const std::string& second) {
+    const size_t a = text.find(first);
+    const size_t b = text.find(second);
+    if (a == std::string::npos || b == std::string::npos) {
+        return false;
+    }
+    return a < b;
+}
+
+// 取某个函数的函数体源码：从函数签名后第一个 '{' 开始，按花括号配平取出。
+std::string FunctionBody(const std::string& text, const std::string& signature) {
+    const size_t start = text.find(signature);
+    if (start == std::string::npos) {
+        return std::string();
+    }
+    const size_t open = text.find('{', start);
+    if (open == std::string::npos) {
+        return std::string();
+    }
+    int depth = 0;
+    for (size_t i = open; i < text.size(); ++i) {
+        if (text[i] == '{') {
+            ++depth;
+        }
+        else if (text[i] == '}') {
+            --depth;
+            if (depth == 0) {
+                return text.substr(open, i - open + 1);
+            }
+        }
+    }
+    return std::string();
+}
+
 } // namespace
 
 int main() {
@@ -235,6 +299,39 @@ int main() {
         //    丢掉，于是发送端把一条已经死掉的流重传满 30 s 预算。
         Require(CallOutsideSocketGuard(syn_ok_branch, "release_flow_reliability_state(connection_id)"),
                 "the release must not be guarded by the local socket lookup");
+
+        // 6) 接收上下文消失前必须留下「已关闭流」的记录。
+        //
+        //    对端会一直重传，直到听见 ACK。接收上下文消失的两条路径（本地
+        //    socket 先关、流被 reset）如果什么都不留，迟到的帧就变成「我没
+        //    有的流」⇒ 被当未知流拒绝 ⇒ 对端放弃一条数据其实已经到达的流。
+        //
+        //    记录必须在上下文还在的时候写（它要读交付前沿），所以「先写记录
+        //    再删上下文」的顺序本身就是不变量。
+        const std::string net_code = StripComments(net);
+        const std::string release_body =
+            FunctionBody(net_code, "vmux_net::release_connection(");
+        Require(!release_body.empty(), "release_connection must exist");
+        Require(AppearsBefore(release_body,
+                "remember_closed_flow_from_context(connection_id)",
+                "flows_.erase(connection_id)"),
+                "release_connection must remember the flow before its receive context is erased");
+
+        const std::string fail_body = FunctionBody(net_code, "vmux_net::fail_flow(");
+        Require(!fail_body.empty(), "fail_flow must exist");
+        Require(AppearsBefore(fail_body,
+                "remember_closed_flow_from_context(connection_id)",
+                "flows_.erase(fit)"),
+                "fail_flow must remember the flow before its receive context is erased");
+
+        // 7) 这条记录必须真的从接收上下文里取交付前沿，而不是写个空壳。
+        const std::string remember_body =
+            FunctionBody(net_code, "vmux_net::remember_closed_flow_from_context(");
+        Require(!remember_body.empty(), "remember_closed_flow_from_context must exist");
+        Require(remember_body.find("flows_.find(connection_id)") != std::string::npos,
+                "the record must be derived from the live receive context");
+        Require(remember_body.find("flow_rx_next_") != std::string::npos,
+                "the record must carry the delivery frontier of the flow");
 
         std::cout << "mux_flow_refusal_contract_test: ok" << std::endl;
         return 0;

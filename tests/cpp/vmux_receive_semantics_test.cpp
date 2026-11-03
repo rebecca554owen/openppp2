@@ -317,6 +317,31 @@ struct vmux_net_test_access {
         RunOnStrandVoid(mux, [&]() { mux.base_.established_ = value; });
     }
 
+    /** @brief Whether a socket still exists for a connection id. */
+    static bool SocketExists(vmux_net& mux, std::uint32_t connection_id) {
+        return RunOnStrand(mux, [&]() {
+            return mux.skts_.find(connection_id) != mux.skts_.end();
+        });
+    }
+
+    /**
+     * @brief Closes a socket and runs the strand until the close took effect.
+     * @details vmux_skt::close() posts the finalization to the mux strand, and
+     *          vmux_post_exec() drops that post when the io_context is already
+     *          stopped. Boost.Asio marks a context stopped as soon as it has
+     *          no outstanding work left, and this harness runs one handler at a
+     *          time, so between two strand calls the work count drops to zero.
+     *          The close is therefore issued from inside the strand, where the
+     *          context is still live, and the finalization it queues is drained
+     *          by the marker handler that follows it on the same strand.
+     */
+    static void CloseSocket(const std::shared_ptr<vmux_net>& mux, vmux_skt& skt) {
+        RunOnStrandVoid(*mux, [&]() {
+            skt.close();
+        });
+        RunOnStrandVoid(*mux, []() {});
+    }
+
     /**
      * @brief Delivers a syn-ok frame (the connect/refuse channel) for one flow.
      * @param err The error byte the peer sent; anything but 'A' is a refusal.
@@ -1135,6 +1160,84 @@ void TestRefusalThatCannotBePostedIsCounted() {
         "a refusal that could not be queued must be counted for the runtime stats");
 }
 
+// A socket that closes before the FIN converges must leave a record of the
+// flow behind.
+//
+// The peer keeps retransmitting a flow's frames until it hears that they were
+// delivered. Only the FIN-convergence path (maybe_release_flow) used to leave
+// such a record: a socket that closed first — a local error, a write failure,
+// an aging timeout, a flow reset — dropped the receive context and left
+// nothing, so every late frame of that flow looked like a frame of a flow
+// this side never had. Those frames were refused as an unknown flow, and the
+// peer was told to give up on a flow whose data may in fact have arrived.
+//
+// This is the shape of the production failures: the peer refused the flow's
+// FIRST frame, so nothing had been delivered yet, and the refusal count grew
+// while mux.rx.closed_flow.drop stayed at zero.
+void TestClosedSocketRemembersTheFlow() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 6161;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+
+    // The peer sends one data frame: it is delivered, so the delivery
+    // frontier moves to two.
+    const char payload[] = "D";
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 1, payload, 1, 1000), "inject");
+    Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 1, "the frame must be delivered");
+
+    // The socket now closes locally, before the FIN converges.
+    vmux::vmux_net_test_access::CloseSocket(mux, *skt);
+    Require(!vmux::vmux_net_test_access::SocketExists(*mux, cid), "the socket must be gone");
+    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid), "the receive context must be gone");
+
+    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
+
+    // The peer retransmits the frame it already sent: its acknowledgement was
+    // lost. That frame belongs to a flow this side DID have.
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 1, payload, 1, 1100), "retransmit");
+
+    const auto counters = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(counters.rx_flow_unknown_cid == 0,
+        "a late frame of a closed flow must not be refused as an unknown flow");
+    Require(counters.rx_closed_flow_reack == 1,
+        "a late frame of a closed flow must be acknowledged again");
+}
+
+// A flow that is reset must leave a record of the flow behind.
+//
+// A flow reset (gap timeout, reorder-buffer overflow) drops the receive
+// context the same way a local socket close does. The peer may still be
+// retransmitting the frames of that flow: they were taken here, so they have
+// to be acknowledged again instead of being refused as an unknown flow.
+void TestResetFlowRemembersTheFlow() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 6162;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+
+    const char payload[] = "D";
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 1, payload, 1, 1000), "inject");
+    Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 1, "the frame must be delivered");
+
+    // The flow is reset: the receive context goes away, the socket is closed.
+    vmux::vmux_net_test_access::FailFlow(*mux, cid, "test");
+    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid), "the receive context must be gone");
+
+    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
+
+    // The peer retransmits the frame it already sent.
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 1, payload, 1, 1100), "retransmit");
+
+    const auto counters = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(counters.rx_flow_unknown_cid == 0,
+        "a late frame of a reset flow must not be refused as an unknown flow");
+    Require(counters.rx_closed_flow_reack == 1,
+        "a late frame of a reset flow must be acknowledged again");
+}
+
 // A data frame must never follow the flow's FIN.
 //
 // The FIN says "no more data from me", so the peer treats the flow as closed
@@ -1171,6 +1274,8 @@ int main() {
         TestReceiverRefusesUnknownFlow();
         TestRefusalThatCannotBePostedIsCounted();
         TestRefusalReleasesRetainedFramesWithoutLocalSocket();
+        TestClosedSocketRemembersTheFlow();
+        TestResetFlowRemembersTheFlow();
         TestSenderRefusesDataAfterFin();
         TestTxFlowDrrPrefersOtherCidAfterQuantum();
         TestTxFlowDrrDrainsBytesWithinQuantumBeforeRotating();
