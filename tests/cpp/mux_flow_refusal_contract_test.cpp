@@ -333,6 +333,23 @@ int main() {
         Require(remember_body.find("flow_rx_next_") != std::string::npos,
                 "the record must carry the delivery frontier of the flow");
 
+        // 8) A closing socket's FIN must be queued before the per-flow send DSN
+        //    counter is dropped.
+        //
+        //    release_connection() erases tx_flow_seq_. A FIN queued after it
+        //    restarts the per-flow DSN numbering at one, and the receiver
+        //    answers a frame below its delivery frontier with another
+        //    acknowledgement WITHOUT delivering it: the peer would never learn
+        //    that the flow ended, and would keep its context until something
+        //    else tore the connection down.
+        const std::string skt_code = StripComments(skt);
+        const std::string finalize_body = FunctionBody(skt_code, "vmux_skt::finalize(");
+        Require(!finalize_body.empty(), "vmux_skt::finalize must exist");
+        Require(AppearsBefore(finalize_body,
+                "mux_->post(vmux_net::cmd_fin",
+                "mux_->release_connection(connection_id_, this)"),
+                "the close must post its FIN before the flow state is dropped");
+
         std::cout << "mux_flow_refusal_contract_test: ok" << std::endl;
         return 0;
     }

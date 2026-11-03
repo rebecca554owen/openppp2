@@ -111,10 +111,16 @@ namespace vmux {
             event(this, false);
         }
 
-        mux_->release_connection(connection_id_, this);
+        // The FIN must be queued while tx_flow_seq_ still holds this flow's
+        // send frontier. release_connection() drops that counter, so a FIN
+        // posted afterwards restarts the per-flow DSN numbering at one; the
+        // receiver treats a frame below its delivery frontier as a duplicate
+        // and acknowledges it WITHOUT delivering it, so the peer would never
+        // learn that the flow ended.
         if (fin) {
             mux_->post(vmux_net::cmd_fin, NULLPTR, 0, connection_id_);
         }
+        mux_->release_connection(connection_id_, this);
 
         if (NULLPTR != tx_socket) {
             auto tx_context = tx_context_;

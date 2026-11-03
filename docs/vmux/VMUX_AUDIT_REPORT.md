@@ -423,10 +423,19 @@ P1-2 + P1-3 + P1-4 一起修复：per-flow TX/RTX 配额确保慢消费者在达
 |------|------|
 | **最终严重级别** | **P2** |
 | **关闭日期** | 2026-08-03 |
-| **修复** | Wave 1: `release_connection()` 中调用 `release_flow_reliability_state(connection_id)` 释放 RTX/ACK/FEC 状态。同时新增 TX 队列清理 |
-| **回归测试** | `vmux_wave0_rtx_release_test` — RTX 条目在 flow 关闭后释放 |
+| **状态** | ⚠️ **未闭环** —— 原修复在 `57f0ffa5`（`vmux_net.cpp` 整文件重写）中丢失，未恢复 |
+| **原修复** | Wave 1: `release_connection()` 中调用 `release_flow_reliability_state(connection_id)` 释放 RTX/ACK/FEC 状态。同时新增 TX 队列清理 |
+| **回归测试** | ⚠️ `vmux_wave0_rtx_release_test` **不覆盖该路径** —— 它只测 `MuxRetransmitBuffer::EraseCid` 原语，从不触碰 `vmux_net` 的关闭路径 |
 | **协议变更** | 无 |
 | **兼容性影响** | 无 |
+
+**2026-11-03 复核**：`release_connection()` 至今**不**主动释放 RTX/FEC 状态，本地 socket 关闭后该 cid 的重传条目会留到对端 ACK、拒绝或预算耗尽。**不打算按原样恢复**：
+
+- 当前实现**故意**保留该 cid 已发送但未确认的帧（见 `release_connection()` 内注释）——丢帧会在对端的序号空间留下洞，洞只能等 gap timeout 重建整个会话，比多几次重传更糟。
+- v2.2.17 的显式拒绝（对端回 `'N'`）已把「对端没有这条流」这一支的保留时间从**无界**压到**一次 RTT**。
+- 现网证据：v2.2.17 上线后 `rtx.exhausted` 与 `flow.reset` 均为 0。
+
+若将来要恢复主动释放，必须先解决与「不丢已发送帧」的冲突（例如只在对端已确认无该流上下文时才提前释放）。
 
 ### P2-10：缓存 tick 10ms 量化误差
 

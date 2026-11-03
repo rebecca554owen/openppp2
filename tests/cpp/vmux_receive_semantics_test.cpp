@@ -312,6 +312,69 @@ struct vmux_net_test_access {
         });
     }
 
+    /** @brief One queued transmit frame's command byte and DSN. */
+    struct TxFrameInfo {
+        bool                                     present = false;
+        std::uint8_t                             cmd = 0;
+        std::uint32_t                            seq = 0;
+    };
+
+    /** @brief Reads one queued transmit frame (index 0 is the oldest). */
+    static TxFrameInfo FlowTxFrame(vmux_net& mux, std::uint32_t connection_id, std::size_t index) {
+        return RunOnStrand(mux, [&]() {
+            TxFrameInfo info;
+            auto it = mux.tx_flows_.find(connection_id);
+            if (it == mux.tx_flows_.end()) {
+                return info;
+            }
+            auto qit = it->second.queue.begin();
+            for (std::size_t i = 0; i < index && qit != it->second.queue.end(); ++i) {
+                ++qit;
+            }
+            if (qit == it->second.queue.end() || NULLPTR == qit->buffer ||
+                qit->length < static_cast<int>(sizeof(vmux_net::vmux_hdr))) {
+                return info;
+            }
+            const auto* h = reinterpret_cast<const vmux_net::vmux_hdr*>(qit->buffer.get());
+            info.present = true;
+            info.cmd = h->cmd;
+            info.seq = ntohl(h->seq);
+            return info;
+        });
+    }
+
+    /** @brief Whether a queued transmit frame is a per-flow data frame. */
+    static bool FlowTxFrameIsPush(vmux_net& mux, std::uint32_t connection_id, std::size_t index) {
+        const TxFrameInfo info = FlowTxFrame(mux, connection_id, index);
+        return info.present && info.cmd == static_cast<std::uint8_t>(vmux_net::cmd_push);
+    }
+
+    /** @brief Whether a queued transmit frame is the flow's FIN. */
+    static bool FlowTxFrameIsFin(vmux_net& mux, std::uint32_t connection_id, std::size_t index) {
+        const TxFrameInfo info = FlowTxFrame(mux, connection_id, index);
+        return info.present && info.cmd == static_cast<std::uint8_t>(vmux_net::cmd_fin);
+    }
+
+    /** @brief Queues one per-flow data frame for a connection. */
+    static bool PostDataFrame(vmux_net& mux, std::uint32_t connection_id, const void* payload, int payload_len) {
+        return RunOnStrand(mux, [&]() {
+            const int frame_len = static_cast<int>(sizeof(vmux_net::vmux_hdr)) + payload_len;
+            auto frame = mux.make_byte_array(frame_len);
+            if (!frame) {
+                throw std::runtime_error("alloc data frame");
+            }
+            std::memset(frame.get(), 0, sizeof(vmux_net::vmux_hdr));
+            auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(frame.get());
+            h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_push);
+            h->connection_id = htonl(connection_id);
+            if (payload_len > 0 && payload != nullptr) {
+                std::memcpy(h + 1, payload, static_cast<std::size_t>(payload_len));
+            }
+            vmux_net::PostInternalAsynchronousCallback callback;
+            return mux.post_internal(frame, frame_len, false, callback);
+        });
+    }
+
     /** @brief Flips the "session established" flag (post() refuses without it). */
     static void SetEstablished(vmux_net& mux, bool value) {
         RunOnStrandVoid(mux, [&]() { mux.base_.established_ = value; });
@@ -1238,6 +1301,68 @@ void TestResetFlowRemembersTheFlow() {
         "a late frame of a reset flow must be acknowledged again");
 }
 
+// A FIN posted as the socket closes must continue the flow's DSN space.
+//
+// The receiver delivers a per-flow data frame only at the delivery frontier
+// and answers anything below it with another acknowledgement WITHOUT
+// delivering it. A FIN that restarts the DSN numbering at one is therefore
+// discarded as a duplicate: the peer never learns the flow ended, keeps its
+// context, and the connection lingers until something else tears it down.
+//
+// release_connection() drops tx_flow_seq_ before finalize() posts the FIN, so
+// the FIN would restart at one. The counter must outlive the socket for the
+// whole of the close sequence, exactly as maybe_release_flow() documents.
+void TestFinAfterSocketCloseUsesTheFlowsDsn() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 6163;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+
+    // One data frame goes out, so the flow's send frontier moves to two.
+    const char payload[] = "D";
+    Require(vmux::vmux_net_test_access::PostDataFrame(*mux, cid, payload, 1), "post data frame");
+    const auto data = vmux::vmux_net_test_access::FlowTxFrame(*mux, cid, 0);
+    Require(vmux::vmux_net_test_access::FlowTxFrameIsPush(*mux, cid, 0),
+            "the data frame must be queued");
+    Require(data.seq == 1, "the first data frame must carry DSN 1");
+
+    // The socket now closes without a FIN of its own: finalize() posts one.
+    vmux::vmux_net_test_access::CloseSocket(mux, *skt);
+
+    const auto fin = vmux::vmux_net_test_access::FlowTxFrame(*mux, cid, 1);
+    Require(vmux::vmux_net_test_access::FlowTxFrameIsFin(*mux, cid, 1),
+            "the close must queue a FIN");
+    Require(fin.seq == 2,
+            "the FIN must continue the flow's DSN space, not restart it at one");
+}
+
+// A local socket close must NOT drop the flow's retained frames.
+//
+// release_connection() drops the receive context and the send DSN counter, but
+// it deliberately keeps the flow's retransmit entries. Those frames were
+// already sent and the peer is waiting for exactly their sequence numbers;
+// dropping them leaves a hole in the peer's sequence space that only a gap
+// timeout can close, and closing it rebuilds the whole session. The peer
+// releases them by acknowledging, or by refusing the flow once it has no
+// context for it.
+void TestSocketCloseKeepsRetainedFrames() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 6164;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+
+    Require(vmux::vmux_net_test_access::TrackRtxFrame(*mux, cid, 1, 128, 1000), "retain");
+    Require(vmux::vmux_net_test_access::RtxBytesForCid(*mux, cid) == 128,
+            "the frame must be retained before the close");
+
+    vmux::vmux_net_test_access::CloseSocket(mux, *skt);
+
+    Require(vmux::vmux_net_test_access::RtxBytesForCid(*mux, cid) == 128,
+            "a local close must not drop frames the peer is still waiting for");
+}
+
 // A data frame must never follow the flow's FIN.
 //
 // The FIN says "no more data from me", so the peer treats the flow as closed
@@ -1276,6 +1401,8 @@ int main() {
         TestRefusalReleasesRetainedFramesWithoutLocalSocket();
         TestClosedSocketRemembersTheFlow();
         TestResetFlowRemembersTheFlow();
+        TestFinAfterSocketCloseUsesTheFlowsDsn();
+        TestSocketCloseKeepsRetainedFrames();
         TestSenderRefusesDataAfterFin();
         TestTxFlowDrrPrefersOtherCidAfterQuantum();
         TestTxFlowDrrDrainsBytesWithinQuantumBeforeRotating();
