@@ -125,6 +125,7 @@ struct vmux_net_test_access {
             skt->status_.connected_ = true;
             skt->status_.disposed_ = false;
             skt->status_.fin_ = false;
+            skt->status_.peer_eof_ = false;
             skt->status_.sending_.store(1, std::memory_order_relaxed); // queue-only input path
             mux->skts_[connection_id] = skt;
             return skt;
@@ -143,6 +144,22 @@ struct vmux_net_test_access {
             }
         }
         return total;
+    }
+
+    static void SetLocalFin(vmux_net& mux, vmux_skt& skt, bool value) {
+        RunOnStrandVoid(mux, [&]() { skt.status_.fin_ = value; });
+    }
+
+    static void SetSending(vmux_net& mux, vmux_skt& skt, bool value) {
+        RunOnStrandVoid(mux, [&]() { skt.status_.sending_.store(value, std::memory_order_release); });
+    }
+
+    static bool ReceivePeerFin(vmux_net& mux, vmux_skt& skt) {
+        return RunOnStrand(mux, [&]() { return skt.input(nullptr, 0); });
+    }
+
+    static bool CloseOnEofConvergence(vmux_net& mux, vmux_skt& skt) {
+        return RunOnStrand(mux, [&]() { return skt.close_on_eof_convergence(); });
     }
 
     static bool FlowExists(vmux_net& mux, std::uint32_t connection_id) {
@@ -507,7 +524,37 @@ void TestGapTimeoutResetsFlowWithoutHoleDelivery() {
     ctx->restart();
 }
 
-void TestReorderOverflowResetsFlow() {
+void TestFlowGapTimeoutFiresWhenFirstDsnNeverArrives() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 21;
+    constexpr std::uint64_t timeout_ms = 50;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, timeout_ms);
+
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+    const char p2[] = "B";
+
+    // The very first DSN of the flow never arrives, so the flow has no
+    // delivery to date its hole from. The hole must be dated from the first
+    // frame seen above it: otherwise the gap timeout never fires for this
+    // flow, it hangs until the session idle timeout, and the peer burns its
+    // whole retransmit budget meanwhile.
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 2, p2, 1, 1000), "dsn2 inject");
+    Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 0, "dsn2 must wait for dsn1");
+    Require(vmux::vmux_net_test_access::FlowBufferedBytes(*mux, cid) > 0, "dsn2 buffered");
+    Require(vmux::vmux_net_test_access::FlowExists(*mux, cid), "flow exists");
+
+    vmux::vmux_net_test_access::EvictExpired(*mux, 1000 + timeout_ms + 1);
+    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid),
+            "gap timeout must erase a flow whose first dsn never arrived");
+
+    // close() is posted async; poll executor so finalize can run.
+    auto ctx = mux->get_context();
+    Require(static_cast<bool>(ctx), "context");
+    ctx->poll();
+    ctx->restart();
+}
+
+void TestReorderOverflowDropsSurplusKeepsFlow() {
     auto mux = MakeMux();
     constexpr std::uint32_t cid = 9;
     // Small cap: header(9)+payload must fit one future frame, second future overflows.
@@ -527,10 +574,17 @@ void TestReorderOverflowResetsFlow() {
     Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 1, "no hole delivery on buffer");
     Require(vmux::vmux_net_test_access::FlowExists(*mux, cid), "still open after first buffer");
 
-    // Another future frame cannot fit: overflow -> fail_flow.
+    // Another future frame cannot fit: the surplus frame is DROPPED (never
+    // buffered, never acknowledged) and the flow survives. The peer keeps its
+    // retransmit copy and re-sends the frame once the gap in front of it
+    // closes; killing the flow here would turn a transient inter-carrier skew
+    // into a session teardown.
+    const std::size_t buffered_before = vmux::vmux_net_test_access::FlowBufferedBytes(*mux, cid);
     Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 4, payload, 16, 2002), "dsn4 overflow");
     Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 1, "no force-advance delivery of buffered frames");
-    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid), "overflow must reset flow");
+    Require(vmux::vmux_net_test_access::FlowExists(*mux, cid), "overflow must keep the flow alive");
+    Require(vmux::vmux_net_test_access::FlowBufferedBytes(*mux, cid) == buffered_before,
+            "the surplus frame must not be buffered");
 }
 
 void TestFrameOversizeResetsFlow() {
@@ -597,7 +651,7 @@ void TestCompatOooRefreshesActivity() {
     Require(vmux::vmux_net_test_access::LastActive(*mux) == 5000, "ooo must call active(now)");
 }
 
-void TestCompatGapTimeoutClosesSession() {
+void TestCompatGapTimeoutFailsConnectionsKeepsSession() {
     auto mux = MakeMux();
     constexpr std::uint64_t timeout_ms = 50;
     vmux::vmux_net_test_access::ConfigureCompat(*mux, timeout_ms);
@@ -608,27 +662,27 @@ void TestCompatGapTimeoutClosesSession() {
     Require(!vmux::vmux_net_test_access::IsDisposed(*mux), "not timed out yet");
 
     vmux::vmux_net_test_access::CompatEvict(*mux, 10000 + timeout_ms + 1);
-    // close_exec posts finalize async; poll once
-    auto ctx = mux->get_context();
-    Require(static_cast<bool>(ctx), "ctx");
-    ctx->poll();
-    ctx->restart();
-    Require(vmux::vmux_net_test_access::IsDisposed(*mux), "compat gap timeout must dispose session");
+    // The hole is local to the peer's->our direction. The session survives so
+    // the opposite direction -- which may be carrying a bulk transfer -- keeps
+    // flowing; only the connections stuck behind the hole are failed and the
+    // frames that can never be delivered in order are dropped.
+    Require(!vmux::vmux_net_test_access::IsDisposed(*mux), "compat gap timeout must keep the session alive");
+    Require(vmux::vmux_net_test_access::CompatReorderSize(*mux) == 0, "the undeliverable frames are dropped");
 }
 
-void TestCompatReorderCapClosesSession() {
+void TestCompatReorderCapDropsSurplusKeepsSession() {
     auto mux = MakeMux();
     constexpr std::size_t frame_size = 9;
     vmux::vmux_net_test_access::ConfigureCompat(*mux, 1000, frame_size);
 
     Require(vmux::vmux_net_test_access::InjectCompatFrame(*mux, 3, 1, 11000), "first future frame");
     Require(vmux::vmux_net_test_access::CompatReorderSize(*mux) == 1, "first frame fits cap");
-    Require(vmux::vmux_net_test_access::InjectCompatFrame(*mux, 4, 1, 11001), "overflow schedules close");
-    auto ctx = mux->get_context();
-    Require(static_cast<bool>(ctx), "ctx");
-    ctx->poll();
-    ctx->restart();
-    Require(vmux::vmux_net_test_access::IsDisposed(*mux), "compat reorder overflow must close session");
+    // Surplus frame over the reorder cap is dropped (never buffered, never
+    // note_ack_pending'd) instead of rebuilding the session: the peer keeps
+    // its retransmission copy and re-sends it once the gap closes.
+    Require(vmux::vmux_net_test_access::InjectCompatFrame(*mux, 4, 1, 11001), "surplus overflow frame");
+    Require(vmux::vmux_net_test_access::CompatReorderSize(*mux) == 1, "surplus frame must not be buffered");
+    Require(!vmux::vmux_net_test_access::IsDisposed(*mux), "compat reorder overflow must keep session alive");
 }
 
 void TestUnknownCidDoesNotGrowFlowsUnbounded() {
@@ -673,6 +727,8 @@ void TestSessionReorderCapResetsFlow() {
     Require(vmux::vmux_net_test_access::SessionReorderBytes(*mux) <= 40, "session reorder bounded");
 }
 
+void DrainContext(const std::shared_ptr<vmux::vmux_net>& mux);
+
 void TestMaxOpenFlowsEnforced() {
     auto mux = MakeMux();
     vmux::vmux_net_test_access::ConfigureFlowV2(*mux, 1024, 1000, 0, /*max_open*/ 1);
@@ -682,6 +738,64 @@ void TestMaxOpenFlowsEnforced() {
     Require(!vmux::vmux_net_test_access::ProcessRxConnecting(mux, 2, "127.0.0.1:81"), "second open rejected");
     Require(!vmux::vmux_net_test_access::ConnectRequire(*mux), "locally initiated open must use the same cap");
     Require(vmux::vmux_net_test_access::SktCount(*mux) == 1, "still one skt");
+}
+
+void TestPeerFinWaitsForLocalFin() {
+    auto mux = MakeMux();
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, 100);
+    vmux::vmux_net_test_access::SetSending(*mux, *skt, false);
+
+    Require(vmux::vmux_net_test_access::ReceivePeerFin(*mux, *skt), "peer FIN accepted");
+    DrainContext(mux);
+    Require(vmux::vmux_net_test_access::SktCount(*mux) == 1,
+        "peer FIN alone must preserve the response half");
+}
+
+void TestBidirectionalEofReleasesFlowSlot() {
+    auto mux = MakeMux();
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, 101);
+    vmux::vmux_net_test_access::SetSending(*mux, *skt, false);
+    vmux::vmux_net_test_access::SetLocalFin(*mux, *skt, true);
+
+    Require(vmux::vmux_net_test_access::ReceivePeerFin(*mux, *skt), "peer FIN accepted");
+    DrainContext(mux);
+    Require(vmux::vmux_net_test_access::SktCount(*mux) == 0,
+        "bidirectional EOF must release the flow slot");
+}
+
+void TestBidirectionalEofWaitsForInflightWrite() {
+    auto mux = MakeMux();
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, 102);
+    vmux::vmux_net_test_access::SetLocalFin(*mux, *skt, true);
+
+    Require(vmux::vmux_net_test_access::ReceivePeerFin(*mux, *skt), "peer FIN accepted");
+    DrainContext(mux);
+    Require(vmux::vmux_net_test_access::SktCount(*mux) == 1,
+        "in-flight local write must keep the flow alive");
+
+    vmux::vmux_net_test_access::SetSending(*mux, *skt, false);
+    Require(vmux::vmux_net_test_access::CloseOnEofConvergence(*mux, *skt),
+        "write completion must converge EOF state");
+    DrainContext(mux);
+    Require(vmux::vmux_net_test_access::SktCount(*mux) == 0,
+        "drained bidirectional EOF must release the flow slot");
+}
+
+void TestSequentialCompletedFlowsDoNotExhaustCap() {
+    auto mux = MakeMux();
+    constexpr std::size_t max_open = 4;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, 1024, 1000, 0, max_open);
+
+    for (std::uint32_t cid = 1; cid <= 4097; ++cid) {
+        auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+        vmux::vmux_net_test_access::SetSending(*mux, *skt, false);
+        vmux::vmux_net_test_access::SetLocalFin(*mux, *skt, true);
+        Require(vmux::vmux_net_test_access::ReceivePeerFin(*mux, *skt),
+            "sequential peer FIN accepted");
+        DrainContext(mux);
+        Require(vmux::vmux_net_test_access::SktCount(*mux) == 0,
+            "completed flow must not consume a persistent slot");
+    }
 }
 
 void TestCtrlBudgetDoesNotDrainAll() {
@@ -815,15 +929,20 @@ int main() {
         TestInOrderStillDelivers();
         TestFirstObservedFutureDsnWaitsForDsnOne();
         TestGapTimeoutResetsFlowWithoutHoleDelivery();
-        TestReorderOverflowResetsFlow();
+        TestFlowGapTimeoutFiresWhenFirstDsnNeverArrives();
+        TestReorderOverflowDropsSurplusKeepsFlow();
         TestFrameOversizeResetsFlow();
         TestCompatOooRefreshesActivity();
-        TestCompatGapTimeoutClosesSession();
-        TestCompatReorderCapClosesSession();
+        TestCompatGapTimeoutFailsConnectionsKeepsSession();
+        TestCompatReorderCapDropsSurplusKeepsSession();
         TestUnknownCidDoesNotGrowFlowsUnbounded();
         TestInitiatorOpenBarrierBlocksPush();
         TestSessionReorderCapResetsFlow();
         TestMaxOpenFlowsEnforced();
+        TestPeerFinWaitsForLocalFin();
+        TestBidirectionalEofReleasesFlowSlot();
+        TestBidirectionalEofWaitsForInflightWrite();
+        TestSequentialCompletedFlowsDoNotExhaustCap();
         TestCtrlBudgetDoesNotDrainAll();
         TestLinkExitIsolatesWhenOthersLive();
         TestLinkExitClosesWhenLast();

@@ -74,3 +74,38 @@ BOOST_AUTO_TEST_CASE(server_compat_result_downgrades_client_balance) {
     BOOST_TEST(client.effective_mode == "compat");
     BOOST_TEST(client.receiver_ordering == server.receiver_ordering);
 }
+
+BOOST_AUTO_TEST_CASE(effective_turbo_falls_back_to_configured_value) {
+    // Fresh session: nothing latched yet, the configured flag decides.
+    BOOST_TEST(mux::EffectiveTurbo("flow", true, false));
+    BOOST_TEST(!mux::EffectiveTurbo("flow", false, false));
+    // The configured flag only counts under the flow preset.
+    BOOST_TEST(!mux::EffectiveTurbo("balance", true, false));
+    BOOST_TEST(!mux::EffectiveTurbo("compat", true, false));
+    // A latched flag always wins.
+    BOOST_TEST(mux::EffectiveTurbo("flow", false, true));
+}
+
+BOOST_AUTO_TEST_CASE(fresh_flow_turbo_session_reaches_flow_v2_ordering) {
+    // Regression: the session must derive turbo from the configuration on the
+    // first negotiation. Reading only the (not yet latched) runtime flag made
+    // every fresh flow+turbo session fall back to compat global ordering.
+    const bool turbo_requested = mux::EffectiveTurbo("flow", true, false);
+    const auto state = mux::NegotiateMuxRuntimeState("flow", true, true, 1, turbo_requested);
+
+    BOOST_TEST(state.effective_mode == "flow");
+    BOOST_TEST(state.receiver_ordering == "flow_v2");
+    BOOST_TEST(state.pool_policy == "adaptive");
+    BOOST_TEST(state.turbo);
+    BOOST_TEST(state.fallback_reason.empty());
+}
+
+BOOST_AUTO_TEST_CASE(fresh_flow_without_turbo_stays_on_compat_ordering) {
+    const bool turbo_requested = mux::EffectiveTurbo("flow", false, false);
+    const auto state = mux::NegotiateMuxRuntimeState("flow", true, true, 1, turbo_requested);
+
+    BOOST_TEST(state.effective_mode == "flow");
+    BOOST_TEST(state.receiver_ordering == "compat");
+    BOOST_TEST(state.pool_policy == "fixed");
+    BOOST_TEST(!state.turbo);
+}

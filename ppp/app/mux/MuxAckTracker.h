@@ -100,6 +100,22 @@ public:
     void Clear() noexcept { ranges_.clear(); }
     std::size_t size() const noexcept { return ranges_.size(); }
 
+    /**
+     * "Has something new to report" flag.
+     *
+     * A tracker keeps its delivered set for the lifetime of the sequence
+     * space, so it stays non-empty forever. The acknowledgement frame only
+     * carries a bounded number of sequence spaces (see PPP_MUX_ACK_MAX_BLOCKS),
+     * so a session with more logical flows than that cap would always report
+     * the same subset — the remaining flows would never be acknowledged at
+     * all, and their frames would sit in the peer's retransmit buffer until
+     * it declared them unrecoverable. The flag marks the spaces that actually
+     * gained a sequence since the last acknowledgement was sent.
+     */
+    void MarkPending() noexcept { pending_ = true; }
+    bool pending() const noexcept { return pending_; }
+    void ClearPending() noexcept { pending_ = false; }
+
     /** Highest tracked sequence; 0 when empty. */
     std::uint32_t largest() const noexcept {
         return ranges_.empty() ? 0 : ranges_.back().end;
@@ -109,6 +125,7 @@ public:
 
 private:
     std::vector<MuxAckRange> ranges_;
+    bool                     pending_ = false; ///< Gained a sequence since the last ACK was sent.
 };
 
 /** One decoded ACK block: ranges for one sequence space (connection_id). */
