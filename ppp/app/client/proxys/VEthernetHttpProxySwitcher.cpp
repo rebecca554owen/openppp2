@@ -1,4 +1,5 @@
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
+#include <ppp/app/client/proxys/HttpProxyUnavailableResponse.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxyConnection.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/configurations/AppConfiguration.h>
@@ -44,6 +45,15 @@ namespace ppp {
                     std::shared_ptr<VEthernetExchanger> exchanger = GetExchanger();
 
                     return make_shared_object<VEthernetHttpProxyConnection>(self, exchanger, context, strand, socket);
+                }
+
+                /**
+                 * @brief Returns the response for a client that arrives before the
+                 *        tunnel session is established.
+                 * @return A 503 response line set.
+                 */
+                const char* VEthernetHttpProxySwitcher::MyUnavailableResponse() noexcept {
+                    return HttpProxyUnavailableResponse();
                 }
 
                 /**

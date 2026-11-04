@@ -1,2 +1,4 @@
 * text=auto eol=lf
 ppp/app/server/VirtualEthernetDatagramPort.cpp whitespace=cr-at-eol
+# Upstream commits this file with CRLF; keep it so fork diffs stay minimal.
+ppp/app/client/proxys/VEthernetHttpProxyConnection.cpp -text
