@@ -116,6 +116,32 @@ namespace ppp
             bool                                                                Resume() noexcept;
 
             /**
+             * @brief Current park credential, or 0 while the coroutine is not parked.
+             *
+             *        The value is strictly increasing across parks, so a credential
+             *        captured at one park can never coincide with a later one.
+             */
+            std::uint64_t                                                       Anchor() const noexcept { return anchor_.load(std::memory_order_acquire); }
+
+            /**
+             * @brief Resumes the park identified by @p anchor (the suspend credential).
+             *
+             *        A resumer captures `Anchor()` at the moment its wakeup event
+             *        occurs and passes it back here.  When the coroutine is still parked
+             *        with that exact credential it is consumed (CAS to 0) and the park
+             *        is resumed.  A credential that no longer matches — the coroutine
+             *        already resumed, or re-parked with a newer anchor — is latched
+             *        exactly like an early wakeup, so a stale or duplicate credential
+             *        can never resume the wrong park and never loses a wakeup.
+             *
+             * @param anchor Credential captured from `Anchor()`; 0 means "no credential"
+             *               and resumes the current park unconditionally.
+             * @return true  when the wakeup was accepted (resumed or latched).
+             * @return false when the context is completed or the transition is invalid.
+             */
+            bool                                                                Resume(std::uint64_t anchor) noexcept;
+
+            /**
              * @brief Suspends the currently executing coroutine and returns control to the caller.
              * @return true  when the suspend-and-switch succeeded.
              * @return false when called outside of a valid coroutine context or when the
@@ -262,6 +288,22 @@ namespace ppp
              */
             static bool                                                         Spawn(ppp::threading::BufferswapAllocator* allocator, boost::asio::io_context& context, boost::asio::strand<boost::asio::io_context::executor_type>* strand, SpawnHander&& spawn, int stack_size) noexcept;
 
+            /**
+             * @brief Dumps lost-wakeup forensic counters to stderr (env OPENPPP2_YIELD_DIAG=1).
+             *        Diagnostic aid for the multi-runner flake; counters always valid.
+             */
+            static void                                                         DumpYieldDiag() noexcept;
+
+            /**
+             * @brief Snapshot of `s_` and `wakeup_pending_` for hang forensics.
+             *        Diagnostic only; reads without locking (values may tear).
+             */
+            void                                                                DebugState(int& status, int& wakeup_pending) noexcept
+            {
+                status = s_.load(std::memory_order_relaxed);
+                wakeup_pending = wakeup_pending_;
+            }
+
         private:
             /**
              * @brief Allocates the coroutine stack and performs the initial context switch.
@@ -402,7 +444,33 @@ namespace ppp
             /** @brief Guards `s_` / `wakeup_pending_` transitions; never held across `jump_fcontext`. */
             std::mutex                                                          syncobj_;
             /** @brief Latched wakeup consumed by the next `Suspend()` (completion-before-suspend). */
-            bool                                                                wakeup_pending_ = false;
+            int                                                                 wakeup_pending_ = 0;
+            /**
+             * @brief Park credential. Published (from `anchor_seq_`) when the coroutine
+             *        parks and CASed to 0 by the resume that consumes it; 0 means
+             *        "not parked".  Gives every suspend/resume pair an identity so a
+             *        stale wakeup is detectable instead of silently resuming a newer park.
+             */
+            std::atomic<std::uint64_t>                                          anchor_     = 0;
+            /**
+             * @brief Strictly increasing source for `anchor_`.  Monotonic so a credential
+             *        captured at one park can never match a later park (no ABA).
+             */
+            std::atomic<std::uint64_t>                                          anchor_seq_ = 0;
+            /**
+             * @brief In-flight `R()`-posted resume handlers that may still touch this object.
+             *        Incremented before each `R()` post, decremented after the handler's
+             *        `Resume()` returns.  The completion fence (see `FenceRelease()`)
+             *        hands reclamation to the last handler when this is non-zero at
+             *        completion, so a queued handler never touches freed memory.
+             */
+            std::atomic<int>                                                    pending_resumes_ = 0;
+            /**
+             * @brief Reclamation ownership flag (guarded by `syncobj_`).
+             *        Exactly one of {completion path, last drained handler} may
+             *        run `Release()`; this flag hands out that right once.
+             */
+            bool                                                                reclaimed_ = false;
             /** @brief Stored callee (coroutine) context handle; updated on each switch. */
             std::atomic<boost::context::detail::fcontext_t>                     callee_     = NULLPTR;
             /** @brief Stored caller (event loop) context handle; updated on each switch. */

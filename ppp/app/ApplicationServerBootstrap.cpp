@@ -37,7 +37,14 @@ bool PrepareServerLoopbackEnvironment(
 
         ethernet->PreferredNic(network_interface->Nic);
         if (!ethernet->Open(network_interface->FirewallRules)) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
+            // Preserve the specific failure raised inside Open() (for example
+            // UdpOpenFailed from the datagram socket, or a firewall / IPv6
+            // transit error) instead of collapsing everything into one generic
+            // code.  Only fall back when the failing sub-step reported nothing
+            // more precise.
+            if (ppp::diagnostics::ErrorCode::Success == ppp::diagnostics::GetLastErrorCode()) {
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TunnelOpenFailed);
+            }
             break;
         }
 

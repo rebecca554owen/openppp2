@@ -80,15 +80,32 @@ bool NoisePskAuthenticatedCarrierBinding::IsAvailable(
     return IsValid() && IsOwnerExecutor(context, strand);
 }
 
-bool NoisePskAuthenticatedCarrierBinding::GetTransportAuthKeyId(
-    const std::uint8_t*& key_id, std::size_t& key_id_length) const noexcept {
-    key_id = nullptr;
+bool NoisePskAuthenticatedCarrierBinding::CopyTransportAuthKeyId(
+    std::uint8_t* output,
+    std::size_t output_capacity,
+    std::size_t& key_id_length) const noexcept {
     key_id_length = 0;
+    if (output == nullptr ||
+        output_capacity < ppp::cryptography::noise::NoiseKeyIdMaxSize) {
+        return false;
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     if (!valid_.load(std::memory_order_acquire)) {
         return false;
     }
-    return result_.GetTransportAuthKeyId(key_id, key_id_length);
+    // Copy while the lock is held: Invalidate() cleanses result_.key_id_
+    // under this same mutex, so releasing it before the memcpy would let a
+    // concurrent teardown zero the bytes mid-read.
+    const std::uint8_t* key_id = nullptr;
+    std::size_t key_id_length_value = 0;
+    if (!result_.GetTransportAuthKeyId(key_id, key_id_length_value) ||
+        key_id == nullptr || key_id_length_value == 0 ||
+        key_id_length_value > output_capacity) {
+        return false;
+    }
+    std::memcpy(output, key_id, key_id_length_value);
+    key_id_length = key_id_length_value;
+    return true;
 }
 
 bool NoisePskAuthenticatedCarrierBinding::Export(

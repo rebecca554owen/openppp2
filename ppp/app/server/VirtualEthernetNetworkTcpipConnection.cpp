@@ -6,6 +6,7 @@
 #include <ppp/app/mux/MuxTransportAdapter.h>
 #include <ppp/app/mux/MuxCoordinator.h>
 #include <ppp/app/protocol/templates/TVEthernetTcpipConnection.h>
+#include <ppp/transmissions/ITransmissionStatistics.h>
 #include <ppp/diagnostics/Error.h>
 
 #include <ppp/IDisposable.h>
@@ -37,7 +38,8 @@ namespace ppp {
                 , strand_(transmission->GetStrand())
                 , switcher_(switcher)
                 , transmission_(transmission)
-                , configuration_(transmission->GetConfiguration()) {
+                , configuration_(transmission->GetConfiguration())
+                , statistics_(switcher->GetStatistics()) {
                 Update();
             }
 
@@ -128,8 +130,9 @@ namespace ppp {
                         const ContextPtr&                                               context,
                         const ppp::threading::Executors::StrandPtr&                     strand,
                         const Int128&                                                   id,
-                        const std::shared_ptr<boost::asio::ip::tcp::socket>&            socket) noexcept
-                        : TVEthernetTcpipConnection(connection, configuration, context, strand, id, socket) {
+                        const std::shared_ptr<boost::asio::ip::tcp::socket>&            socket,
+                        const std::shared_ptr<ppp::transmissions::ITransmissionStatistics>& statistics) noexcept
+                        : TVEthernetTcpipConnection(connection, configuration, context, strand, id, socket, statistics) {
 
                     }
 
@@ -174,7 +177,7 @@ namespace ppp {
                 
                 auto self = shared_from_this();
                 std::shared_ptr<VirtualEthernetTcpipConnection> connection =
-                    make_shared_object<VirtualEthernetTcpipConnection>(self, configuration, context_, strand_, id_, socket);
+                    make_shared_object<VirtualEthernetTcpipConnection>(self, configuration, context_, strand_, id_, socket, statistics_);
                 if (NULLPTR == connection) {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionCreateFailed);
                     return NULLPTR;

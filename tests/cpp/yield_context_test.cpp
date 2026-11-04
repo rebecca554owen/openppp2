@@ -3,8 +3,11 @@
 
 #include <ppp/coroutines/YieldContext.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <thread>
 #include <vector>
@@ -75,14 +78,24 @@ BOOST_AUTO_TEST_CASE(completion_before_suspend_multi_runner) {
     constexpr int kIterations = 300;
     std::atomic<int> done{0};
     std::atomic<int> failures{0};
+    std::array<std::atomic<ppp::coroutines::YieldContext*>, kCoroutines> contexts{};
+    for (auto& c : contexts) { c.store(nullptr); }
 
     for (int i = 0; i < kCoroutines; ++i) {
+        std::atomic<ppp::coroutines::YieldContext*>* slot = &contexts[i];
         const bool spawned = ppp::coroutines::YieldContext::Spawn(runner.context,
-            [&done, &failures](ppp::coroutines::YieldContext& y) noexcept {
+            [&done, &failures, slot](ppp::coroutines::YieldContext& y) noexcept {
                 ppp::coroutines::YieldContext* py = &y;
-                boost::asio::io_context& ctx = y.GetContext();
+                slot->store(py);
                 for (int k = 0; k < kIterations; ++k) {
-                    boost::asio::post(ctx, [py]() noexcept { py->Resume(); });
+                    // R() is the production wakeup path: it fences the handler
+                    // count so a queued resume never touches freed memory after
+                    // the coroutine completes (the raw-post pattern below was
+                    // the UAF source this test used to exercise).
+                    if (!y.R()) {
+                        failures.fetch_add(1);
+                        return;
+                    }
                     if (!y.Suspend()) {
                         failures.fetch_add(1);
                         return;
@@ -93,8 +106,43 @@ BOOST_AUTO_TEST_CASE(completion_before_suspend_multi_runner) {
         BOOST_REQUIRE(spawned);
     }
 
+    const bool completed = WaitFor([&] { return done.load() == kCoroutines; }, 60s);
+    if (!completed) {
+        ppp::coroutines::YieldContext::DumpYieldDiag();
+        for (int i = 0; i < kCoroutines; ++i) {
+            ppp::coroutines::YieldContext* py = contexts[i].load();
+            if (py) {
+                int status = -1, pending = -1;
+                py->DebugState(status, pending);
+                std::fprintf(stderr, "[coroutine %d] ptr=%p status=%d wakeup_pending=%d\n",
+                    i, (void*)py, status, pending);
+            } else {
+                std::fprintf(stderr, "[coroutine %d] never started\n", i);
+            }
+        }
+        std::fflush(stderr);
+        // Hold the process so `sample` can capture live stacks of the stuck
+        // io_context workers.  Enabled via OPENPPP2_YIELD_HANG_HOLD=1.
+        if (const char* hold = std::getenv("OPENPPP2_YIELD_HANG_HOLD"); hold && hold[0] == '1') {
+            std::fprintf(stderr, "[yield-hold] holding for sampler; polling coroutine states\n");
+            std::fflush(stderr);
+            for (int tick = 0; tick < 100; ++tick) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                for (int i = 0; i < kCoroutines; ++i) {
+                    ppp::coroutines::YieldContext* py = contexts[i].load();
+                    if (py) {
+                        int status = -1, pending = -1;
+                        py->DebugState(status, pending);
+                        std::fprintf(stderr, "[poll %d] c%d s=%d wp=%d\n", tick, i, status, pending);
+                    }
+                }
+                ppp::coroutines::YieldContext::DumpYieldDiag();
+                std::fflush(stderr);
+            }
+        }
+    }
     BOOST_REQUIRE_MESSAGE(
-        WaitFor([&] { return done.load() == kCoroutines; }, 60s),
+        completed,
         "coroutines hung: done=" << done.load() << "/" << kCoroutines
                                  << " failures=" << failures.load());
     BOOST_TEST(failures.load() == 0);
@@ -161,4 +209,56 @@ BOOST_AUTO_TEST_CASE(suspend_then_resume_via_R) {
     BOOST_TEST(py.load()->R());
     BOOST_REQUIRE_MESSAGE(WaitFor([&] { return phase.load() == 2; }, 5s),
         "coroutine did not resume after R()");
+}
+
+/**
+ * Park credential: published on suspend, consumed by the matching resume, and
+ * strictly increasing across parks.  A credential that no longer matches the
+ * current park must be latched like an early wakeup — never dropped (a dropped
+ * completion hangs the coroutine) and never allowed to resume the wrong park.
+ */
+BOOST_AUTO_TEST_CASE(park_credential_is_monotonic_and_a_stale_one_is_latched) {
+    Runner runner;
+    runner.Start(1);
+
+    std::atomic<ppp::coroutines::YieldContext*> py{nullptr};
+    std::atomic<int> stage{0};
+    std::atomic<int> result{0};
+
+    const bool spawned = ppp::coroutines::YieldContext::Spawn(runner.context,
+        [&](ppp::coroutines::YieldContext& y) noexcept {
+            py.store(&y);
+            y.Suspend();                        // park #1
+            stage.store(1);
+            y.Suspend();                        // park #2
+            stage.store(2);
+            // The stale credential posted for park #1 must have been latched, so
+            // this suspend returns immediately instead of parking forever.
+            const bool ok = y.Suspend();
+            result.store(ok ? 1 : -1);
+        });
+    BOOST_REQUIRE(spawned);
+
+    BOOST_REQUIRE_MESSAGE(
+        WaitFor([&] { return py.load() != nullptr && py.load()->Anchor() != 0; }, 5s),
+        "coroutine never parked");
+    const std::uint64_t a1 = py.load()->Anchor();
+
+    boost::asio::post(runner.context, [&]() noexcept { py.load()->Resume(a1); });
+    BOOST_REQUIRE_MESSAGE(WaitFor([&] { return stage.load() == 1; }, 5s),
+        "park #1 was not resumed by its own credential");
+
+    BOOST_REQUIRE_MESSAGE(
+        WaitFor([&] { return stage.load() == 1 && py.load()->Anchor() != 0; }, 5s),
+        "coroutine did not park again");
+    const std::uint64_t a2 = py.load()->Anchor();
+    BOOST_TEST(a2 > a1);
+
+    // Stale credential for park #1, then the live credential for park #2.
+    boost::asio::post(runner.context, [&]() noexcept { py.load()->Resume(a1); });
+    boost::asio::post(runner.context, [&]() noexcept { py.load()->Resume(a2); });
+
+    BOOST_REQUIRE_MESSAGE(WaitFor([&] { return result.load() != 0; }, 5s),
+        "stale credential was dropped instead of latched (coroutine hung)");
+    BOOST_TEST(result.load() == 1);
 }

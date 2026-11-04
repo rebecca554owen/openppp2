@@ -11,6 +11,7 @@ namespace ppp::configurations { class AppConfiguration; }
 #include <ppp/transmissions/ITransmission.h>
 #include <ppp/app/protocol/VirtualEthernetInformation.h>
 #include <ppp/app/protocol/VirtualEthernetTcpipConnection.h>
+#include <ppp/transmissions/ITransmissionStatistics.h>
 
 namespace ppp {
     namespace app {
@@ -103,6 +104,7 @@ namespace ppp {
                 ITransmissionPtr                                            transmission_;
                 std::shared_ptr<VirtualEthernetTcpipConnection>             connection_;
                 AppConfigurationPtr                                         configuration_;
+                std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics_;
             };
         }
     }

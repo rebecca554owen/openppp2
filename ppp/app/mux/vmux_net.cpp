@@ -2038,6 +2038,7 @@ namespace vmux {
         }
         const Byte err = 'N'; // no such flow
         ppp::telemetry::Count("mux.rx.flow.refused", 1);
+        ppp::app::mux::MuxRuntimeCounterRegistry::AddRxFlowRefused();
         if (!post(cmd_syn_ok, &err, 1, connection_id)) {
             // The refusal could not be queued: the peer will keep
             // retransmitting this flow until its own budget runs out.

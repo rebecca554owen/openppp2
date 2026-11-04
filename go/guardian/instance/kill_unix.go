@@ -3,37 +3,25 @@
 package instance
 
 import (
-	"fmt"
-	"os"
 	"os/exec"
-	"strconv"
 	"syscall"
 )
 
-/* Verify process group ID before killing to avoid stale PID reuse */
+/* Verify process group ID before killing to avoid stale PID reuse.
+   Uses getpgid(2) rather than /proc/<pid>/stat: /proc exists only on Linux,
+   so on macOS/BSD the read always failed and this check returned false for
+   every pid, making killProcessGroup return ESRCH without ever sending a
+   signal.  The caller discards that error, so stopping an instance silently
+   did nothing on those platforms.  getpgid(2) is available on every unix Go
+   target and returns ESRCH for a pid that does not exist, which is exactly
+   the stale-pid guard this function is after. */
 func verifyPgid(pid int) bool {
-	// Read /proc/<pid>/stat to get process group ID
-	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err != nil {
-		return false // Process doesn't exist
-	}
-
-	// Parse stat format: pid (comm) state ppid pgrp ...
-	// Find closing ')' of comm field, then split remaining fields
-	var pgrp int
-	closeIdx := -1
-	for i := len(data) - 1; i >= 0; i-- {
-		if data[i] == ')' {
-			closeIdx = i
-			break
-		}
-	}
-	if closeIdx == -1 {
+	if pid <= 0 {
 		return false
 	}
 
-	// Format after ')': " state ppid pgrp ..."
-	_, err = fmt.Sscanf(string(data[closeIdx+1:]), " %*c %*d %d", &pgrp)
+	// Returns the process group id of pid, or ESRCH if pid does not exist.
+	pgrp, err := syscall.Getpgid(pid)
 	if err != nil {
 		return false
 	}
