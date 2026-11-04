@@ -51,9 +51,12 @@ class VmuxTransportBoundaryTests(unittest.TestCase):
 
     def test_vmux_boundary_check_runs_in_ci(self) -> None:
         workflow = (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
-        self.assertIn(
-            "python3 -m unittest tests.tooling.test_vmux_transport_boundary -v",
-            workflow,
+        # Wired either explicitly or through the tooling discovery command.
+        self.assertTrue(
+            "python3 -m unittest tests.tooling.test_vmux_transport_boundary -v"
+            in workflow
+            or "python3 -m unittest discover -s tests/tooling" in workflow,
+            "test_vmux_transport_boundary is not wired into the CI unit workflow",
         )
 
 

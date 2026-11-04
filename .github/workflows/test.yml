@@ -3,12 +3,12 @@ name: Test · Unit
 on:
   workflow_dispatch:
   push:
-    branches: [feat/unit-tests, main]
+    branches: [feat/unit-tests, main, dev]
   pull_request:
     branches: [main, codex/runtime-ui-lifecycle-integration]
 
 concurrency:
-  group: test-unit-${{ github.ref }}
+  group: test-unit-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -18,9 +18,9 @@ jobs:
   lifecycle-sanitizers:
     name: Lifecycle ASan and UBSan
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -31,9 +31,9 @@ jobs:
   cpp-tsan:
     name: C++ ThreadSanitizer
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -43,9 +43,9 @@ jobs:
 
   cpp-linux:
     name: C++ unit tests (Linux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install dependencies
         run: |
@@ -57,17 +57,18 @@ jobs:
 
       - name: Repository architecture checks
         run: |
-          python3 -m unittest tests.tooling.test_repository_layout -v
-          python3 -m unittest tests.tooling.test_ci_workspace_permissions -v
-          python3 -m unittest tests.tooling.test_vmux_transport_boundary -v
-          python3 -m unittest tests.tooling.test_vmux_receive_semantics_ci -v
-          python3 -m unittest tests.tooling.test_proxy_only_static_wiring -v
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/tooling/test_datapath_acceptance.py
+          # Run the whole tooling suite instead of a hand-maintained subset.
+          # Previously only 6 of 18 tests were listed here, so 12 of them
+          # (including android server compat fixtures, p2p capability wiring
+          # and the release workflow contract) only ever guarded local runs.
+          # `discover` also picks up newly added tests automatically.
+          python3 -m unittest discover -s tests/tooling -t . -v
           python3 tools/check_repository_layout.py
 
       - name: Documentation governance checks
         run: |
-          python3 -m unittest tests.tooling.test_check_docs -v
+          # `tests.tooling.test_check_docs` is covered by the tooling discovery
+          # step above; this step keeps the standalone governance checker.
           python3 tools/check_docs.py
 
       - name: Linux namespace Route/DNS rollback
@@ -76,7 +77,7 @@ jobs:
           sudo OPENPPP2_NAMESPACE_ARTIFACT_DIR="$PWD/build/route-dns-rollback" bash tests/integration/linux/route_dns_rollback.sh
 
       - name: Upload Route/DNS rollback snapshots
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: route-dns-rollback-snapshots
           path: build/route-dns-rollback
@@ -129,7 +130,7 @@ jobs:
             | tee build/coverage/summary.txt
 
       - name: Upload coverage summary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-cpp-summary
           path: build/coverage/summary.txt
@@ -137,13 +138,13 @@ jobs:
 
   go:
     name: Go unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: go/guardian
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.22'
       - name: Test
@@ -157,7 +158,7 @@ jobs:
           go vet ./ppp/...
           go test ./ppp/...
       - name: Upload Go coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-go
           path: go/build/coverage/go-summary.txt
@@ -165,15 +166,20 @@ jobs:
 
   flutter:
     name: Flutter unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: android
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned to the same version as build-android.yml on purpose. Left
+          # unpinned this tracked whatever "latest stable" was, which made the
+          # two workflows cache two separate 1.6 GB copies of the same SDK and
+          # left a stale 1.6 GB entry behind on every new Flutter release.
+          flutter-version: '3.47.7'
           cache: true
       - name: Test
         run: |
@@ -182,7 +188,7 @@ jobs:
           flutter test --coverage
           echo "Flutter tests completed" | tee coverage/flutter-summary.txt
       - name: Upload Flutter coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-flutter
           path: android/coverage/flutter-summary.txt
@@ -190,12 +196,12 @@ jobs:
 
   ios-simulator:
     name: iOS unit tests (simulator)
-    runs-on: macos-latest
+    runs-on: macos-26
     defaults:
       run:
         working-directory: ios/App
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Typecheck PacketTunnel P2P provider transport
         run: |
           sdk_root="$(xcrun --sdk iphonesimulator --show-sdk-path)"

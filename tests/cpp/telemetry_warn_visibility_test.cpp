@@ -7,8 +7,8 @@
  * Configuration that silently changes what is running must not disappear.
  *
  * telemetry's `enabled` flag defaults to false and every shipped configuration
- * leaves it off (appsettings.json, tools/compat/*.json, tools/bench/*.json all
- * carry "enabled": false), so a warning routed through telemetry::Log() is
+ * leaves it off (appsettings.json and the compat/bench tool configs all carry
+ * "enabled": false), so a warning routed through telemetry::Log() is
  * dropped before it reaches the console.  Three real cases were lost that way:
  * a non-AEAD key.transport downgraded to aes-256-gcm, --tcp-stack=xtcp
  * degrading to native off Linux, and the explicit-GCM advisory in
