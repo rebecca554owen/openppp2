@@ -248,7 +248,7 @@ namespace ppp {
                 const StrandPtr&                                        strand,
                 const Int128&                                           id,
                 const std::shared_ptr<boost::asio::ip::tcp::socket>&    socket,
-                const ITransmissionStatisticsPtr&                        statistics) noexcept
+                const ITransmissionStatisticsPtr&                       statistics) noexcept
                 : disposed_(false)
                 , connected_(false)
                 , configuration_(configuration)
@@ -1077,9 +1077,6 @@ namespace ppp {
                     if (ok) {
                         packets_to_socket++;
                         bytes_to_socket += packet_length;
-                        // Note: Traffic statistics are recorded by the underlying
-                        // ITcpipTransmission layer, so we do NOT record here
-                        // to avoid double counting.
                         Update();
                     }
                     else {

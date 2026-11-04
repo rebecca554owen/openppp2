@@ -12,9 +12,7 @@ Go 1.22 and Node 22 are already in the base image.
 
 | Service | Lint / Test / Build / Run | Notes |
 |---------|---------------------------|-------|
-| C++ standalone unit tests (`tests/cpp`) | lint: `bash tools/check_include_boundaries.sh`, `bash tools/check_vcxproj_sources.sh`; test/build: `scripts/run-cpp-tests.sh` (cmake+ninja+clang → `ctest`); TSan: `scripts/run-cpp-tsan-tests.sh` (separate `build/test-tsan` dir, `ENABLE_TSAN=ON`, mutually exclusive with ASan/UBSan) | Does **not** need the full native dep tree. See `docs/TESTING.md`. XTCP unit tests are opt-in: configure with `-DENABLE_XTCP_TESTS=ON` (requires `third-party/xtcp`; e.g. the `build/xtcp-lab-tests` dir). |
-| XTCP upstream fault suite | `bash tools/run_xtcp_fault_suite.sh` (needs `third-party/xtcp`; prepare via `bash tools/prepare_xtcp.sh`) | Runs the patched upstream lab tests; 20 cases. See `docs/design/XTCP_INTEGRATION_CN.md`. |
-| Linux netns E2E (XTCP) | `XTCP_SOAK_SECONDS=3 XTCP_E2E_CHURN=16 bash tests/integration/linux/xtcp_tap_netns_e2e.sh` (defaults SOAK=60/CHURN=512; needs root + `ip netns`) | Full battery incl. netem, soak, stats-json and route/DNS rollback. |
+| C++ standalone unit tests (`tests/cpp`) | lint: `bash tools/check_include_boundaries.sh`, `bash tools/check_vcxproj_sources.sh`; test/build: `scripts/run-cpp-tests.sh` (cmake+ninja+clang → `ctest`); TSan: `scripts/run-cpp-tsan-tests.sh` (separate `build/test-tsan` dir, `ENABLE_TSAN=ON`, mutually exclusive with ASan/UBSan) | Does **not** need the full native dep tree. See `docs/TESTING.md`. |
 | Go Guardian (`go/guardian`) | test: `go test ./...`; build: `go build .`; run: `./guardian --config=guardian.json` | HTTP API + embedded Web UI on `127.0.0.1:18080`. |
 
 ### Non-obvious caveats
@@ -49,24 +47,9 @@ Go 1.22 and Node 22 are already in the base image.
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **openppp2**. Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **openppp2** (41883 symbols, 80496 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
-## Environment Setup
-
-GitNexus is installed at `/tmp/gx-169/package/dist/cli/index.js` (not on PATH).
-All CLI commands must set these environment variables:
-
-```bash
-export GITNEXUS_HOME=/tmp/gitnexus-home
-export GITNEXUS_DISABLE_CHECKPOINT=1
-export GITNEXUS_LBUG_EXTENSION_INSTALL=never  # use `auto` for analyze (FTS)
-export HF_HOME=/tmp/hf-cache
-export NODE_OPTIONS="--max-old-space-size=4096 --max-semi-space-size=64"
-```
-
-Verify with: `/tmp/gx-169/package/dist/cli/index.js status`
-
-The MCP server is registered as `gitnexus` in Codex config (`codex mcp list`).
+> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
 ## Always Do
 
@@ -82,63 +65,6 @@ The MCP server is registered as `gitnexus` in Codex config (`codex mcp list`).
 - NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
 - NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
 - NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
-
-## Reindexing
-
-Full rebuild (required when the index is stale or corrupted):
-
-```bash
-/tmp/gx-169/package/dist/cli/index.js analyze --force \
-  --skip-git --skip-agents-md --skip-skills \
-  --max-file-size 512 --workers 1 --worker-timeout 300
-```
-
-The `--workers 1 --worker-timeout 300` flags are **required** for the large C++ files
-in this repo (`VEthernetExchanger.cpp`, `XtcpRuntime.cpp`, `TapLinux.cpp`, `sockets.c`
-are 134-223KB). Without them, tree-sitter native workers time out and abort.
-
-FTS-only repair (fast, no full reparse):
-
-```bash
-/tmp/gx-169/package/dist/cli/index.js analyze --repair-fts \
-  --skip-git --skip-agents-md --max-file-size 512
-```
-
-Embedding regeneration (uses local ONNX model cached at `/tmp/hf-cache`):
-
-```bash
-/tmp/gx-169/package/dist/cli/index.js analyze --embeddings \
-  --skip-git --skip-agents-md --skip-skills \
-  --max-file-size 512 --workers 1 --worker-timeout 300
-```
-
-## Known Issues and Workarounds
-
-1. **Tree-sitter crash on large files.** Files >32KB crash the direct string
-   parser with `Invalid argument` or `Napi::Error`. GitNexus's
-   `parseSourceSafe` callback-chunking handles this, but only when the worker
-   has enough time. Always use `--workers 1 --worker-timeout 300`.
-
-2. **WAL corruption after interrupted analysis.** If you see
-   `Storage exception: Checksum verification failed, the WAL file is corrupted`,
-   the index is corrupted. Run `--force` to rebuild. Do NOT use `--repair-fts`
-   on a corrupted index — it will fail with the same error.
-
-3. **Sandbox blocks network.** The HuggingFace embedding model is cached at
-   `/tmp/hf-cache` (one-time download via proxy `10.1.0.36:2091`). If the cache
-   is gone, embeddings cannot regenerate without network access.
-
-4. **`/tmp` is ephemeral.** GitNexus install, index home, and HF cache all live
-   under `/tmp`. After a container restart, the GitNexus binary may be gone but
-   the index at `/home/openppp2/.gitnexus/` persists.
-
-5. **`GITNEXUS_DISABLE_CHECKPOINT=1` is required.** LadybugDB checkpoint
-   segfaults in this sandbox. This env var is already set in the MCP config
-   and must also be set for CLI commands.
-
-6. **Corrupted WAL warnings.** `lbug.wal` without `lbug.shadow` is normal
-   after a clean shutdown — LadybugDB relies on WAL replay. Only treat it as
-   corruption if analyze also fails.
 
 ## Resources
 

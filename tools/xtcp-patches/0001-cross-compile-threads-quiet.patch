@@ -1,0 +1,17 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -83,8 +83,12 @@ set_target_properties(xtcp_static PROPERTIES POSITION_INDEPENDENT_CODE ON)
+ if(UNIX AND NOT APPLE)
+     # The stack uses std::thread (manual backend threads, samples); link the
+     # pthread library explicitly on Linux (Windows/APPLE provide it via the CRT).
+-    find_package(Threads REQUIRED)
+-    target_link_libraries(xtcp_static PUBLIC Threads::Threads)
++    # Use QUIET to avoid hard-failing on cross-compilation or minimal images
++    # where the CMake Threads probe cannot run.
++    find_package(Threads QUIET)
++    if(Threads_FOUND)
++        target_link_libraries(xtcp_static PUBLIC Threads::Threads)
++    endif()
+ endif()
+ if(WIN32 AND NOT MSVC)
+     # MinGW: BCryptGenRandom (syncookies.cpp, tfo.cpp) and timeBeginPeriod

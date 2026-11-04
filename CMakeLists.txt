@@ -240,6 +240,17 @@ IF(ENABLE_XTCP)
     IF(NOT TARGET xtcp_static)
         MESSAGE(FATAL_ERROR "XTCP source tree did not define the required xtcp_static target.")
     ENDIF()
+    # Feature probe: only some XTCP revisions expose a per-connection timer
+    # deadline (XtcpStack::NextTimerDeadlineUs). The runtime compiles the
+    # deadline-driven poll path only when the pinned tree provides it and
+    # otherwise falls back to a fixed poll cadence.
+    SET(XTCP_HAS_TIMER_DEADLINE OFF)
+    IF(EXISTS "${XTCP_SOURCE_DIR}/include/xtcp/core/stack.h")
+        FILE(READ "${XTCP_SOURCE_DIR}/include/xtcp/core/stack.h" _xtcp_stack_header)
+        IF(_xtcp_stack_header MATCHES "NextTimerDeadlineUs")
+            SET(XTCP_HAS_TIMER_DEADLINE ON)
+        ENDIF()
+    ENDIF()
 ENDIF()
 
 SET(PLATFORM_ARCH_X86 FALSE)
@@ -493,8 +504,10 @@ IF(ENABLE_XTCP)
     TARGET_LINK_LIBRARIES(openppp2_lib xtcp_static)
     TARGET_COMPILE_DEFINITIONS(openppp2_lib PRIVATE
         PPP_ENABLE_XTCP=1
-        PPP_XTCP_RUNTIME_WIRED=1
-        PPP_XTCP_HAS_TIMER_DEADLINE=1)
+        PPP_XTCP_RUNTIME_WIRED=1)
+    IF(XTCP_HAS_TIMER_DEADLINE)
+        TARGET_COMPILE_DEFINITIONS(openppp2_lib PRIVATE PPP_XTCP_HAS_TIMER_DEADLINE=1)
+    ENDIF()
 ENDIF()
 
 SET(PPP_EXECUTABLE_SOURCES ${PPP_MAIN_SOURCE})
