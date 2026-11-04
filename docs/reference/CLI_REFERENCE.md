@@ -108,6 +108,12 @@ Local HTTP proxy listen port in proxy mode (overrides `client.http-proxy.port`).
 
 Local SOCKS5 proxy listen port in proxy mode (overrides `client.socks-proxy.port`).
 
+### `--set-http-proxy=[yes|no]` (Windows only)
+
+Whether the client writes the configured HTTP proxy into the system proxy environment
+outside proxy mode. Parsed only on Windows (`#if defined(_WIN32)`); ignored elsewhere.
+Default `no`.
+
 ---
 
 ## Configuration File
@@ -176,6 +182,12 @@ for detecting stale state and forcing a clean restart.
 
 ---
 
+### `--stats-json=<path|stdout>`
+
+Writes local runtime statistics as NDJSON to `path` (or to stdout). Each record carries
+the runtime phase, effective mux mode, active mux links, link counters and traffic
+totals. Disabled by default.
+
 ## Server Inputs
 
 ### `--block-quic=[yes|no]`
@@ -203,6 +215,13 @@ ppp --mode=server -c=./server.json --firewall-rules=/etc/ppp/firewall.txt
 
 Selects the client network stack behavior. When `yes`, uses the lwIP TCP/IP stack for
 virtual NIC packet processing. When `no`, uses the host network stack path.
+
+### `--tcp-stack=[native|lwip|xtcp]`
+
+Selects the client TCP/IP stack. `native` uses the host stack, `lwip` the lwIP stack,
+and `xtcp` the userspace XTCP stack. `xtcp` is a Linux-only datapath: it must be built
+and wired into the binary, and a request made on any other platform silently falls back
+to `native` so the session still reaches `connected`.
 
 ### `--vbgp=[yes|no]`
 
@@ -514,6 +533,12 @@ ppp --pull-iplist ./cn.txt
 ```
 
 ---
+
+### `--transport-auth-key=<path>`
+
+Generates a 64-character transport-auth secret, writes it to `path` with mode `0600`,
+and exits. Both ends must use the same secret; reference it from
+`transport-auth.keys[].secret-file` in the configuration file.
 
 ## Console UI Commands And Layout
 

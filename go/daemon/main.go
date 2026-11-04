@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 func main() {
@@ -20,8 +21,12 @@ func main() {
 	}
 
 	server := &http.Server{
-		Addr:    cfg.Listen,
-		Handler: daemon.Handler(),
+		Addr:              cfg.Listen,
+		Handler:           daemon.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	stop := make(chan os.Signal, 1)

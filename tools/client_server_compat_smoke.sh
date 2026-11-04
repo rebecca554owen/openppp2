@@ -56,6 +56,14 @@ def free_ports(count):
 server_port, http_port, socks_port, local_port, remote_port = free_ports(5)
 server["tcp"]["listen"]["port"] = server_port
 server["udp"]["listen"]["port"] = server_port
+
+# transport-auth key 由 bash 段用当前已构建的 ppp --transport-auth-key 生成
+# （不随仓库入库）；secret-file 指向 OUT_DIR 下 install 的 root:root 600 副本
+# （ppp 以 root 运行，uid 校验要求）。
+secret_path = str(out / "transport.key")
+for cfg in (server, client):
+    for key in cfg.get("transport-auth", {}).get("keys", []):
+        key["secret-file"] = secret_path
 client["tcp"]["listen"]["port"] = 0
 client["udp"]["listen"]["port"] = 0
 client["client"]["server"] = f"ppp://127.0.0.1:{server_port}/"
@@ -86,6 +94,15 @@ for key, value in {
     print(f"{key}={shlex.quote(str(value))}")
 PY
 . "${OUT_DIR}/vars.sh"
+
+# transport-auth key：由当前已构建的 ppp --transport-auth-key 生成严格合法 key
+# （32 随机字节 → 64 位小写 hex、0600，并回读自校验，满足
+# LoadTransportAuthSecretFile 全部硬校验），不把真实 secret 入库；随后显式
+# install 为 root:root 600（ppp 以 root 运行，uid 校验要求）。
+# 生成失败即退出，避免 ppp 以 help+85 静默失败。
+"${SERVER_PPP_BIN}" --transport-auth-key "${OUT_DIR}/transport.key.tmp" >"${OUT_DIR}/keygen.log" 2>&1
+install -m 600 -o root -g "$(id -g root)" "${OUT_DIR}/transport.key.tmp" "${OUT_DIR}/transport.key"
+rm -f "${OUT_DIR}/transport.key.tmp"
 
 echo "mode=${COMPAT_MODE} out=${OUT_DIR}"
 echo "server=${SERVER_PORT} echo-local=${LOCAL_PORT} mapped-remote=${REMOTE_PORT}"

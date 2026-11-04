@@ -65,7 +65,13 @@ func NewServer(listenAddr string, instanceMgr *instance.Manager, profileMgr *pro
 		webuiFS:     webuiFS,
 	}
 	s.wsHub = NewWSHub(instanceMgr, slog.Default())
-	s.httpServer = &http.Server{Addr: listenAddr}
+	s.httpServer = &http.Server{
+		Addr:              listenAddr,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	s.registerRoutes()
 	return s
 }

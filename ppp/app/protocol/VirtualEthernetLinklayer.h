@@ -231,13 +231,13 @@ namespace ppp {
 
             public:
                 /** @brief Sends MUX setup request. */
-                virtual bool                                                DoMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, Byte ordering_caps, YieldContext& y) noexcept;
+                virtual bool                                                DoMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, Byte ordering_caps, uint32_t session_epoch, YieldContext& y) noexcept;
                 /** @brief Sends MUX setup acknowledgment. */
                 virtual bool                                                DoMuxON(const ITransmissionPtr& transmission, uint16_t vlan, uint32_t seq, uint32_t ack, YieldContext& y) noexcept;
 
             protected:
                 /** @brief Handles inbound MUX request. */
-                virtual bool                                                OnMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, Byte ordering_caps, YieldContext& y) noexcept { return false; }
+                virtual bool                                                OnMux(const ITransmissionPtr& transmission, uint16_t vlan, uint16_t max_connections, bool acceleration, Byte ordering_caps, uint32_t session_epoch, YieldContext& y) noexcept { return false; }
                 /** @brief Handles inbound MUX acknowledgment. */
                 virtual bool                                                OnMuxON(const ITransmissionPtr& transmission, uint16_t vlan, uint32_t seq, uint32_t ack, YieldContext& y) noexcept { return false; }
 

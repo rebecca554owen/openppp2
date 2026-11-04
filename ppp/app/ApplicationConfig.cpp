@@ -42,7 +42,6 @@ int PppApplication::PreparedArgumentEnvironment(int argc, const char* argv[]) no
             stats_json_path_.clear();
         }
     }
-    acceptance_boundary_.ConfigureFromEnvironment();
 
     if (ppp::IsInputHelpCommand(argc, argv)) {
         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::AppHelpRequested);
@@ -112,9 +111,12 @@ int PppApplication::PreparedArgumentEnvironment(int argc, const char* argv[]) no
     }
 
     int max_concurrent = configuration->concurrent - 1;
-    if (max_concurrent > 0) {
-        Executors::SetMaxSchedulers(max_concurrent);
-        if (!client_mode_) {
+    if (configuration->concurrent >= 1) {
+        // The dedicated scheduler context must exist even for concurrent=1:
+        // SelectScheduler() builds the handshake-timer strand over it, and a
+        // missing scheduler used to leave strand null (355cff bandaid).
+        Executors::SetMaxSchedulers(max_concurrent >= 1 ? max_concurrent : 1);
+        if (!client_mode_ && max_concurrent > 0) {
             Executors::SetMaxThreads(configuration->GetBufferAllocator(), max_concurrent);
         }
     }
@@ -129,9 +131,7 @@ int PppApplication::PreparedArgumentEnvironment(int argc, const char* argv[]) no
 
     std::shared_ptr<NetworkInterface> network_interface = GetNetworkInterface(argc, argv);
     if (NULLPTR == network_interface) {
-        if (ppp::diagnostics::GetLastErrorCode() == ppp::diagnostics::ErrorCode::Success) {
-            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
-        }
+        ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
         return -1;
     }
 
@@ -152,7 +152,7 @@ int PppApplication::PreparedArgumentEnvironment(int argc, const char* argv[]) no
     ppp::telemetry::SetLogFile(configuration->telemetry.log_file.c_str());
 
     /**
-     * @brief Emit startup security diagnostics report (P1-5).
+     * @brief Emit startup security diagnostics report.
      *
      * Scans the loaded configuration for weak/default/short keys and plaintext
      * mode.  All findings are non-fatal warnings — startup never fails.
@@ -425,7 +425,7 @@ void PppApplication::GetDnsAddresses(ppp::vector<boost::asio::ip::address>& addr
  * @brief Builds and populates network interface options from command-line arguments.
  * @param argc Argument count.
  * @param argv Argument vector.
- * @return Constructed network interface object, or null on allocation, invalid input, or unsupported mode.
+ * @return Constructed network interface object, or null on allocation failure.
  */
 std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, const char* argv[]) noexcept {
     std::shared_ptr<NetworkInterface> ni = ppp::make_shared_object<NetworkInterface>();
@@ -435,15 +435,26 @@ std::shared_ptr<NetworkInterface> PppApplication::GetNetworkInterface(int argc, 
 #else
         const bool platform_default_lwip = false;
 #endif
-#if defined(PPP_ENABLE_XTCP) && defined(PPP_XTCP_RUNTIME_WIRED)
+#if defined(PPP_ENABLE_XTCP) && defined(PPP_XTCP_RUNTIME_WIRED) && defined(__linux__)
         const bool xtcp_available = true;
 #else
         const bool xtcp_available = false;
 #endif
         const bool tcp_stack_specified = ppp::HasCommandArgument("--tcp-stack", argc, argv);
         const bool legacy_lwip_specified = ppp::HasCommandArgument("--lwip", argc, argv);
-        const ppp::string tcp_stack_value = ppp::GetCommandArgument("--tcp-stack", argc, argv);
+        ppp::string tcp_stack_value = ppp::GetCommandArgument("--tcp-stack", argc, argv);
         const ppp::string legacy_lwip_value = ppp::GetCommandArgument("--lwip", argc, argv);
+#if !defined(__linux__)
+        // The XTCP datapath is Linux-only (upstream gates it out of every other
+        // platform at configure time). This fork compiles the stack everywhere,
+        // so a request made elsewhere falls back to the native stack instead of
+        // leaving the session stuck before Connected.
+        if (tcp_stack_specified && tcp_stack_value == "xtcp") {
+            tcp_stack_value = "native";
+            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "client",
+                "--tcp-stack=xtcp is Linux-only; falling back to the native stack");
+        }
+#endif
         const TcpStackModeResult tcp_stack = ResolveTcpStackMode({
             platform_default_lwip,
             tcp_stack_specified,

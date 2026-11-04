@@ -145,19 +145,31 @@ func SaveConfigFile(path string, cfg *GuardianConfig) error {
 }
 
 func writeConfigFile0600(path string, data []byte) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	// Atomic write: write to temp file then rename
+	tmpPath := path + ".tmp"
+	file, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
 	if err := file.Chmod(0o600); err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
 	if _, err := file.Write(data); err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
-	return file.Sync()
+	if err := file.Sync(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func LoadConfig(path string) (*GuardianConfig, error) {

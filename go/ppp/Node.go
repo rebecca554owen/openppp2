@@ -48,8 +48,11 @@ func (my *ManagedServer) server_active_node(server *_vpn_server) {
 		NODE_WEBSOCKET_TIMEOUT = my.configuration.ConcurrencyControl.NodeWebsocketTimeout
 	}
 
+	/* Lock when writing timeout to prevent data race with server_tick_all_nodes */
 	now := uint32(time.Now().Unix())
+	my.Lock()
 	server.timeout = now + uint32(NODE_WEBSOCKET_TIMEOUT)
+	my.Unlock()
 }
 
 func (my *ManagedServer) server_get_node(ws *io.WebSocket) *_vpn_server {

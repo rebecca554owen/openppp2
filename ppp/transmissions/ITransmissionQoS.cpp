@@ -54,7 +54,10 @@ namespace ppp {
                 return true;
             }
 
-            resume_ = [&y]() noexcept { return y.R(); };
+            YieldContext* y_ptr = &y;
+            resume_ = [y_ptr]() noexcept {
+                return y_ptr->R();
+            };
             scope.unlock();
             bool suspended = y.Suspend();
             scope.lock();
@@ -136,6 +139,7 @@ namespace ppp {
 
             std::shared_ptr<Byte> packet = cb(y, &length);
             if (length > 0 && packet) {
+                SynchronizedObjectScope scope(syncobj_);
                 traffic_ += length;
             }
 
@@ -156,9 +160,10 @@ namespace ppp {
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionClosing);
                     return false;
                 }
+
+                traffic_ += bytes_transferred;
             }
 
-            traffic_ += bytes_transferred;
             return true;
         }
 
@@ -167,7 +172,7 @@ namespace ppp {
          */
         bool ITransmissionQoS::BeginRead(const BeginReadAsynchronousCallback& cb) noexcept {
             if (cb) {
-                bool bawait = false; 
+                bool bawait = false;
                 for (;;) {
                     SynchronizedObjectScope scope(syncobj_);
                     if (disposed_) {

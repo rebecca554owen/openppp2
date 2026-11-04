@@ -2173,8 +2173,13 @@ namespace ppp {
             if (!gso_timer_armed_) return;
             gso_timer_armed_ = false;
             ++gso_timer_generation_;
-            boost::system::error_code ec;
-            gso_hold_timer_.cancel(ec);
+            // ppp/stdafx.h defines BOOST_ASIO_NO_DEPRECATED, which drops the
+            // error_code overload of cancel(); only the throwing form remains.
+            try {
+                gso_hold_timer_.cancel();
+            }
+            catch (...) {
+            }
         }
 
         void TapLinux::OnInput(PacketInputEventArgs& e) noexcept {

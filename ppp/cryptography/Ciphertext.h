@@ -56,6 +56,11 @@ namespace ppp {
              * @return True if supported; otherwise false.
              */
             static bool                                         Support(const ppp::string& method) noexcept;
+            /**
+             * @brief Checks whether the active backend is an AEAD (GCM) cipher mode.
+             * @return True when the underlying EVP cipher is GCM; false otherwise.
+             */
+            bool                                                IsGcmMode() const noexcept;
 
         private:
             std::shared_ptr<RC4>                                rc4_;

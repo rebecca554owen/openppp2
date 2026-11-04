@@ -130,7 +130,7 @@ func (my *ManagedServer) server_query_user_by_guid(guid string, now uint32) (*tb
 
 	err = my.server_sync_user_to_redis(user, now, nil)
 	if err != nil {
-		return nil, _ERROR_REDIS, nil
+		return nil, _ERROR_REDIS, err
 	} else {
 		return user, _ERROR_OK, nil
 	}
@@ -182,18 +182,23 @@ func (my *ManagedServer) server_on_authentication(ws *io.WebSocket, guid string,
 		// Query basic VPN user information from the server's local memory cache.
 		my.Lock()
 		user, ok := my.users[guid]
-		my.Unlock()
-
-		// If the local VPN user information exists in the cache based on the GUID primary key.
+		/* Copy user fields inside lock to prevent data race with Traffic.go writes */
+		var vpn_user *_vpn_user
 		if ok {
-			// The login user successfully logged onto the server, and the data that needs to be returned to the VPN node server is filled.
-			return 0, &_vpn_user{
+			vpn_user = &_vpn_user{
 				Guid:            user.Guid,
 				IncomingTraffic: user.IncomingTraffic,
 				OutgoingTraffic: user.OutgoingTraffic,
 				ExpiredTime:     user.ExpiredTime,
 				BandwidthQoS:    my.server_calc_qos_by_server_and_user(server, user),
 			}
+		}
+		my.Unlock()
+
+		// If the local VPN user information exists in the cache based on the GUID primary key.
+		if ok {
+			// The login user successfully logged onto the server, and the data that needs to be returned to the VPN node server is filled.
+			return 0, vpn_user
 		}
 	}
 
@@ -253,12 +258,10 @@ func (my *ManagedServer) server_sync_all_users_to_databases(forced_save_to_datab
 			continue
 		}
 
+		// move Lock/Unlock out of defer to avoid defer-in-loop accumulation
 		// Add a mutex lock for the access and operation of vpn user basic information
 		// In the local cache to prevent data problems caused by concurrency.
 		user.Lock()
-		defer user.Unlock()
-
-		bany = true
 		sync_user := &tb_user{
 			Guid:            user.Guid,
 			IncomingTraffic: user.IncomingTraffic,
@@ -266,7 +269,9 @@ func (my *ManagedServer) server_sync_all_users_to_databases(forced_save_to_datab
 			ExpiredTime:     user.ExpiredTime,
 			BandwidthQoS:    user.BandwidthQoS,
 		}
+		user.Unlock()
 
+		bany = true
 		err := my.server_sync_user_to_redis(sync_user, now, pipeline)
 		if err != nil {
 			return err
@@ -317,9 +322,15 @@ func (my *ManagedServer) server_sync_all_users_to_databases(forced_save_to_datab
 		}
 
 		// Loop to create an infinite number of coroutines simultaneously requesting the mysql database to write changes.
+		/* Use worker pool to limit MySQL write concurrency instead of unbounded goroutines */
+		const MAX_WORKERS = 100
+		semaphore := make(chan struct{}, MAX_WORKERS)
+
 		for _, user := range dbs {
 			wg.Add(1)
+			semaphore <- struct{}{} // Acquire worker slot
 			go func(user *tb_user) {
+				defer func() { <-semaphore }() // Release worker slot
 				// Execute to store basic user information data into the mysql databases.
 				guid := user.Guid
 				ok := EXEC(guid, user)

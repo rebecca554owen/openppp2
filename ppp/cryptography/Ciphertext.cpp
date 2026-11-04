@@ -83,5 +83,13 @@ namespace ppp {
 
             return EVP::Support(method) || RC4::Support(method);
         }
+
+        /**
+         * @brief Reports whether the active backend is an AEAD (GCM) cipher mode.
+         * @return True when the underlying EVP cipher is GCM; false otherwise.
+         */
+        bool Ciphertext::IsGcmMode() const noexcept {
+            return NULLPTR != evp_ && evp_->IsGcmMode();
+        }
     }
 }

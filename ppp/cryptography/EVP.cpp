@@ -68,6 +68,27 @@ namespace ppp {
             return _aes.IsAttached();
         }
 
+        bool EVP::IsGcmMode() const noexcept {
+            return NULLPTR != _cipher &&
+                EVP_CIPHER_mode(_cipher) == EVP_CIPH_GCM_MODE;
+        }
+
+        /**
+         * @brief Determines whether a cipher method name contains a GCM (AEAD) marker.
+         * @param method Cipher method name.
+         * @return true when the name contains "gcm", case-insensitively.
+         */
+        static bool IsGcmMethodName(const ppp::string& method) noexcept {
+            for (std::size_t i = 0; i + 3 <= method.size(); ++i) {
+                if ((method[i] == 'g' || method[i] == 'G') &&
+                    (method[i + 1] == 'c' || method[i + 1] == 'C') &&
+                    (method[i + 2] == 'm' || method[i + 2] == 'M')) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         EVP::EVP(const ppp::string& method, const ppp::string& password) noexcept
             : _cipher(NULLPTR)
             , _method(method)
@@ -79,8 +100,13 @@ namespace ppp {
 
             ppp::string probe_method = method;
             const bool explicit_simd = method.compare(0, 5, "simd-") == 0;
+            // GCM (AEAD) method names must never be transparently promoted to their
+            // "simd-" variant: the SIMD GCM implementation is unauthenticated (CTR
+            // without tag), while a plain GCM name selects the real OpenSSL AEAD path
+            // with authentication tags.  Keep the original name for GCM traffic.
+            const bool gcm_method = IsGcmMethodName(method);
 
-            if (g_evp_simd_auto.load(std::memory_order_relaxed) && !explicit_simd) {
+            if (g_evp_simd_auto.load(std::memory_order_relaxed) && !explicit_simd && !gcm_method) {
                 ppp::string simd_variant = ppp::string("simd-") + method;
                 if (aesni::AES::Support(simd_variant)) {
                     probe_method = simd_variant;
@@ -130,6 +156,30 @@ namespace ppp {
             }
         }
 
+        EVP::~EVP() noexcept {
+            if (!_password.empty()) {
+                OPENSSL_cleanse(const_cast<char*>(_password.data()), _password.size());
+            }
+            if (_key) {
+                const EVP_CIPHER* cipher = _cipher;
+                if (cipher) {
+                    int key_len = EVP_CIPHER_key_length(cipher);
+                    if (key_len > 0) {
+                        OPENSSL_cleanse(_key.get(), key_len);
+                    }
+                }
+            }
+            if (_iv) {
+                const EVP_CIPHER* cipher = _cipher;
+                if (cipher) {
+                    int iv_len = EVP_CIPHER_iv_length(cipher);
+                    if (iv_len > 0) {
+                        OPENSSL_cleanse(_iv.get(), iv_len);
+                    }
+                }
+            }
+        }
+
         /**
          * @brief Encrypts plaintext bytes with the selected cipher context.
          * @param allocator Output allocator.
@@ -169,8 +219,12 @@ namespace ppp {
             }
 
             // ENCR-DATA
+            // GCM output = ciphertext (+ 16-byte tag); other modes may append a final block.
+            const bool gcm = EVP_CIPHER_mode(_cipher) == EVP_CIPH_GCM_MODE;
+            const int tag_len = gcm ? 16 : 0;
+            const int capacity = datalen + EVP_CIPHER_block_size(_cipher) + tag_len;
             int feedbacklen = datalen + EVP_CIPHER_block_size(_cipher);
-            std::shared_ptr<Byte> cipherText = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, feedbacklen);
+            std::shared_ptr<Byte> cipherText = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, capacity);
             if (NULLPTR == cipherText) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
@@ -181,6 +235,28 @@ namespace ppp {
                 outlen = ~0;
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
                 return NULLPTR;
+            }
+
+            // EVP_CipherFinal_ex flushes any remaining block and, for GCM,
+            // finalizes the authentication tag computation.
+            int finalLen = 0;
+            if (EVP_CipherFinal_ex(_encryptCTX.get(), cipherText.get() + feedbacklen, &finalLen) < 1) {
+                outlen = ~0;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
+                return NULLPTR;
+            }
+            feedbacklen += finalLen;
+
+            // For GCM: extract the 16-byte authentication tag and append it to
+            // the ciphertext.  Without this the output is unauthenticated.
+            if (gcm) {
+                if (EVP_CIPHER_CTX_ctrl(_encryptCTX.get(), EVP_CTRL_AEAD_GET_TAG, 16,
+                                        cipherText.get() + feedbacklen) < 1) {
+                    outlen = ~0;
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolEncodeFailed);
+                    return NULLPTR;
+                }
+                feedbacklen += tag_len;
             }
 
             outlen = feedbacklen;
@@ -226,19 +302,50 @@ namespace ppp {
             }
 
             // DECR-DATA
-            int feedbacklen = datalen + EVP_CIPHER_block_size(_cipher);
+            const bool gcm = EVP_CIPHER_mode(_cipher) == EVP_CIPH_GCM_MODE;
+            const int tag_len = gcm ? 16 : 0;
+            // For GCM the last 16 bytes of the input are the authentication tag.
+            if (gcm && datalen <= tag_len) {
+                outlen = ~0;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+                return NULLPTR;
+            }
+            const int ciphertext_len = gcm ? datalen - tag_len : datalen;
+
+            int feedbacklen = ciphertext_len + EVP_CIPHER_block_size(_cipher);
             std::shared_ptr<Byte> cipherText = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, feedbacklen);
             if (NULLPTR == cipherText) {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                 return NULLPTR;
             }
 
+            // For GCM: provide the expected tag BEFORE the final call so that
+            // EVP_CipherFinal_ex verifies it.
+            if (gcm) {
+                if (EVP_CIPHER_CTX_ctrl(_decryptCTX.get(), EVP_CTRL_AEAD_SET_TAG, tag_len,
+                                        const_cast<Byte*>(data + ciphertext_len)) < 1) {
+                    outlen = ~0;
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+                    return NULLPTR;
+                }
+            }
+
             if (EVP_CipherUpdate(_decryptCTX.get(),
-                cipherText.get(), &feedbacklen, data, datalen) < 1) {
+                cipherText.get(), &feedbacklen, data, ciphertext_len) < 1) {
                 outlen = ~0;
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
                 return NULLPTR;
             }
+
+            // EVP_CipherFinal_ex verifies the GCM tag (fails on tampering) and
+            // flushes any remaining decrypted block.
+            int finalLen = 0;
+            if (EVP_CipherFinal_ex(_decryptCTX.get(), cipherText.get() + feedbacklen, &finalLen) < 1) {
+                outlen = ~0;
+                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolDecodeFailed);
+                return NULLPTR;
+            }
+            feedbacklen += finalLen;
 
             outlen = feedbacklen;
             return cipherText;
@@ -275,11 +382,19 @@ namespace ppp {
                     break;
                 }
 
+                // GCM uses a 96-bit nonce; make it explicit for forward-compatibility.
+                if (EVP_CIPHER_mode(_cipher) == EVP_CIPH_GCM_MODE) {
+                    if ((exception = EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_AEAD_SET_IVLEN, 12, NULLPTR) < 1)) {
+                        break;
+                    }
+                }
+
                 if ((exception = EVP_CIPHER_CTX_set_key_length(context.get(), EVP_CIPHER_key_length(_cipher)) < 1)) {
                     break;
                 }
 
-                if ((exception = EVP_CIPHER_CTX_set_padding(context.get(), 1) < 1)) {
+                // GCM has no padding; the flag is ignored for it but kept for CBC/ECB.
+                if ((exception = EVP_CIPHER_CTX_set_padding(context.get(), EVP_CIPH_GCM_MODE != EVP_CIPHER_mode(_cipher) ? 1 : 0) < 1)) {
                     break;
                 }
             }
@@ -322,6 +437,23 @@ namespace ppp {
          * @param method Cipher method name.
          * @param password Password string used in key derivation.
          * @return True if key and IV are successfully initialized.
+         *
+         * ⚠️ CRITICAL SECURITY ISSUE: Fixed IV Enables Key Stream Reuse
+         * ========================================================================
+         * The IV is deterministically derived from the password (line 365-366) and reused
+         * for every packet in the session. This completely breaks semantic security:
+         * - For stream ciphers (CTR, CFB, OFB): XORing two ciphertexts reveals plaintext XOR
+         * - For block ciphers: identical plaintext blocks produce identical ciphertext
+         * - Known-plaintext attack: knowing one packet's plaintext reveals the keystream,
+         *   allowing decryption of ALL packets in the session
+         *
+         * REQUIRED FIX (breaks protocol compatibility):
+         * 1. Generate random 96-bit nonce per packet: RAND_bytes(nonce, 12)
+         * 2. Prepend nonce to ciphertext: [nonce|encrypted_data]
+         * 3. Receiver extracts nonce and uses it as IV for decryption
+         * 4. Update protocol version to prevent interop with unfixed peers
+         *
+         * See SECURITY_FIXES.md for migration guide.
          */
         bool EVP::initKey(const ppp::string& method, const ppp::string password) noexcept {
             _cipher = EVP_get_cipherbyname(method.data());
@@ -331,6 +463,7 @@ namespace ppp {
             }
 
             // INIT-IVV
+            // ⚠️ This fixed IV is reused for every packet - see function comment above
             int ivLen = EVP_CIPHER_iv_length(_cipher);
             _iv = make_shared_alloc<Byte>(ivLen); // RAND_bytes(iv.get(), ivLen);
             if (NULLPTR == _iv) {
