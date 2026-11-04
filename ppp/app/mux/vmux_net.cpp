@@ -1713,19 +1713,50 @@ namespace vmux {
         }
         elif(cmd == cmd_syn_ok) {
             vmux_skt_ptr skt = get_connection(connection_id);
-            if (NULLPTR != skt) {
-                bool successed = false;
-                if (buffer_size > 0) {
-                    const Byte err = static_cast<Byte>(*buffer);
+            bool successed = false;
+            bool refused = false;
+            if (buffer_size > 0) {
+                const Byte err = static_cast<Byte>(*buffer);
+                refused = (err != 'A');
+                if (NULLPTR != skt) {
                     successed = skt->connect_ok(err == 'A');
                 }
+            }
 
+            if (NULLPTR != skt) {
                 if (successed) {
                     skt->active(now);
                 }
                 else {
                     skt->close();
                 }
+            }
+
+            if (refused) {
+                ppp::app::mux::MuxRuntimeCounterRegistry::AddRxSynOkRefused();
+                if (NULLPTR == skt) {
+                    // The refusal named a flow this side no longer has. The
+                    // counter tells the two failure shapes apart in production:
+                    // a refusal that arrives without a local socket means the
+                    // sender used to drop it on the floor.
+                    ppp::app::mux::MuxRuntimeCounterRegistry::AddRxSynOkRefusedNoSocket();
+                }
+            }
+
+            if (refused || (NULLPTR != skt && !successed)) {
+                // A refusal (the peer does not have this flow): drop the
+                // flow's retained frames, otherwise the sender keeps
+                // retransmitting them until its attempt budget runs out --
+                // 30 s of traffic over every carrier for a flow that is
+                // already gone.
+                //
+                // This release must happen even when the local socket is
+                // already gone: the peer refused the flow, so its retained
+                // frames are garbage, and the refusal is the only signal the
+                // sender gets that the flow is dead. Guarding the release
+                // behind the socket lookup let a dead flow burn its whole
+                // 30 s budget on every carrier.
+                release_flow_reliability_state(connection_id);
             }
         }
         elif(cmd == cmd_acceleration) {
@@ -1947,6 +1978,27 @@ namespace vmux {
     }
 
     /**
+     * @brief Remembers a flow whose receive context is about to disappear.
+     * @details See the declaration for the rationale. The last delivered DSN is
+     *          the delivery frontier minus one, which is what the FIN path
+     *          records too: everything below the frontier was delivered, and a
+     *          frame at or above it was never taken here.
+     */
+    void vmux_net::remember_closed_flow_from_context(uint32_t connection_id) noexcept {
+        const auto it = flows_.find(connection_id);
+        if (it == flows_.end()) {
+            // No receive context: either the flow never got one here, or the
+            // FIN path already recorded it and erased the context in the same
+            // step. Nothing to add, and nothing to overwrite.
+            return;
+        }
+
+        const flow_rx_context& fx = it->second;
+        remember_closed_flow(connection_id,
+            fx.flow_rx_next_ > 0 ? fx.flow_rx_next_ - 1 : 0, now_tick());
+    }
+
+    /**
      * @brief Acknowledges a frame of an already finished flow.
      * @details The peer is still retransmitting a frame of a flow that is
      *          already closed here (its acknowledgement was lost). One more
@@ -1964,6 +2016,34 @@ namespace vmux {
         // deferred ACK would be thrown away with the tracker.
         maybe_send_ack(now, true);
         ack_trackers_.erase(connection_id);
+    }
+
+    /**
+     * @brief Tells the peer that this flow is gone, instead of dropping its frames in silence.
+     * @details A frame the receiver never took must NOT be acknowledged as delivered:
+     *          the peer would then believe the payload arrived. So the receiver
+     *          drops it -- and the peer, unable to tell "the peer is slow" from
+     *          "the peer will never take this flow", keeps retransmitting until
+     *          its attempt budget runs out (30 s with the current grace) and then
+     *          resets a flow that is already dead, over every carrier.
+     *
+     *          The refusal closes that gap. cmd_syn_ok already carries an error
+     *          byte for a refused connection, and the peer treats anything but
+     *          'A' as a failure: it closes its socket, which releases the flow's
+     *          retransmit entries. No new command, no capability negotiation.
+     */
+    void vmux_net::refuse_flow(uint32_t connection_id) noexcept {
+        if (connection_id == 0) {
+            return; // zero is reserved for "no connection"; there is nothing to refuse
+        }
+        const Byte err = 'N'; // no such flow
+        ppp::telemetry::Count("mux.rx.flow.refused", 1);
+        if (!post(cmd_syn_ok, &err, 1, connection_id)) {
+            // The refusal could not be queued: the peer will keep
+            // retransmitting this flow until its own budget runs out.
+            ppp::app::mux::MuxRuntimeCounterRegistry::AddRxFlowRefusePostFailed();
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+        }
     }
 
     /**
@@ -2036,6 +2116,12 @@ namespace vmux {
         auto fit = flows_.find(connection_id);
         if (fit != flows_.end()) {
             note_flow_unbuffered(fit->second.flow_reorder_.buffered_bytes());
+            // The flow is gone on this side, so remember it before the
+            // context disappears: the peer keeps retransmitting until it hears
+            // that the frames were taken. Without the record those frames look
+            // like frames of a flow this side never had, and they are refused
+            // as unknown instead of acknowledged.
+            remember_closed_flow_from_context(connection_id);
             flows_.erase(fit);
         }
         // The send-side DSN counter is NOT erased here either: the socket is
@@ -2129,6 +2215,9 @@ namespace vmux {
                     // peer keeps its copy of data that was never taken here.
                     ppp::telemetry::Count("mux.rx.closed_flow.drop", 1);
                     ppp::app::mux::MuxRuntimeCounterRegistry::AddRxClosedFlowDrop();
+                    // ... but tell the peer the flow is gone, so it stops
+                    // retransmitting into the void (see refuse_flow).
+                    refuse_flow(cid);
                 }
                 active(now);
                 linklayer_update(linklayer);
@@ -2138,6 +2227,10 @@ namespace vmux {
 
         flow_rx_context* fxp = try_get_or_create_flow(cid);
         if (NULLPTR == fxp) {
+            // The peer still has a flow we do not know: it will keep
+            // retransmitting until its attempt budget runs out. Tell it the
+            // flow is gone instead (see refuse_flow).
+            refuse_flow(cid);
             active(now);
             linklayer_update(linklayer);
             return true;
@@ -3453,6 +3546,17 @@ namespace vmux {
                 skt = tail->second;
                 if (skt.get() == refer_pointer) {
                     skts_.erase(tail);
+                    // The socket is gone on this side, so remember the flow
+                    // before its context disappears: the peer keeps
+                    // retransmitting until it hears that the frames were
+                    // taken. Without the record those frames look like frames
+                    // of a flow this side never had, and they are refused as
+                    // unknown instead of acknowledged.
+                    //
+                    // Only the FIN-convergence path used to leave such a
+                    // record, so a socket that closed first (local error, write
+                    // failure, aging timeout) left nothing behind.
+                    remember_closed_flow_from_context(connection_id);
                     flows_.erase(connection_id);          // drop per-flow receive context (flow v2)
                     tx_flow_seq_.erase(connection_id);    // drop per-flow send DSN counter (flow v2)
                     // The remaining TX frames of this flow are NOT dropped.

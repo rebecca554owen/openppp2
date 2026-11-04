@@ -110,10 +110,16 @@ namespace vmux {
             event(this, false);
         }
 
-        mux_->release_connection(connection_id_, this);
+        // The FIN must be queued while tx_flow_seq_ still holds this flow's
+        // send frontier. release_connection() drops that counter, so a FIN
+        // posted afterwards restarts the per-flow DSN numbering at one; the
+        // receiver treats a frame below its delivery frontier as a duplicate
+        // and acknowledges it WITHOUT delivering it, so the peer would never
+        // learn that the flow ended.
         if (fin) {
             mux_->post(vmux_net::cmd_fin, NULLPTR, 0, connection_id_);
         }
+        mux_->release_connection(connection_id_, this);
 
         if (NULLPTR != tx_socket) {
             auto tx_context = tx_context_;
@@ -600,6 +606,23 @@ namespace vmux {
         // Open barrier: do not post PUSH until local open completes (syn_ok / connected_).
         if (!status_.connected_) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendContextNotReady);
+            return false;
+        }
+
+        // The FIN of this flow already went out (the local read side reached
+        // EOF), so the peer already treats the flow as closed. A data frame
+        // posted now would carry a DSN beyond the FIN's, and the peer drops
+        // every such frame WITHOUT acknowledging it -- it never took the data.
+        // The sender would then retransmit it until its attempt budget runs
+        // out (30 s with the current grace) and reset a flow that is already
+        // dead, burning every carrier meanwhile.
+        //
+        // The local peer closed its write side, so there is nothing
+        // legitimate left to send: refuse the write.
+        if (status_.fin_) {
+            ppp::telemetry::Count("mux.tx.flow.after_fin", 1);
+            ppp::app::mux::MuxRuntimeCounterRegistry::AddTxFlowAfterFin();
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendAfterFin);
             return false;
         }
 

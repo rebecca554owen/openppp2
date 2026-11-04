@@ -596,8 +596,31 @@ namespace vmux {
         void                                                                        maybe_release_flow(uint32_t connection_id, flow_rx_context& fx) noexcept;
         /** @brief Remember a finished flow so a retransmitted frame for it can be acknowledged again. */
         void                                                                        remember_closed_flow(uint32_t connection_id, uint32_t last_dsn, uint64_t now) noexcept;
+        /**
+         * @brief Remembers a flow whose receive context is about to disappear.
+         * @details The peer keeps retransmitting a flow's frames until it hears
+         *          that they were delivered. When the receive context vanishes
+         *          without a record, those retransmissions look like frames of a
+         *          flow this side never had: they are refused as unknown, and
+         *          the peer gives up on a flow whose data may in fact have
+         *          arrived.
+         *
+         *          Only the FIN-convergence path (maybe_release_flow) used to
+         *          leave such a record. A socket that closes first — a local
+         *          error, a write failure, an aging timeout, a flow reset —
+         *          dropped the context and left nothing behind, so every late
+         *          frame of that flow was refused as an unknown flow.
+         *
+         *          The record is written only while the receive context still
+         *          exists, which is exactly when no record was written before:
+         *          the FIN path erases the context in the same step that records
+         *          it, and it is the only other writer.
+         */
+        void                                                                        remember_closed_flow_from_context(uint32_t connection_id) noexcept;
         /** @brief Acknowledge a frame of an already finished flow (the peer is still retransmitting it). */
         void                                                                        acknowledge_closed_flow(uint32_t connection_id, uint32_t seq, uint64_t now) noexcept;
+        /** @brief Tell the peer that this flow is gone, so it stops retransmitting it. */
+        void                                                                        refuse_flow(uint32_t connection_id) noexcept;
 
         /**
          * @brief Reliability sub-protocol (negotiated; strand-affine).

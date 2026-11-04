@@ -478,6 +478,12 @@ openppp2_add_cpp_test(mux_runtime_counters_test SOURCES
     "${OPENPPP2_ROOT}/common/json/src/json_reader.cpp"
     "${OPENPPP2_ROOT}/common/json/src/json_value.cpp"
     "${OPENPPP2_ROOT}/common/json/src/json_writer.cpp")
+
+openppp2_add_cpp_test(mux_flow_refusal_contract_test SOURCES
+    mux_flow_refusal_contract_test.cpp)
+target_compile_definitions(mux_flow_refusal_contract_test PRIVATE
+    OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
+target_link_libraries(mux_flow_refusal_contract_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(vmux_fec_codec_test SOURCES
     vmux_fec_codec_test.cpp)
 openppp2_add_cpp_test(vmux_flow_reorder_test SOURCES

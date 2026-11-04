@@ -3,17 +3,17 @@
 
 /**
  * @file vmux_wave0_rtx_release_test.cpp
- * @brief Wave 0 test: verify RTX state is released when a flow is closed.
+ * @brief Wave 0 tests: the reliability primitives that flow teardown relies on.
  * @license GPL-3.0
  *
- * Tests the P2-9 fix: release_connection() must call
- * release_flow_reliability_state() to free RTX/FEC entries for the
- * closed connection_id, preventing idle-timeout RTX retention.
- *
- * Also tests:
+ * NOTE (2026-11-03): this file does NOT cover vmux_net::release_connection().
+ * The P2-9 closure it used to claim — release_connection() calling
+ * release_flow_reliability_state() — was lost in the 57f0ffa5 rewrite and is
+ * not implemented; docs/vmux/VMUX_AUDIT_REPORT.md now says so. What is tested
+ * here is the primitives the release paths DO use:
+ *   - MuxRetransmitBuffer EraseCid / Track / Ack / CollectExpired
  *   - FakeClock deterministic time advancement
  *   - DeliveryOracle data-correctness verification
- *   - MuxRetransmitBuffer PTO expiry and ACK paths
  *   - MuxLinkDrainState lifecycle (P0-T1 teardown scenario)
  *   - MuxAckTracker wrap-around and range merging
  */
