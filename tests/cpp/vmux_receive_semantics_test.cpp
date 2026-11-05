@@ -111,6 +111,102 @@ struct vmux_net_test_access {
         });
     }
 
+    /**
+     * @brief Fills the control queue with n frames of one command.
+     * @details The frames are pushed straight into the queue so a test can
+     *          reach the hard cap without a live carrier.
+     */
+    static void EmplaceCtrlFrameWithCmd(vmux_net& mux, std::uint8_t cmd, int n) {
+        RunOnStrandVoid(mux, [&]() {
+            for (int i = 0; i < n; ++i) {
+                auto buf = mux.make_byte_array(static_cast<int>(sizeof(vmux_net::vmux_hdr)));
+                if (!buf) throw std::runtime_error("alloc");
+                auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(buf.get());
+                std::memset(h, 0, sizeof(*h));
+                h->cmd = cmd;
+                mux.tx_ctrl_queue_.emplace_back(vmux_net::tx_packet{ buf, static_cast<int>(sizeof(vmux_net::vmux_hdr)), nullptr });
+            }
+        });
+    }
+
+    /**
+     * @brief Fills the control queue with n SYN-OK frames carrying one status byte.
+     * @details 'A' accepts the connection, every other byte refuses it. The two
+     *          shapes have different drop semantics under the control cap: a
+     *          refusal is a best-effort go-away, an acceptance is critical.
+     */
+    static void EmplaceCtrlSynOk(vmux_net& mux, std::uint8_t status, int n) {
+        RunOnStrandVoid(mux, [&]() {
+            for (int i = 0; i < n; ++i) {
+                const int len = static_cast<int>(sizeof(vmux_net::vmux_hdr)) + 1;
+                auto buf = mux.make_byte_array(len);
+                if (!buf) throw std::runtime_error("alloc");
+                auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(buf.get());
+                std::memset(h, 0, sizeof(*h));
+                h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_syn_ok);
+                reinterpret_cast<std::uint8_t*>(h + 1)[0] = status;
+                mux.tx_ctrl_queue_.emplace_back(vmux_net::tx_packet{ buf, len, nullptr });
+            }
+        });
+    }
+
+    /**
+     * @brief Posts one frame through the normal post() path.
+     * @return false when the frame was refused (e.g. the control queue was full).
+     */
+    static bool PostCtrlFrame(
+        vmux_net& mux,
+        std::uint8_t cmd,
+        const void* payload,
+        int payload_len,
+        std::uint32_t connection_id) {
+        return RunOnStrand(mux, [&]() {
+            return mux.post(cmd, payload, payload_len, connection_id);
+        });
+    }
+
+    /** @brief The KEEP-ALIVE command byte (the friend struct may read it). */
+    static std::uint8_t CmdKeepAlived() {
+        return static_cast<std::uint8_t>(vmux_net::cmd_keep_alived);
+    }
+
+    /** @brief The SYN command byte (the friend struct may read it). */
+    static std::uint8_t CmdSyn() {
+        return static_cast<std::uint8_t>(vmux_net::cmd_syn);
+    }
+
+    /**
+     * @brief Asks the control queue to make room under its hard cap.
+     * @return false when every queued frame is critical.
+     */
+    static bool CtrlQueueMakesRoom(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.ctrl_queue_makes_room(); });
+    }
+
+    /**
+     * @brief Enqueues n data frames for one flow and returns the queue depth.
+     */
+    static std::size_t EnqueueFlowTx(
+        vmux_net& mux,
+        std::uint32_t connection_id,
+        int n,
+        int payload_bytes) {
+        return RunOnStrand(mux, [&]() {
+            for (int i = 0; i < n; ++i) {
+                const int len = static_cast<int>(sizeof(vmux_net::vmux_hdr)) + payload_bytes;
+                auto buf = mux.make_byte_array(len);
+                if (!buf) throw std::runtime_error("alloc");
+                auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(buf.get());
+                std::memset(h, 0, sizeof(*h));
+                h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_push);
+                h->connection_id = htonl(connection_id);
+                mux.enqueue_flow_tx(connection_id, vmux_net::tx_packet{ buf, len, nullptr });
+            }
+            const auto it = mux.tx_flows_.find(connection_id);
+            return (it != mux.tx_flows_.end()) ? it->second.queue.size() : static_cast<std::size_t>(0);
+        });
+    }
+
     static bool ProcessTxAll(vmux_net& mux) {
         return RunOnStrand(mux, [&]() { return mux.process_tx_all_packets(); });
     }
@@ -1394,6 +1490,144 @@ void TestSenderRefusesDataAfterFin() {
             "the refused write must be counted for the runtime stats");
 }
 
+// A single slow consumer must not be able to fill the session's TX memory.
+//
+// The per-flow TX queue has its own hard bound (the audit report records the
+// missing bound as P1-3): past it, only that flow is failed -- the session and
+// every other flow keep running.
+void TestPerFlowTxQueueStopsAtItsCap() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    constexpr std::uint32_t cid = 5150;
+    const std::size_t queued =
+        vmux::vmux_net_test_access::EnqueueFlowTx(*mux, cid, 300, /*payload*/ 64);
+
+    Require(queued == static_cast<std::size_t>(PPP_MUX_TX_FLOW_MAX_FRAMES),
+        "the per-flow TX queue must stop at its hard cap");
+}
+
+// The byte cap is a separate bound: a single frame bigger than the per-flow
+// budget must be refused outright instead of being queued.
+void TestPerFlowTxQueueRefusesAnOversizedFrame() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    constexpr std::uint32_t cid = 5151;
+    const std::size_t queued = vmux::vmux_net_test_access::EnqueueFlowTx(
+        *mux, cid, /*n*/ 1, /*payload*/ static_cast<int>(PPP_MUX_TX_FLOW_MAX_BYTES));
+
+    Require(queued == 0,
+        "a frame larger than the per-flow byte cap must be refused, not queued");
+}
+
+// The per-flow quota kills only the flow that hit it: the session and every
+// other flow keep running. That is the invariant the audit report records as
+// P1-3, and it is what separates it from the session-level D11 kill.
+void TestPerFlowTxOverflowFailsOnlyThatFlow() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    constexpr std::uint32_t hot_cid = 6100;
+    constexpr std::uint32_t calm_cid = 6101;
+    auto hot = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, hot_cid);
+    auto calm = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, calm_cid);
+
+    // The hot flow fills its own quota; the calm flow sends a single frame.
+    vmux::vmux_net_test_access::EnqueueFlowTx(*mux, hot_cid, 300, /*payload*/ 64);
+    vmux::vmux_net_test_access::EnqueueFlowTx(*mux, calm_cid, 1, /*payload*/ 64);
+
+    // Drain the close that fail_flow() posted for the hot flow.
+    vmux::vmux_net_test_access::RunOnStrandVoid(*mux, []() {});
+
+    Require(vmux::vmux_net_test_access::SktDisposed(*mux, *hot),
+        "the flow that hit its quota must be closed");
+    Require(!vmux::vmux_net_test_access::SktDisposed(*mux, *calm),
+        "the other flow must survive the quota kill");
+    Require(!vmux::vmux_net_test_access::IsDisposed(*mux),
+        "the session must survive the quota kill");
+}
+
+// The control queue has its own hard bound (the audit report records the
+// missing bound as P1-6). When it is full the oldest expendable frame is
+// dropped to make room -- a keep-alive is regenerated, and the peer re-asks
+// for anything it never saw acknowledged.
+void TestControlQueueCapDropsTheOldestFeedbackFrame() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::EmplaceCtrlFrameWithCmd(
+        *mux, vmux::vmux_net_test_access::CmdKeepAlived(), static_cast<int>(PPP_MUX_TX_CTRL_MAX_FRAMES));
+
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) ==
+            static_cast<std::size_t>(PPP_MUX_TX_CTRL_MAX_FRAMES),
+        "the control queue must be full before the cap is consulted");
+
+    Require(vmux::vmux_net_test_access::CtrlQueueMakesRoom(*mux),
+        "a feedback frame must make room under the cap");
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) ==
+            static_cast<std::size_t>(PPP_MUX_TX_CTRL_MAX_FRAMES) - 1,
+        "exactly one frame must be dropped to make room");
+}
+
+// A critical frame (SYN) is never dropped: losing one would strand a
+// connection that is still being set up. The new frame is refused instead of
+// the queue growing past its cap.
+void TestControlQueueCapNeverDropsACriticalFrame() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::EmplaceCtrlFrameWithCmd(
+        *mux, vmux::vmux_net_test_access::CmdSyn(), static_cast<int>(PPP_MUX_TX_CTRL_MAX_FRAMES));
+
+    Require(!vmux::vmux_net_test_access::CtrlQueueMakesRoom(*mux),
+        "a full queue of critical frames must refuse the new frame");
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) ==
+            static_cast<std::size_t>(PPP_MUX_TX_CTRL_MAX_FRAMES),
+        "no critical frame may be dropped");
+}
+
+// A refused control frame is backpressure, not a broken session. A peer that
+// floods the control plane must not be able to tear the whole session down
+// with a handful of frames: the session survives the refusal.
+void TestControlQueueCapRejectionKeepsTheSessionAlive() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    vmux::vmux_net_test_access::EmplaceCtrlFrameWithCmd(
+        *mux, vmux::vmux_net_test_access::CmdSyn(), static_cast<int>(PPP_MUX_TX_CTRL_MAX_FRAMES));
+
+    // Every queued frame is critical, so the new frame must be refused.
+    Require(!vmux::vmux_net_test_access::PostCtrlFrame(
+        *mux, vmux::vmux_net_test_access::CmdKeepAlived(), nullptr, 0, 0),
+        "a control frame must be refused when the queue is all critical");
+
+    Require(!vmux::vmux_net_test_access::IsDisposed(*mux),
+        "a refused control frame must not tear the session down");
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) ==
+            static_cast<std::size_t>(PPP_MUX_TX_CTRL_MAX_FRAMES),
+        "the control queue must stay at its cap");
+}
+
+// A SYN-OK that refuses a flow is a best-effort go-away: dropping it costs
+// the peer nothing but its retransmission budget, so it must not block the
+// control queue. A SYN-OK that accepts a connection is critical.
+void TestControlQueueCapDropsARefusalButNotAnAcceptance() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    vmux::vmux_net_test_access::EmplaceCtrlSynOk(
+        *mux, /*status*/ 'N', static_cast<int>(PPP_MUX_TX_CTRL_MAX_FRAMES));
+
+    Require(vmux::vmux_net_test_access::CtrlQueueMakesRoom(*mux),
+        "a refusal must make room under the cap");
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) ==
+            static_cast<std::size_t>(PPP_MUX_TX_CTRL_MAX_FRAMES) - 1,
+        "exactly one refusal must be dropped to make room");
+
+    auto accept_mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*accept_mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    vmux::vmux_net_test_access::EmplaceCtrlSynOk(
+        *accept_mux, /*status*/ 'A', static_cast<int>(PPP_MUX_TX_CTRL_MAX_FRAMES));
+
+    Require(!vmux::vmux_net_test_access::CtrlQueueMakesRoom(*accept_mux),
+        "an accepting syn-ok must never be dropped");
+}
+
 int main() {
     try {
         TestReceiverRefusesUnknownFlow();
@@ -1429,6 +1663,13 @@ int main() {
         TestLinkByteCreditHighWater();
         TestVmuxCreatesMissingStrand();
         TestStrandAffineSendAndPostRejectOffStrand();
+        TestPerFlowTxQueueStopsAtItsCap();
+        TestPerFlowTxQueueRefusesAnOversizedFrame();
+        TestPerFlowTxOverflowFailsOnlyThatFlow();
+        TestControlQueueCapDropsTheOldestFeedbackFrame();
+        TestControlQueueCapNeverDropsACriticalFrame();
+        TestControlQueueCapRejectionKeepsTheSessionAlive();
+        TestControlQueueCapDropsARefusalButNotAnAcceptance();
         std::cout << "vmux_receive_semantics_test: ok" << std::endl;
         return 0;
     }

@@ -36,6 +36,9 @@ const std::vector<std::string>& ExpectedCounterKeys() {
         "mux.rx.flow.refuse_post_failed",
         "mux.rx.syn_ok.refused",
         "mux.rx.syn_ok.refused.no_socket",
+        "mux.tx.flow.overflow",
+        "mux.tx.ctrl.cap",
+        "mux.tx.ctrl.cap.reject",
     };
     return keys;
 }
@@ -62,6 +65,9 @@ BOOST_AUTO_TEST_CASE(registry_accumulates_every_counter) {
     mux::MuxRuntimeCounterRegistry::AddRxFlowRefusePostFailed();
     mux::MuxRuntimeCounterRegistry::AddRxSynOkRefused();
     mux::MuxRuntimeCounterRegistry::AddRxSynOkRefusedNoSocket(3);
+    mux::MuxRuntimeCounterRegistry::AddTxFlowOverflow();
+    mux::MuxRuntimeCounterRegistry::AddTxCtrlCap(2);
+    mux::MuxRuntimeCounterRegistry::AddTxCtrlCapRejected();
 
     const mux::MuxRuntimeCounters snap = mux::MuxRuntimeCounterRegistry::GetSnapshot();
     BOOST_TEST(snap.tx_frames == 3u);
@@ -81,6 +87,9 @@ BOOST_AUTO_TEST_CASE(registry_accumulates_every_counter) {
     BOOST_TEST(snap.rx_flow_refuse_post_failed == 1u);
     BOOST_TEST(snap.rx_syn_ok_refused == 1u);
     BOOST_TEST(snap.rx_syn_ok_refused_no_socket == 3u);
+    BOOST_TEST(snap.tx_flow_overflow == 1u);
+    BOOST_TEST(snap.tx_ctrl_cap == 2u);
+    BOOST_TEST(snap.tx_ctrl_cap_rejected == 1u);
 
     mux::MuxRuntimeCounterRegistry::Reset();
     const mux::MuxRuntimeCounters zero = mux::MuxRuntimeCounterRegistry::GetSnapshot();

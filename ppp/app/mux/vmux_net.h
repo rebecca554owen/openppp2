@@ -710,19 +710,32 @@ namespace vmux {
             PostInternalAsynchronousCallback null_expr;
             return post(cmd, packet, packet_length, connection_id, acceleration, null_expr);
         }
-        /** @brief Post a vmux command with optional completion callback. */
+        /** @brief Post a vmux command with optional completion callback.
+         *  @details A control queue that reached its hard cap is a backpressure
+         *           outcome, not a broken session: the frame is refused, but the
+         *           session and every other flow must keep running. Escalating
+         *           that refusal to close_exec() would let a peer that floods
+         *           the control plane tear the whole session down with a
+         *           handful of frames. Every other post failure stays fatal. */
         bool                                                                        post(Byte cmd, const void* packet, int packet_length, uint32_t connection_id, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept {
-            bool successing = post_internal(cmd, packet, packet_length, connection_id, acceleration, posted_ac);
-            if (!successing) {
+            bool recoverable = false;
+            bool successing = post_internal(cmd, packet, packet_length, connection_id, acceleration, posted_ac, &recoverable);
+            if (!successing && !recoverable) {
                 close_exec();
             }
 
             return successing;
         }
-        /** @brief Build and enqueue one vmux framed packet; synchronously requires the mux strand. */
-        bool                                                                        post_internal(Byte cmd, const void* packet, int packet_length, uint32_t connection_id, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept;
-        /** @brief Enqueue a prebuilt frame; synchronously requires the mux strand. */
-        bool                                                                        post_internal(const std::shared_ptr<Byte>& packet, int packet_length, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept;
+        /** @brief Build and enqueue one vmux framed packet; synchronously requires the mux strand.
+         *  @param recoverable Set to true when the only reason for the refusal is
+         *         backpressure (the control queue hit its hard cap). The caller
+         *         must not treat that as a broken session. */
+        bool                                                                        post_internal(Byte cmd, const void* packet, int packet_length, uint32_t connection_id, bool acceleration, const PostInternalAsynchronousCallback& posted_ac, bool* recoverable = NULLPTR) noexcept;
+        /** @brief Enqueue a prebuilt frame; synchronously requires the mux strand.
+         *  @param recoverable Set to true when the only reason for the refusal is
+         *         backpressure (the control queue hit its hard cap). The caller
+         *         must not treat that as a broken session. */
+        bool                                                                        post_internal(const std::shared_ptr<Byte>& packet, int packet_length, bool acceleration, const PostInternalAsynchronousCallback& posted_ac, bool* recoverable = NULLPTR) noexcept;
         /** @brief True when an underlying link-layer endpoint is usable. */
         static bool                                                                 is_linklayer_active(const vmux_linklayer_ptr& linklayer) noexcept;
         /** @brief Pick the next active link-layer round-robin (stripe distribution). */
@@ -807,6 +820,31 @@ namespace vmux {
         static void                                                                 drain_carrier_receive(const IMuxTransportPtr& connection) noexcept;
         /** @brief Enqueue one data frame into the per-flow DRR queue (strand-affine). */
         void                                                                        enqueue_flow_tx(uint32_t connection_id, tx_packet&& packet) noexcept;
+
+        /**
+         * @brief Makes room in the control queue under its hard cap.
+         * @details Drops the oldest expendable control frame (ACK / FEC /
+         *          keep-alive / refusing SYN-OK) when the queue already holds
+         *          PPP_MUX_TX_CTRL_MAX_FRAMES frames. Critical frames (SYN,
+         *          accepting SYN-OK, FIN, mode-set) are never dropped.
+         * @return false when every queued frame is critical: the caller must
+         *         reject the frame it wanted to queue.
+         */
+        bool                                                                        ctrl_queue_makes_room() noexcept;
+
+        /**
+         * @brief True when a queued control frame may be dropped to make room.
+         * @details ACK / FEC / keep-alive are regenerated or re-asked by the
+         *          peer. A SYN-OK that carries a refusal (any status other than
+         *          'A') is a best-effort go-away: dropping it costs the peer
+         *          nothing but its retransmission budget, and it keeps a refusal
+         *          flood from filling the control queue with frames that would
+         *          block every real control frame. A SYN-OK that accepts a
+         *          connection is critical, as are SYN, mode-set and acceleration.
+         * @param buffer The queued frame buffer (header first).
+         * @param length The queued frame length in bytes.
+         */
+        static bool                                                                 is_expendable_ctrl_frame(const Byte* buffer, int length) noexcept;
         /** @brief Total queued data frames across all per-flow TX queues. */
         size_t                                                                      tx_data_depth() const noexcept;
         /** @brief Total queued data bytes across all per-flow TX queues. */

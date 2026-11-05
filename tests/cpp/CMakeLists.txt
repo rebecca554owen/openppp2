@@ -482,6 +482,11 @@ target_compile_definitions(mux_carrier_clean_close_test PRIVATE
 target_link_libraries(mux_carrier_clean_close_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(mux_flow_refusal_contract_test SOURCES
     mux_flow_refusal_contract_test.cpp)
+openppp2_add_cpp_test(mux_connect_yield_lifetime_contract_test SOURCES
+    mux_connect_yield_lifetime_contract_test.cpp)
+target_compile_definitions(mux_connect_yield_lifetime_contract_test PRIVATE
+    OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
+target_link_libraries(mux_connect_yield_lifetime_contract_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 target_compile_definitions(mux_flow_refusal_contract_test PRIVATE
     OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
 target_link_libraries(mux_flow_refusal_contract_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)

@@ -28,6 +28,14 @@
 > 基线：`4fd139d` / `v2.1.6-6-g4fd139d` / clang 19.1.7 / Debian 13 trixie
 > 审计范围：vmux_skt → vmux_net → IMuxTransport / ITransmission → SSEA 边界
 
+> **fork 侧复核（2026-11-04）**：本报告是上游 2026-08-02 的历史审计，封板基线是上游 `main`。fork 在 `57f0ffa5`（`vmux_net.cpp` 整文件重写）中偏离过其中若干条，已逐条复核并就地记录：
+> - **P0-1**：形态回退（lambda 捕获列表里多了一个裸 `this`）。已修复，见该条目。
+> - **P1-3 / P1-6**：per-flow TX 配额与控制队列硬上限被删。已按条目规格重新落地，见该条目。
+> - **P1-1 / P2-11**：per-link SRTT/RTTVAR 未随 fork 带回。经复核确认为**有意**的选择 —— fork 走的是「用 PTO 单独判丢失」路线，per-link RTT 在该路线无立身之地 —— 属设计决策，未恢复。
+> - **P2-9**：唯一主动标注「未闭环」的条目，已在上游原条目里更正。
+>
+> 其余条目的复核结论见各条目末尾的「2026-11-04 fork 复核与修复」段落。
+
 ---
 
 ## 一、审计基线
@@ -126,8 +134,9 @@
 | **代码位置** | `ppp/app/mux/vmux_net.cpp:3847-3861` |
 | **最终严重级别** | **P0** |
 | **关闭日期** | 2026-08-03 |
-| **修复 commit** | Wave 1（工作树未 commit） |
-| **回归测试** | `vmux_wave0_rtx_release_test` — teardown 竞态场景 |
+| **修复 commit** | Wave 1（工作树未 commit）；fork 侧 2026-11-04 恢复上游形态 |
+| **状态** | ✅ **2026-11-04 已闭环** —— `57f0ffa5` 造成的形态回退已修复，并补上契约测试 |
+| **回归测试** | ⚠️ `vmux_wave0_rtx_release_test` **不覆盖该路径** —— 它只测 drain 状态原语；2026-11-04 新增 `mux_connect_yield_lifetime_contract_test`（源码契约断言）钉住捕获形态 |
 | **验证方式** | ASan/UBSan 全绿；代码审查确认 lambda 现在捕获 `shared_from_this()` |
 | **协议变更** | 无 |
 | **兼容性影响** | 无 |
@@ -159,6 +168,16 @@ bool posted = vmux_post_exec(context_, strand_,
 - ✅ lambda 中不再捕获裸 `this`
 - ✅ 强引用不会与 executor/timer 形成引用环（connect 回调完成后 self 释放）
 - ✅ 与代码库中其他 post 站点的惯用法一致
+
+**2026-11-04 fork 复核与修复**：
+
+`57f0ffa5`（`vmux_net.cpp` 整文件重写）把这条修复的**形态**改了回去 —— lambda 的捕获列表变成 `[self, this, sk, ...]`，调用也改回裸 `connect(...)`，上游那段解释注释被一并删除。
+
+**实质上仍然是安全的**：`self` 已被捕获，`shared_ptr` 会在 lambda 跑完之前把对象钉住，裸 `this` 并没有真正被用到。但上面「验证清单」里「lambda 中不再捕获裸 `this`」一条不再成立，报告与代码对不上，而且形态随时可能被再次改没。
+
+已恢复上游形态：捕获列表去掉 `this`，调用改成 `self->connect(...)`，并补回上游的解释注释（`finalize()` 不 drain `strand_`，裸 `this` 会在最后一个 `shared_ptr` 释放后悬空）。
+
+**回归**：`tests/cpp/mux_connect_yield_lifetime_contract_test.cpp` —— 源码契约断言，钉住四件事：lambda 前必须拿到 `shared_from_this()`、捕获列表里没有裸 `this`、成员函数经 `self->` 调用、解释注释还在。负向验证：把捕获列表改回 `[self, this, ...]` 并改回裸 `connect(...)` 后，该用例报 `the posted lambda must not capture a bare this (P0-1)`。
 
 ---
 
@@ -253,8 +272,9 @@ session-level `srtt_ms_` 保留为单链路/无 sample 时的回退。
 | **根因** | `enqueue_flow_tx()` 无条件接受，无 per-flow 队列上限 |
 | **最终严重级别** | **P1** |
 | **关闭日期** | 2026-08-03 |
-| **修复 commit** | Wave 2（工作树未 commit） |
-| **回归测试** | `vmux_wave2_flow_isolation_test` — 慢消费者不影响其他 flow |
+| **修复 commit** | Wave 2（工作树未 commit）；fork 侧 2026-11-04 重新落地 |
+| **状态** | ✅ **2026-11-04 已闭环** —— `57f0ffa5` 删掉的 per-flow 配额已恢复 |
+| **回归测试** | ⚠️ `vmux_wave2_flow_isolation_test` **不存在于本仓库**；2026-11-04 新增 `vmux_receive_semantics_test` 三个用例（帧数上限、字节上限、超限只关该 flow） |
 | **验证方式** | ASan/UBSan 全绿 |
 | **协议变更** | 无 |
 | **兼容性影响** | 无 |
@@ -262,6 +282,19 @@ session-level `srtt_ms_` 保留为单链路/无 sample 时的回退。
 **修复方案**（Wave 2）：
 
 新增 `PPP_MUX_TX_FLOW_MAX_FRAMES`（256）和 `PPP_MUX_TX_FLOW_MAX_BYTES`（1 MiB）。`enqueue_flow_tx()` 中检查 per-flow 帧数和字节数，超限时 `fail_flow()` 仅关闭该 flow。
+
+**2026-11-04 fork 复核与修复**：
+
+`57f0ffa5`（`vmux_net.cpp` 整文件重写）把 Wave 2 的 per-flow 配额删掉了 —— `enqueue_flow_tx()` 回到无条件接受，一条慢消费者流可以独占整个会话的 TX 内存。已按本条目的规格重新落地：
+
+- `ppp/stdafx.h`：`PPP_MUX_TX_FLOW_MAX_FRAMES = 256`、`PPP_MUX_TX_FLOW_MAX_BYTES = 1 MiB`（与上游同值）。
+- `enqueue_flow_tx()`：入队前检查该 flow 的帧数与字节数，任一超限即拒绝这一帧，**只 `fail_flow()` 掉这一条流**，会话与其余流照常运行。
+- 被拒帧的 completion 立即以 `false` 结清（上游那版没有这一步，会把写方挂到会话结束）。
+- 新增错误码 `VmuxNetTxFlowQueueFull`，新增计数器 `mux.tx.flow.overflow`。`fail_flow()` 本身会顺带记一次 `mux.rx.flow.reset`（它是 RX 侧计数器），两个计数器一起看才能分清「TX 配额杀流」与「RX 间隙重置」。
+
+**与上游 Wave 2 的差异**：上游在 `fail_flow()` 里还会清理该 flow 的 TX 队列残留帧，避免失败流继续占 DRR 发送预算。本仓库**没有**照搬这一步：清理残留帧会让已经发出的数据在序号空间里留下洞，而洞只能等 gap timeout 重建整个会话 —— 代价远大于多发几帧。当前实现的边界是「配额封顶 + 关掉该流」，被拒流最多再占用 256 帧 / 1 MiB 的队列额度，随后自然排空。
+
+**回归**：`tests/cpp/vmux_receive_semantics_test.cpp`（主工程 `ENABLE_VMUX_RECEIVE_SEMANTICS_TEST` 目标构建，`tests/cpp` 树不编译 `vmux_net.cpp`）：`TestPerFlowTxQueueStopsAtItsCap`、`TestPerFlowTxQueueRefusesAnOversizedFrame`、`TestPerFlowTxOverflowFailsOnlyThatFlow`（超限只关这一条流，会话与其余流照常）。负向验证：去掉配额判据后报 `the per-flow TX queue must stop at its hard cap`；去掉 `fail_flow()` 后报 `the flow that hit its quota must be closed`。
 
 ### P1-4：慢消费者隔离失败 — D11 杀整个会话
 
@@ -314,8 +347,9 @@ P1-2 + P1-3 + P1-4 一起修复：per-flow TX/RTX 配额确保慢消费者在达
 | **根因** | `tx_ctrl_queue_` 无条件入队，无大小检查 |
 | **最终严重级别** | **P1** |
 | **关闭日期** | 2026-08-03 |
-| **修复 commit** | Wave 5（工作树未 commit） |
-| **回归测试** | `vmux_wave5_control_plane_test` — 控制队列硬上限 + ACK 合并 |
+| **修复 commit** | Wave 5（工作树未 commit）；fork 侧 2026-11-04 重新落地 |
+| **状态** | ✅ **硬上限已闭环（2026-11-04）**；⚠️ **ACK 合并仍未落地** |
+| **回归测试** | ⚠️ `vmux_wave5_control_plane_test` **不存在于本仓库**；2026-11-04 新增 `vmux_receive_semantics_test` 四个用例（丢最旧反馈帧、关键帧不丢、拒绝不拆会话、拒绝回执可丢） |
 | **验证方式** | ASan/UBSan 全绿 |
 | **协议变更** | 无 |
 | **兼容性影响** | 无 |
@@ -325,6 +359,26 @@ P1-2 + P1-3 + P1-4 一起修复：per-flow TX/RTX 配额确保慢消费者在达
 新增 `PPP_MUX_TX_CTRL_MAX_FRAMES`（256）硬上限。队列满时优先丢弃最旧的非关键帧（ACK/keepalive），SYN/FIN/mode 绝不丢弃。只有当队列全是关键帧时才拒绝新帧。
 
 同时新增 ACK 合并机制：`ack_last_sent_tick_` 记录上次 ACK 发送时间，若距上次发送不足 `ack_delay_ms_ / 2`（5ms），抑制冗余 ACK 发送。
+
+**2026-11-04 fork 复核与修复**：
+
+`57f0ffa5` 把 Wave 5 的硬上限删掉了 —— `tx_ctrl_queue_` 回到无条件入队。本仓库独有的 `refuse_flow()` 会为每一个「对端有、我没有」的流回一条 `cmd_syn_ok`，所以一条伪造流量的洪泛就能把控制队列撑到无界。
+
+已按本条目的规格重新落地（`PPP_MUX_TX_CTRL_MAX_FRAMES = 256`），并针对本仓库的两处特性做了上游没有的判断：
+
+**判断一：拒绝回执（`cmd_syn_ok` 带非 `'A'` 状态字节）算可丢弃帧。**
+
+上游的可丢弃集合只有 ACK / keepalive。但本仓库的 `refuse_flow()` 每次都发一条 `cmd_syn_ok`，这些回执若不可丢，就会把控制队列占满，让后面真正的 ACK、SYN 全部被拒 —— 一个洪泛就能让整条会话失去确认能力。而「拒绝」本身是尽力而为的通知：丢掉它，对端只是继续按原预算重传（这正是引入 `refuse_flow()` 之前的行为），不会有数据丢失，也不会留下序号洞。因此本实现把**拒绝回执**归入可丢弃集合，**接受回执**（`'A'`）仍然属于关键帧、绝不丢弃。
+
+**判断二：被拒绝的新帧不得升级成「拆掉整个会话」。**
+
+上游的 `post()` 在 `post_internal()` 失败时一律 `close_exec()`。把硬上限加上之后，这条路径会变成新的拒绝服务：控制队列满 → 新帧被拒 → `post()` 失败 → 整个会话被拆，对端只要发几百个包就能做到。本实现给 `post_internal()` 增加了一个「可恢复失败」出口：控制队列触顶属于背压，`post()` 收到这种失败时**不**拆会话，只把该帧拒掉并结清它的 completion；其余失败（未建立、已释放、越界、分配失败）仍然致命，行为不变。
+
+被丢弃的帧会立即以 `false` 结清 completion（上游那处漏了，writer 会一直挂到会话结束）。新增错误码 `VmuxNetTxControlQueueFull`，新增计数器 `mux.tx.ctrl.cap`（触顶并让位）与 `mux.tx.ctrl.cap.reject`（全是关键帧、只能拒新帧）。
+
+**仍未落地：ACK 合并。** 上游用 `ack_last_sent_tick_` 在 `ack_delay_ms_ / 2`（5ms）内抑制冗余 ACK，本仓库没有这个字段，该项修复**未**随硬上限一起落地。它是带宽优化而不是内存边界，本次范围（DoS 边界）不含它；如要补齐，需要单独评估「抑制窗口」对确认时延的影响。
+
+**回归**：`tests/cpp/vmux_receive_semantics_test.cpp`（主工程 `ENABLE_VMUX_RECEIVE_SEMANTICS_TEST` 目标构建）：`TestControlQueueCapDropsTheOldestFeedbackFrame`、`TestControlQueueCapNeverDropsACriticalFrame`、`TestControlQueueCapRejectionKeepsTheSessionAlive`、`TestControlQueueCapDropsARefusalButNotAnAcceptance`。负向验证：把 `post()` 恢复成「失败即 `close_exec()`」后，用例报 `a refused control frame must not tear the session down`；把拒绝回执改回不可丢弃后，用例报 `a refusal must make room under the cap`。
 
 ---
 

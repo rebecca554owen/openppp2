@@ -306,6 +306,8 @@ X(VmuxNetConnectRequireNullSocket, "Vmux net connect requirement failed because 
 X(VmuxNetConnectYieldInvalidArguments, "Vmux net connect-yield received invalid arguments", ErrorSeverity::kError)
 X(VmuxNetConnectYieldStatusAllocFailed, "Vmux net connect-yield failed to allocate status object", ErrorSeverity::kError)
 X(VmuxNetConnectSocketAllocFailed, "Vmux net connect failed to allocate socket state object", ErrorSeverity::kError)
+X(VmuxNetTxControlQueueFull, "Vmux net rejected a control frame because the control queue reached its hard cap", ErrorSeverity::kError)
+X(VmuxNetTxFlowQueueFull, "Vmux net failed a flow because its transmit queue exceeded the per-flow cap", ErrorSeverity::kError)
 
 X(TcpipConnectionConnectAlreadyConnected, "TCP/IP connection connect path rejected because connection is already connected", ErrorSeverity::kError)
 X(TcpipConnectionConnectorAllocFailed, "TCP/IP connection failed to allocate connector helper during active connect", ErrorSeverity::kError)
