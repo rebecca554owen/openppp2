@@ -2894,6 +2894,22 @@ namespace vmux {
             return;
         }
 
+        // ACK coalescing: an acknowledgement sent less than half a delay
+        // window ago already told the peer about everything that was pending
+        // then. Another one that soon only repeats it, so it is merged into
+        // the next acknowledgement instead of spending a control-queue slot
+        // and a carrier frame. The pending spaces stay pending and the
+        // reliability timer flushes them on its next tick, so nothing is lost.
+        //
+        // A FORCED acknowledgement is never suppressed: it answers a
+        // retransmission, and the peer is waiting for that answer.
+        if (!force && ack_last_sent_tick_ > 0 &&
+            (now - ack_last_sent_tick_) < (ack_delay_ms_ / 2)) {
+            ppp::telemetry::Count("mux.ack.suppressed", 1);
+            ppp::app::mux::MuxRuntimeCounterRegistry::AddTxAckSuppressed();
+            return;
+        }
+
         // Collect the sequence spaces that gained a sequence since the last
         // acknowledgement was sent. Only those are encoded: a tracker keeps
         // its delivered set for the lifetime of the space, so a session with
@@ -2979,6 +2995,13 @@ namespace vmux {
             }
         }
         ack_pending_count_ = (uint32_t)unsent;
+        if (0 == unsent) {
+            // The peer now knows about every space that was pending, so the
+            // next acknowledgement opens a fresh coalescing window. A partial
+            // failure leaves the window closed: those spaces still need an
+            // answer and must not wait behind the suppression.
+            ack_last_sent_tick_ = now;
+        }
     }
 
     void vmux_net::packet_input_ack(Byte* buffer, int buffer_size, uint64_t now) noexcept {

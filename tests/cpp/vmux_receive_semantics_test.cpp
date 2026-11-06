@@ -98,6 +98,25 @@ struct vmux_net_test_access {
         return RunOnStrand(mux, [&]() { return mux.tx_ctrl_queue_.size(); });
     }
 
+    /** @brief Turns the reliability sub-protocol on (ACK frames become possible). */
+    static void EnableReliability(vmux_net& mux, bool enabled) {
+        RunOnStrandVoid(mux, [&]() { mux.reliability_on_ = enabled; });
+    }
+
+    /** @brief Records one received sequence as pending acknowledgement. */
+    static void NoteAckPending(
+        vmux_net& mux,
+        std::uint32_t connection_id,
+        std::uint32_t seq,
+        std::uint64_t now) {
+        RunOnStrandVoid(mux, [&]() { mux.note_ack_pending(connection_id, seq, now); });
+    }
+
+    /** @brief Runs the acknowledgement flush (force=false honours both windows). */
+    static void MaybeSendAck(vmux_net& mux, std::uint64_t now, bool force) {
+        RunOnStrandVoid(mux, [&]() { mux.maybe_send_ack(now, force); });
+    }
+
     static void EmplaceCtrlFrame(vmux_net& mux, int n) {
         RunOnStrandVoid(mux, [&]() {
             for (int i = 0; i < n; ++i) {
@@ -1628,6 +1647,57 @@ void TestControlQueueCapDropsARefusalButNotAnAcceptance() {
         "an accepting syn-ok must never be dropped");
 }
 
+// Two acknowledgements inside the same half-delay window are merged: the
+// second one is suppressed and rides the next acknowledgement instead of
+// spending a control-queue slot and a carrier frame.
+void TestAckCoalescingMergesAFrameInsideTheWindow() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    vmux::vmux_net_test_access::EnableReliability(*mux, true);
+
+    constexpr std::uint64_t t0 = 100000;
+
+    // One pending sequence: the delayed-ACK window holds the answer back.
+    vmux::vmux_net_test_access::NoteAckPending(*mux, 7, 1, t0);
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) == 0,
+        "the delayed-ACK window must hold the first acknowledgement back");
+
+    vmux::vmux_net_test_access::MaybeSendAck(*mux, t0 + 20, false);
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) == 1,
+        "the acknowledgement must go out once the delayed window expired");
+
+    // Two more sequences inside the coalescing window: the acknowledgement
+    // they would trigger is merged into the next one.
+    vmux::vmux_net_test_access::NoteAckPending(*mux, 7, 2, t0 + 21);
+    vmux::vmux_net_test_access::NoteAckPending(*mux, 7, 3, t0 + 21);
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) == 1,
+        "an acknowledgement inside the coalescing window must be suppressed");
+
+    // Past the window it goes out again, carrying what was merged.
+    vmux::vmux_net_test_access::MaybeSendAck(*mux, t0 + 26, false);
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) == 2,
+        "the merged acknowledgement must go out after the window");
+}
+
+// A forced acknowledgement answers a retransmission and is never suppressed:
+// the peer is waiting for that answer.
+void TestAckCoalescingNeverSuppressesAForcedAck() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    vmux::vmux_net_test_access::EnableReliability(*mux, true);
+
+    constexpr std::uint64_t t0 = 200000;
+    vmux::vmux_net_test_access::NoteAckPending(*mux, 9, 1, t0);
+    vmux::vmux_net_test_access::MaybeSendAck(*mux, t0 + 20, false);
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) == 1,
+        "the first acknowledgement must go out");
+
+    vmux::vmux_net_test_access::NoteAckPending(*mux, 9, 2, t0 + 21);
+    vmux::vmux_net_test_access::MaybeSendAck(*mux, t0 + 21, true);
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) == 2,
+        "a forced acknowledgement must never be suppressed");
+}
+
 int main() {
     try {
         TestReceiverRefusesUnknownFlow();
@@ -1670,6 +1740,8 @@ int main() {
         TestControlQueueCapNeverDropsACriticalFrame();
         TestControlQueueCapRejectionKeepsTheSessionAlive();
         TestControlQueueCapDropsARefusalButNotAnAcceptance();
+        TestAckCoalescingMergesAFrameInsideTheWindow();
+        TestAckCoalescingNeverSuppressesAForcedAck();
         std::cout << "vmux_receive_semantics_test: ok" << std::endl;
         return 0;
     }

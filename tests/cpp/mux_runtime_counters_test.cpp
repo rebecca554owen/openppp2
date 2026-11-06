@@ -39,6 +39,7 @@ const std::vector<std::string>& ExpectedCounterKeys() {
         "mux.tx.flow.overflow",
         "mux.tx.ctrl.cap",
         "mux.tx.ctrl.cap.reject",
+        "mux.ack.suppressed",
     };
     return keys;
 }
@@ -68,6 +69,7 @@ BOOST_AUTO_TEST_CASE(registry_accumulates_every_counter) {
     mux::MuxRuntimeCounterRegistry::AddTxFlowOverflow();
     mux::MuxRuntimeCounterRegistry::AddTxCtrlCap(2);
     mux::MuxRuntimeCounterRegistry::AddTxCtrlCapRejected();
+    mux::MuxRuntimeCounterRegistry::AddTxAckSuppressed(4);
 
     const mux::MuxRuntimeCounters snap = mux::MuxRuntimeCounterRegistry::GetSnapshot();
     BOOST_TEST(snap.tx_frames == 3u);
@@ -90,6 +92,7 @@ BOOST_AUTO_TEST_CASE(registry_accumulates_every_counter) {
     BOOST_TEST(snap.tx_flow_overflow == 1u);
     BOOST_TEST(snap.tx_ctrl_cap == 2u);
     BOOST_TEST(snap.tx_ctrl_cap_rejected == 1u);
+    BOOST_TEST(snap.tx_ack_suppressed == 4u);
 
     mux::MuxRuntimeCounterRegistry::Reset();
     const mux::MuxRuntimeCounters zero = mux::MuxRuntimeCounterRegistry::GetSnapshot();

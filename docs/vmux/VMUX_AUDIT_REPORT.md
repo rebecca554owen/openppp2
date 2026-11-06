@@ -30,7 +30,7 @@
 
 > **fork 侧复核（2026-11-04）**：本报告是上游 2026-08-02 的历史审计，封板基线是上游 `main`。fork 在 `57f0ffa5`（`vmux_net.cpp` 整文件重写）中偏离过其中若干条，已逐条复核并就地记录：
 > - **P0-1**：形态回退（lambda 捕获列表里多了一个裸 `this`）。已修复，见该条目。
-> - **P1-3 / P1-6**：per-flow TX 配额与控制队列硬上限被删。已按条目规格重新落地，见该条目。
+> - **P1-3 / P1-6**：per-flow TX 配额、控制队列硬上限与 ACK 合并被删。已按条目规格重新落地，见该条目。
 > - **P1-1 / P2-11**：per-link SRTT/RTTVAR 未随 fork 带回。经复核确认为**有意**的选择 —— fork 走的是「用 PTO 单独判丢失」路线，per-link RTT 在该路线无立身之地 —— 属设计决策，未恢复。
 > - **P2-9**：唯一主动标注「未闭环」的条目，已在上游原条目里更正。
 >
@@ -274,7 +274,7 @@ session-level `srtt_ms_` 保留为单链路/无 sample 时的回退。
 | **关闭日期** | 2026-08-03 |
 | **修复 commit** | Wave 2（工作树未 commit）；fork 侧 2026-11-04 重新落地 |
 | **状态** | ✅ **2026-11-04 已闭环** —— `57f0ffa5` 删掉的 per-flow 配额已恢复 |
-| **回归测试** | ⚠️ `vmux_wave2_flow_isolation_test` **不存在于本仓库**；2026-11-04 新增 `vmux_receive_semantics_test` 三个用例（帧数上限、字节上限、超限只关该 flow） |
+| **回归测试** | ⚠️ `vmux_wave2_flow_isolation_test` **存在，但测的是模拟** —— 它用同一套常量与数据结构复刻 per-flow TX 配额与控制队列的逻辑，**不触碰 `vmux_net` 的生产路径**（文件头已写明「vmux_net 无法在独立测试套件里实例化」）；2026-11-04 新增 `vmux_receive_semantics_test` 三个用例（帧数上限、字节上限、超限只关该 flow），跑的是生产代码 |
 | **验证方式** | ASan/UBSan 全绿 |
 | **协议变更** | 无 |
 | **兼容性影响** | 无 |
@@ -348,8 +348,8 @@ P1-2 + P1-3 + P1-4 一起修复：per-flow TX/RTX 配额确保慢消费者在达
 | **最终严重级别** | **P1** |
 | **关闭日期** | 2026-08-03 |
 | **修复 commit** | Wave 5（工作树未 commit）；fork 侧 2026-11-04 重新落地 |
-| **状态** | ✅ **硬上限已闭环（2026-11-04）**；⚠️ **ACK 合并仍未落地** |
-| **回归测试** | ⚠️ `vmux_wave5_control_plane_test` **不存在于本仓库**；2026-11-04 新增 `vmux_receive_semantics_test` 四个用例（丢最旧反馈帧、关键帧不丢、拒绝不拆会话、拒绝回执可丢） |
+| **状态** | ✅ **已闭环（2026-11-04）** —— 硬上限与 ACK 合并均已落地 |
+| **回归测试** | ⚠️ `vmux_wave5_control_plane_test` **存在，但只覆盖组件** —— 它测 `MuxAckTracker` 的累计合并与 ACK 编解码，**不覆盖 ACK 合并的时间窗**，也不触碰 `vmux_net` 的生产路径；2026-11-04 新增 `vmux_receive_semantics_test` 六个用例（丢最旧反馈帧、关键帧不丢、拒绝不拆会话、拒绝回执可丢、窗口内合并、强制应答不抑制） |
 | **验证方式** | ASan/UBSan 全绿 |
 | **协议变更** | 无 |
 | **兼容性影响** | 无 |
@@ -376,9 +376,14 @@ P1-2 + P1-3 + P1-4 一起修复：per-flow TX/RTX 配额确保慢消费者在达
 
 被丢弃的帧会立即以 `false` 结清 completion（上游那处漏了，writer 会一直挂到会话结束）。新增错误码 `VmuxNetTxControlQueueFull`，新增计数器 `mux.tx.ctrl.cap`（触顶并让位）与 `mux.tx.ctrl.cap.reject`（全是关键帧、只能拒新帧）。
 
-**仍未落地：ACK 合并。** 上游用 `ack_last_sent_tick_` 在 `ack_delay_ms_ / 2`（5ms）内抑制冗余 ACK，本仓库没有这个字段，该项修复**未**随硬上限一起落地。它是带宽优化而不是内存边界，本次范围（DoS 边界）不含它；如要补齐，需要单独评估「抑制窗口」对确认时延的影响。
+**ACK 合并（2026-11-04 一并落地）**：上游用 `ack_last_sent_tick_` 在 `ack_delay_ms_ / 2`（5ms）内抑制冗余 ACK，本仓库原先没有这个字段。已按上游形态补上，并按本仓库的 ACK 实现调整了两点：
 
-**回归**：`tests/cpp/vmux_receive_semantics_test.cpp`（主工程 `ENABLE_VMUX_RECEIVE_SEMANTICS_TEST` 目标构建）：`TestControlQueueCapDropsTheOldestFeedbackFrame`、`TestControlQueueCapNeverDropsACriticalFrame`、`TestControlQueueCapRejectionKeepsTheSessionAlive`、`TestControlQueueCapDropsARefusalButNotAnAcceptance`。负向验证：把 `post()` 恢复成「失败即 `close_exec()`」后，用例报 `a refused control frame must not tear the session down`；把拒绝回执改回不可丢弃后，用例报 `a refusal must make room under the cap`。
+- 本仓库的 `maybe_send_ack()` 一次可能发**多帧**（待确认的序号空间超过一帧容量时分帧发送）。抑制判据放在整批发送之前，所以一批帧要么全发、要么全不发，不会出现「发了一半就被抑制」的中间态。
+- 抑制窗口只在**这一批全部送达**后才开启。若有帧发送失败（`unsent > 0`），窗口保持关闭：那些序号空间还欠着对端一个答复，不能排在抑制窗口后面等。
+
+对端不受影响：可靠性定时器每个 tick 都会再冲一次待发的 ACK，抑制窗口只有 5ms，远小于定时器的 10ms 周期；强制应答（回答重传）永远不抑制。新增计数器 `mux.ack.suppressed`。
+
+**回归**：`tests/cpp/vmux_receive_semantics_test.cpp`（主工程 `ENABLE_VMUX_RECEIVE_SEMANTICS_TEST` 目标构建）：`TestControlQueueCapDropsTheOldestFeedbackFrame`、`TestControlQueueCapNeverDropsACriticalFrame`、`TestControlQueueCapRejectionKeepsTheSessionAlive`、`TestControlQueueCapDropsARefusalButNotAnAcceptance`、`TestAckCoalescingMergesAFrameInsideTheWindow`、`TestAckCoalescingNeverSuppressesAForcedAck`。负向验证：把 `post()` 恢复成「失败即 `close_exec()`」后，用例报 `a refused control frame must not tear the session down`；把拒绝回执改回不可丢弃后，用例报 `a refusal must make room under the cap`；把 ACK 合并的抑制判据去掉后，用例报 `an acknowledgement inside the coalescing window must be suppressed`。
 
 ---
 
