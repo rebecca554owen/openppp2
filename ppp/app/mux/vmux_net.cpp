@@ -1272,11 +1272,97 @@ namespace vmux {
         // into the running FEC parity group once the frame is on the wire.
         if (queued) {
             const uint64_t sent_now = now_tick();
-            if (track_sent_frame(packet, packet_length, sent_now)) {
+            if (track_sent_frame(packet, packet_length, sent_now, linklayer->id_)) {
                 fec_note_sent(packet, packet_length, sent_now);
             }
         }
         return queued;
+    }
+
+    /**
+     * @brief Attributes one RTT sample to the carrier that produced it.
+     * @details Observation only. The per-carrier EWMA is maintained so the
+     *          spread across the carriers of this session can be published,
+     *          and NOTHING reads it back: the session keeps its own SRTT and
+     *          its own probe timeout. Per-carrier loss detection is a separate
+     *          decision, and it is not taken here.
+     *
+     *          The sample is exact rather than approximate: the retransmit
+     *          buffer only produces a sample for frames that were never
+     *          retransmitted, so the carrier recorded with the frame is the
+     *          only carrier it travelled on.
+     * @param link_id The carrier that sent the acknowledged frame.
+     * @param sample The round-trip time in milliseconds.
+     */
+    void vmux_net::note_link_rtt_sample(uint16_t link_id, uint64_t sample) noexcept {
+        if (0 == link_id || 0 == sample) {
+            return;
+        }
+
+        vmux_linklayer_ptr target = NULLPTR;
+        for (const vmux_linklayer_ptr& linklayer : rx_links_) {
+            if (NULLPTR != linklayer && linklayer->id_ == link_id) {
+                target = linklayer;
+                break;
+            }
+        }
+        if (NULLPTR == target) {
+            // The carrier was retired between the send and the
+            // acknowledgement. Its sample is lost with it.
+            ppp::telemetry::Count("mux.rtt.link.gone", 1);
+            return;
+        }
+
+        if (0 == target->rtt_samples_) {
+            target->rtt_srtt_ms_ = sample;
+            target->rtt_rttvar_ms_ = sample / 2;
+            target->rtt_min_ms_ = sample;
+        }
+        else {
+            const uint64_t abs_diff = (target->rtt_srtt_ms_ >= sample)
+                ? (target->rtt_srtt_ms_ - sample)
+                : (sample - target->rtt_srtt_ms_);
+            target->rtt_rttvar_ms_ = (target->rtt_rttvar_ms_ * 3 + abs_diff) / 4;
+            target->rtt_srtt_ms_ = (target->rtt_srtt_ms_ * 7 + sample) / 8;
+            if (sample < target->rtt_min_ms_) {
+                target->rtt_min_ms_ = sample;
+            }
+        }
+        target->rtt_samples_++;
+
+        publish_link_rtt_spread();
+    }
+
+    /**
+     * @brief Publishes the spread of the per-carrier RTT estimates.
+     * @details The point of the whole observation: one number that says whether
+     *          the carriers of this session differ enough for a session-level
+     *          probe timeout to be wrong for one of them. A carrier at twice
+     *          the slowest one of the others is the threshold: the session
+     *          level timeout is then half of what the slow carrier needs and
+     *          twice what the fast carrier should wait.
+     */
+    void vmux_net::publish_link_rtt_spread() noexcept {
+        uint64_t count = 0;
+        uint64_t min_srtt = 0;
+        uint64_t max_srtt = 0;
+        for (const vmux_linklayer_ptr& linklayer : rx_links_) {
+            if (NULLPTR == linklayer || 0 == linklayer->rtt_samples_) {
+                continue;
+            }
+            const uint64_t srtt = linklayer->rtt_srtt_ms_;
+            count++;
+            if (0 == min_srtt || srtt < min_srtt) {
+                min_srtt = srtt;
+            }
+            if (srtt > max_srtt) {
+                max_srtt = srtt;
+            }
+        }
+
+        const uint64_t spread = (count > 0) ? (max_srtt - min_srtt) : 0;
+        const uint64_t heterogeneous = (count > 1 && max_srtt >= min_srtt * 2) ? 1 : 0;
+        ppp::app::mux::MuxRuntimeCounterRegistry::SetLinkRttSpread(count, min_srtt, max_srtt, spread, heterogeneous);
     }
 
     /**
@@ -1524,6 +1610,14 @@ namespace vmux {
                     ppp::telemetry::Gauge("mux.tx.queue.depth", static_cast<int64_t>(tx_data_frames_));
                     ppp::telemetry::Gauge("mux.rx.reorder.depth", static_cast<int64_t>(rx_queue_.size()));
                     ppp::telemetry::Gauge("mux.link.count", static_cast<int64_t>(rx_links_.size()));
+
+                    // Per-carrier RTT spread: refresh the published snapshot on
+                    // every tick, not only when a sample arrives. A carrier that
+                    // was retired must drop out of the spread, and the sample
+                    // that noticed its retirement may never come (the frame it
+                    // carried was lost). This tick runs on the vmux strand, so
+                    // walking the link container here is race-free.
+                    publish_link_rtt_spread();
                 }
 
                 update_pending_.store(false, std::memory_order_release);  // H3 fix: allow next update
@@ -3056,9 +3150,16 @@ namespace vmux {
             // order, never merely because it arrived. Releasing cumulatively
             // below it therefore leaves exactly the frames that were sent but
             // not yet delivered — which is also the flow-control budget.
-            const uint64_t sample = rtx_.Ack(key_cid, block.largest, block.ranges, now);
+            uint16_t sample_link_id = 0;
+            const uint64_t sample = rtx_.Ack(key_cid, block.largest, block.ranges, now, &sample_link_id);
             if (sample > 0) {
                 srtt_ms_ = (srtt_ms_ == 0) ? sample : (srtt_ms_ * 7 + sample) / 8;
+                // The same sample, attributed to the carrier that sent the
+                // frame. This is OBSERVATION ONLY: the session keeps its own
+                // SRTT and its own probe timeout, and no decision reads the
+                // per-carrier numbers. They exist to answer whether the
+                // carriers of this session are heterogeneous at all.
+                note_link_rtt_sample(sample_link_id, sample);
             }
         }
 
@@ -3091,7 +3192,7 @@ namespace vmux {
         return true;
     }
 
-    bool vmux_net::track_sent_frame(const std::shared_ptr<Byte>& packet, int packet_length, uint64_t now) noexcept {
+    bool vmux_net::track_sent_frame(const std::shared_ptr<Byte>& packet, int packet_length, uint64_t now, uint16_t link_id) noexcept {
         if (!reliability_on_ || NULLPTR == packet || packet_length < (int)sizeof(vmux_hdr)) {
             return false;
         }
@@ -3120,7 +3221,7 @@ namespace vmux {
         if (NULLPTR != rtx_.Find(key)) {
             return false; // A retransmission, not a first send.
         }
-        if (!rtx_.Track(key_cid, seq, packet, packet_length, now, rtx_cap_bytes_)) {
+        if (!rtx_.Track(key_cid, seq, packet, packet_length, now, rtx_cap_bytes_, link_id)) {
             // The flow-control gate (rtx_budget_allows) is what keeps the
             // retained set inside the peer's reorder budget; reaching this
             // point means the set grew past the cap between the gate and the
@@ -3129,7 +3230,7 @@ namespace vmux {
             // so dropping it would leave a permanent hole that tears the whole
             // session down over a single accounting race.
             ppp::telemetry::Count("mux.rtx.cap", 1);
-            rtx_.Track(key_cid, seq, packet, packet_length, now, 0);
+            rtx_.Track(key_cid, seq, packet, packet_length, now, 0, link_id);
         }
         return true;
     }

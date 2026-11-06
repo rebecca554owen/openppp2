@@ -38,6 +38,7 @@ struct MuxRtxEntry final {
     std::uint64_t                 first_sent_tick = 0; ///< Tick of the first transmission.
     std::uint64_t                 last_sent_tick = 0;  ///< Tick of the most recent (re)transmission.
     std::uint32_t                 attempts = 0;   ///< Retransmissions already performed.
+    std::uint16_t                 orig_link_id = 0; ///< Carrier the frame was FIRST sent on (attributes the RTT sample to that carrier).
     std::list<std::uint64_t>::iterator order;     ///< Position in the insertion-ordered list (stable iterator).
 };
 
@@ -62,7 +63,8 @@ public:
         const std::shared_ptr<std::uint8_t>& buffer,
         int length,
         std::uint64_t now,
-        std::size_t byte_cap) {
+        std::size_t byte_cap,
+        std::uint16_t link_id = 0) {
         const std::uint64_t key = Key(connection_id, sequence);
         if (entries_.find(key) != entries_.end()) {
             return true; // Already tracked (defensive; sends are unique per key).
@@ -77,6 +79,7 @@ public:
         entry.length = length;
         entry.first_sent_tick = now;
         entry.last_sent_tick = now;
+        entry.orig_link_id = link_id;
         entry.order = (--order_.end());
         entries_.emplace(key, std::move(entry));
         bytes_ += static_cast<std::size_t>(length);
@@ -113,8 +116,16 @@ public:
         std::uint32_t connection_id,
         std::uint32_t largest,
         const std::vector<MuxAckRange>& ranges,
-        std::uint64_t now) {
+        std::uint64_t now,
+        std::uint16_t* out_link_id = nullptr) {
         std::uint64_t rtt_sample = 0;
+        if (nullptr != out_link_id) {
+            // Always written: a caller that asks for the attribution gets a
+            // carrier even when the frame produced no sample (a retransmitted
+            // frame, Karn's rule), so "no attribution" is never mistaken for
+            // "the carrier was never recorded".
+            *out_link_id = 0;
+        }
 
         // Collect the keys first: the release loop below erases from the map.
         std::vector<std::uint64_t> acked;
@@ -150,6 +161,12 @@ public:
             }
             if (rtt_sample == 0 && it->second.attempts == 0 && now >= it->second.first_sent_tick) {
                 rtt_sample = now - it->second.first_sent_tick;
+                // The sample belongs to the carrier that sent the frame: the
+                // frame was never retransmitted (attempts == 0), so that
+                // carrier is the only one it travelled on.
+                if (nullptr != out_link_id) {
+                    *out_link_id = it->second.orig_link_id;
+                }
             }
             bytes_ -= static_cast<std::size_t>(it->second.length);
             release_cid_bytes(connection_id, static_cast<std::size_t>(it->second.length));

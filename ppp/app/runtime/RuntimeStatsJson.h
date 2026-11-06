@@ -72,6 +72,11 @@ namespace ppp {
                 counters["mux.tx.ctrl.cap.reject"] = Json::UInt64(sample.mux_counters.tx_ctrl_cap_rejected);
                 counters["mux.ack.suppressed"] = Json::UInt64(sample.mux_counters.tx_ack_suppressed);
                 counters["mux.rx.unknown_cmd"] = Json::UInt64(sample.mux_counters.rx_unknown_cmd);
+                counters["mux.rtt.link.count"] = Json::UInt64(sample.mux_counters.rtt_link_count);
+                counters["mux.rtt.link.min_srtt_ms"] = Json::UInt64(sample.mux_counters.rtt_link_min_srtt_ms);
+                counters["mux.rtt.link.max_srtt_ms"] = Json::UInt64(sample.mux_counters.rtt_link_max_srtt_ms);
+                counters["mux.rtt.link.spread_ms"] = Json::UInt64(sample.mux_counters.rtt_link_spread_ms);
+                counters["mux.rtt.link.heterogeneous"] = Json::UInt64(sample.mux_counters.rtt_link_heterogeneous);
                 root["mux_counters"] = std::move(counters);
 
                 Json::Reader reader;
