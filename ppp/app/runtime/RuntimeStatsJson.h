@@ -71,6 +71,7 @@ namespace ppp {
                 counters["mux.tx.ctrl.cap"] = Json::UInt64(sample.mux_counters.tx_ctrl_cap);
                 counters["mux.tx.ctrl.cap.reject"] = Json::UInt64(sample.mux_counters.tx_ctrl_cap_rejected);
                 counters["mux.ack.suppressed"] = Json::UInt64(sample.mux_counters.tx_ack_suppressed);
+                counters["mux.rx.unknown_cmd"] = Json::UInt64(sample.mux_counters.rx_unknown_cmd);
                 root["mux_counters"] = std::move(counters);
 
                 Json::Reader reader;

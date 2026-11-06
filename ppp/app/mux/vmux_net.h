@@ -385,6 +385,18 @@ namespace vmux {
             return cmd == cmd_push || cmd == cmd_fin;
         }
         /**
+         * @brief True for a command byte this build knows how to act on.
+         * @details Derived from the four classifiers above, so it never drifts
+         *          from the dispatch: a command that belongs to no group is
+         *          not one this build can handle. A peer that speaks another
+         *          dialect sends exactly those, and they must not take the
+         *          carrier or the session down -- they are counted and skipped.
+         */
+        static bool                                                                 is_known_cmd(Byte cmd) noexcept {
+            return is_session_control(cmd) || is_connection_control(cmd) ||
+                is_reliability_control(cmd) || is_per_flow_data(cmd);
+        }
+        /**
          * @brief True when this scheduler configuration uses negotiated per-flow
          *        receiver ordering (flow v2 / per-flow DSN).
          * @details balance spreads one session's frames across links by competition

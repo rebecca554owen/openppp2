@@ -311,6 +311,27 @@ struct vmux_net_test_access {
         });
     }
 
+    /**
+     * @brief Injects one frame carrying a command byte this build does not know.
+     * @details The frame goes through the same receive path as a real one, so
+     *          the test sees what the session does with it.
+     */
+    static bool InjectUnknownCmd(vmux_net& mux, std::uint8_t cmd, std::uint64_t now) {
+        return RunOnStrand(mux, [&]() {
+            const int frame_len = static_cast<int>(sizeof(vmux_net::vmux_hdr));
+            std::vector<std::uint8_t> frame(static_cast<std::size_t>(frame_len));
+            auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(frame.data());
+            std::memset(h, 0, sizeof(*h));
+            h->cmd = cmd;
+            return mux.packet_input_flow(vmux_net::vmux_linklayer_ptr{}, h, frame_len, now);
+        });
+    }
+
+    /** @brief The number of unknown commands seen so far (process-wide counter). */
+    static std::uint64_t UnknownCmdCount() {
+        return ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot().rx_unknown_cmd;
+    }
+
     static void EvictExpired(vmux_net& mux, std::uint64_t now) {
         RunOnStrandVoid(mux, [&]() { mux.flow_evict_expired(now); });
     }
@@ -1698,6 +1719,50 @@ void TestAckCoalescingNeverSuppressesAForcedAck() {
         "a forced acknowledgement must never be suppressed");
 }
 
+// A command this build does not know is skipped and counted: it must not
+// take the session down, and the frames that follow it must still be
+// delivered. This is the first stage of the P2-8 decision: make the event
+// observable before deciding whether it should ever be fatal.
+void TestUnknownCommandIsSkippedAndCounted() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, 42);
+
+    const std::uint64_t before = vmux::vmux_net_test_access::UnknownCmdCount();
+    Require(vmux::vmux_net_test_access::InjectUnknownCmd(*mux, 0xFF, 9000),
+        "an unknown command must be skipped, not fatal");
+    Require(!vmux::vmux_net_test_access::IsDisposed(*mux),
+        "an unknown command must not tear the session down");
+    Require(vmux::vmux_net_test_access::UnknownCmdCount() == before + 1,
+        "an unknown command must be counted");
+
+    // The next frame still goes through.
+    const char p[] = "A";
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, 42, 1, p, 1, 9100),
+        "a frame after an unknown command must still be delivered");
+    Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 1,
+        "the frame after an unknown command must reach the socket");
+}
+
+// The same in compat ordering, where an unknown command must not move the
+// delivery frontier either: the peer keeps its copy and retransmits it, and
+// an acknowledgement for a frame we never acted on would tell the peer it was
+// delivered.
+void TestUnknownCommandDoesNotMoveTheCompatFrontier() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureCompat(*mux, /*gap timeout*/ 1000);
+
+    const std::uint64_t before = vmux::vmux_net_test_access::UnknownCmdCount();
+    Require(vmux::vmux_net_test_access::InjectUnknownCmd(*mux, 0xFE, 9000),
+        "an unknown command must be skipped in compat ordering too");
+    Require(!vmux::vmux_net_test_access::IsDisposed(*mux),
+        "an unknown command must not tear the compat session down");
+    Require(vmux::vmux_net_test_access::UnknownCmdCount() == before + 1,
+        "an unknown command must be counted in compat ordering too");
+    Require(vmux::vmux_net_test_access::CompatReorderSize(*mux) == 0,
+        "an unknown command must not enter the reorder buffer");
+}
+
 int main() {
     try {
         TestReceiverRefusesUnknownFlow();
@@ -1742,6 +1807,8 @@ int main() {
         TestControlQueueCapDropsARefusalButNotAnAcceptance();
         TestAckCoalescingMergesAFrameInsideTheWindow();
         TestAckCoalescingNeverSuppressesAForcedAck();
+        TestUnknownCommandIsSkippedAndCounted();
+        TestUnknownCommandDoesNotMoveTheCompatFrontier();
         std::cout << "vmux_receive_semantics_test: ok" << std::endl;
         return 0;
     }

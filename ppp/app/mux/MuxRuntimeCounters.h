@@ -43,6 +43,7 @@ struct MuxRuntimeCounters final {
     std::uint64_t tx_ctrl_cap = 0;                   ///< mux.tx.ctrl.cap
     std::uint64_t tx_ctrl_cap_rejected = 0;          ///< mux.tx.ctrl.cap.reject
     std::uint64_t tx_ack_suppressed = 0;               ///< mux.ack.suppressed
+    std::uint64_t rx_unknown_cmd = 0;                   ///< mux.rx.unknown_cmd
 };
 
 /**
@@ -138,6 +139,10 @@ public:
         tx_ack_suppressed_.fetch_add(n, std::memory_order_relaxed);
     }
 
+    static void AddRxUnknownCmd(std::uint64_t n = 1) noexcept {
+        rx_unknown_cmd_.fetch_add(n, std::memory_order_relaxed);
+    }
+
     /** @brief Reads every counter without locking. */
     static MuxRuntimeCounters GetSnapshot() noexcept {
         MuxRuntimeCounters snap;
@@ -162,6 +167,7 @@ public:
         snap.tx_ctrl_cap = tx_ctrl_cap_.load(std::memory_order_relaxed);
         snap.tx_ctrl_cap_rejected = tx_ctrl_cap_rejected_.load(std::memory_order_relaxed);
         snap.tx_ack_suppressed = tx_ack_suppressed_.load(std::memory_order_relaxed);
+        snap.rx_unknown_cmd = rx_unknown_cmd_.load(std::memory_order_relaxed);
         return snap;
     }
 
@@ -188,6 +194,7 @@ public:
         tx_ctrl_cap_.store(0, std::memory_order_relaxed);
         tx_ctrl_cap_rejected_.store(0, std::memory_order_relaxed);
         tx_ack_suppressed_.store(0, std::memory_order_relaxed);
+        rx_unknown_cmd_.store(0, std::memory_order_relaxed);
     }
 
 private:
@@ -212,6 +219,7 @@ private:
     inline static std::atomic<std::uint64_t> tx_ctrl_cap_{ 0 };
     inline static std::atomic<std::uint64_t> tx_ctrl_cap_rejected_{ 0 };
     inline static std::atomic<std::uint64_t> tx_ack_suppressed_{ 0 };
+    inline static std::atomic<std::uint64_t> rx_unknown_cmd_{ 0 };
 };
 
 }  // namespace ppp::app::mux

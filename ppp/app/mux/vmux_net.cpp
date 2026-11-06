@@ -1564,6 +1564,19 @@ namespace vmux {
             return false;
         }
 
+        // A command this build does not know is skipped and counted. It
+        // must not be acknowledged as delivered and it must not move the
+        // delivery frontier: the peer keeps its copy and retransmits it, and
+        // an acknowledgement for a frame we never acted on would tell the
+        // peer it was delivered. The session survives: a peer that speaks
+        // another dialect must not take the whole session down.
+        if (!is_known_cmd(h->cmd)) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
+            ppp::telemetry::Count("mux.rx.unknown_cmd", 1);
+            ppp::app::mux::MuxRuntimeCounterRegistry::AddRxUnknownCmd();
+            return true;
+        }
+
         ppp::telemetry::Count("mux.link.recv", 1);
         ppp::app::mux::MuxRuntimeCounterRegistry::AddRxFrames();
 
@@ -1884,7 +1897,11 @@ namespace vmux {
             active(now);
         }
         else {
+            // Defensive: the carrier loop and the two receive paths already
+            // filter unknown commands out. If a command ever reaches here
+            // without a handler, it is counted and skipped, never fatal.
             ppp::telemetry::Count("mux.rx.unknown_cmd", 1);
+            ppp::app::mux::MuxRuntimeCounterRegistry::AddRxUnknownCmd();
             return true;
         }
 
@@ -2253,6 +2270,19 @@ namespace vmux {
         if (base_.disposed_.load(std::memory_order_acquire)) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
             return false;
+        }
+
+        // A command this build does not know is skipped and counted. It
+        // must not be acknowledged as delivered and it must not move the
+        // delivery frontier: the peer keeps its copy and retransmits it, and
+        // an acknowledgement for a frame we never acted on would tell the
+        // peer it was delivered. The session survives: a peer that speaks
+        // another dialect must not take the whole session down.
+        if (!is_known_cmd(h->cmd)) {
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
+            ppp::telemetry::Count("mux.rx.unknown_cmd", 1);
+            ppp::app::mux::MuxRuntimeCounterRegistry::AddRxUnknownCmd();
+            return true;
         }
 
         ppp::telemetry::Count("mux.link.recv", 1);
@@ -4824,9 +4854,16 @@ namespace vmux {
 
             vmux_hdr* h = (vmux_hdr*)buffer_memory.get();
             Byte cmd = h->cmd;
-            if (cmd <= cmd_none || cmd >= cmd_max) {
+            if (!is_known_cmd(cmd)) {
+                // A command this build does not know comes from a peer that
+                // speaks another dialect (or from a broken peer). It is
+                // skipped and counted: it must NOT take the carrier down,
+                // because a carrier that exits on one odd frame costs a
+                // reconnect, and it must not take the session down either.
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::ProtocolPacketActionInvalid);
-                break;
+                ppp::telemetry::Count("mux.rx.unknown_cmd", 1);
+                ppp::app::mux::MuxRuntimeCounterRegistry::AddRxUnknownCmd();
+                continue;
             }
 
             bool posted = vmux_post_exec(context_, strand_,
