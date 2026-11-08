@@ -41,6 +41,12 @@ done
 ASAN_OPTIONS=${ASAN_OPTIONS:-quarantine_size_mb=128:malloc_context_size=8}
 export ASAN_OPTIONS
 
+# The leak detector stays on: a leak in the target is a finding. Only the
+# watchdog thread of the fuzzer itself is suppressed, because that thread is
+# never joined and its state is still alive when the process exits.
+LSAN_OPTIONS="suppressions=$ROOT/tests/fuzz/lsan.supp${LSAN_OPTIONS:+:$LSAN_OPTIONS}"
+export LSAN_OPTIONS
+
 FAILED=0
 
 for target in fuzz_vmux_ack fuzz_vmux_frame; do

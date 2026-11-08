@@ -1937,9 +1937,49 @@ void TestAFlowPastTheHardCeilingIsStillFailed() {
         "a flow past the hard ceiling must be failed");
 }
 
+/**
+ * @brief A closed session must release itself.
+ * @details A session owns its flows and a flow owns the session, so an open
+ *          flow keeps the session alive -- that is the normal state of a
+ *          running session. The teardown is what breaks the cycle: the
+ *          finalizer drops the flow map, and only then does the session have
+ *          no owner left. A session that is abandoned without being closed
+ *          stays alive until the process exits, which is the leak that the
+ *          fuzz target runs into when it drops a session it did not close.
+ */
+void TestClosedSessionIsReleased() {
+    auto context = std::make_shared<boost::asio::io_context>();
+    auto strand = std::make_shared<Executors::Strand>(context->get_executor());
+    auto mux = ppp::make_shared_object<vmux::vmux_net>(
+        context, strand, 1, true, false, vmux::vmux_net::mux_mode_balance);
+    Require(static_cast<bool>(mux), "vmux allocation failed");
+    auto cfg = ppp::make_shared_object<ppp::configurations::AppConfiguration>();
+    Require(static_cast<bool>(cfg), "cfg allocation failed");
+    cfg->mux.congestions = 0;
+    mux->AppConfiguration = cfg;
+
+    // An open flow: the flow holds the session, the session holds the flow.
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, 42);
+    std::weak_ptr<vmux::vmux_net> weak = mux;
+
+    // Closing posts the finalizer to the strand, so the context has to run it.
+    mux->close_exec();
+    context->restart();
+    context->poll();
+
+    // The caller drops every handle it holds.
+    mux.reset();
+    skt.reset();
+    context.reset();
+    strand.reset();
+
+    Require(weak.expired(), "a closed session must be released");
+}
+
 int main() {
     try {
         TestReceiverRefusesUnknownFlow();
+        TestClosedSessionIsReleased();
         TestRefusalThatCannotBePostedIsCounted();
         TestRefusalReleasesRetainedFramesWithoutLocalSocket();
         TestClosedSocketRemembersTheFlow();

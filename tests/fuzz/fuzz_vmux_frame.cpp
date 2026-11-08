@@ -18,6 +18,8 @@
 #include <ppp/configurations/AppConfiguration.h>
 
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -61,15 +63,47 @@ constexpr std::uint64_t kRebuildEvery = 64;
 std::shared_ptr<boost::asio::io_context> g_context;
 std::shared_ptr<Executors::Strand> g_strand;
 std::shared_ptr<vmux::vmux_net> g_mux;
+std::weak_ptr<vmux::vmux_net> g_last_session;
 std::uint64_t g_iterations = 0;
 
-void Rebuild() {
+/**
+ * @brief Closes the session and releases everything that belongs to it.
+ * @details A session must be closed before it is dropped. An abandoned
+ *          session keeps a reference cycle (the session owns its flows, a
+ *          flow owns the session), and only the teardown path breaks that
+ *          cycle. A session that is simply dropped is therefore never
+ *          released: the session, its strand and its context stay alive
+ *          until the process exits, and the leak detector reports the whole
+ *          island as unreachable garbage once the globals are gone.
+ *
+ *          The teardown is posted on the strand, so the context has to run
+ *          it before the session can be released. The check at the end is
+ *          the harness guarantee: a session that survives its own teardown
+ *          is a finding, not a fuzzing artefact.
+ */
+void Teardown() {
+    if (g_mux) {
+        g_last_session = g_mux;
+        g_mux->close_exec();
+    }
     if (g_context) {
+        g_context->restart();
+        g_context->poll();
         g_context->stop();
     }
     g_mux.reset();
     g_strand.reset();
     g_context.reset();
+
+    if (!g_last_session.expired()) {
+        std::fprintf(stderr, "the vmux session survived its own teardown\n");
+        std::abort();
+    }
+    g_last_session.reset();
+}
+
+void Rebuild() {
+    Teardown();
 
     g_context = std::make_shared<boost::asio::io_context>();
     g_strand = std::make_shared<Executors::Strand>(g_context->get_executor());
