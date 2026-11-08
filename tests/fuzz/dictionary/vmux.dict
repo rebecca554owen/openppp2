@@ -1,0 +1,22 @@
+# The vmux wire vocabulary, for libFuzzer's dictionary mode.
+# Tokens are matched anywhere in the input, so a frame built from these
+# pieces reaches the interesting branches much sooner than random bytes do.
+
+"cmd_syn="
+"cmd_syn_ok="
+"cmd_push="
+"cmd_fin="
+"cmd_keep_alived="
+"cmd_acceleration="
+"cmd_mux_mode_set="
+"cmd_ack="
+"cmd_fec="
+
+"MUXON"
+"MUXOFF"
+"/tun"
+
+"connection_id"
+"largest"
+"range_count"
+"block_count"

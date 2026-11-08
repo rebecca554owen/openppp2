@@ -10,7 +10,7 @@
  *
  *   - Per-flow TX queue frame cap (PPP_MUX_TX_FLOW_MAX_FRAMES = 256)
  *   - Per-flow TX queue byte cap (PPP_MUX_TX_FLOW_MAX_BYTES = 1 MiB)
- *   - Per-flow RTX byte cap (PPP_MUX_RTX_FLOW_MAX_BYTES = 2 MiB)
+ *   - Per-flow RTX byte cap (PPP_MUX_RELIABILITY_RTX_FLOW_BYTES = 4 MiB)
  *   - Control frame queue hard cap (PPP_MUX_TX_CTRL_MAX_FRAMES = 256)
  *   - Session-wide RTX byte cap (PPP_MUX_RELIABILITY_RTX_BYTES = 8 MiB)
  *
@@ -32,17 +32,20 @@
 #include <deque>
 #include <unordered_map>
 
+#include <ppp/stdafx.h>
 #include <ppp/app/mux/MuxRetransmitBuffer.h>
 #include <ppp/app/mux/MuxAckTracker.h>
 
 // We can't include stdafx.h (it pulls in the world), so define the constants
 // we need. These MUST match the values in ppp/stdafx.h.
 namespace {
-    constexpr int PPP_MUX_TX_FLOW_MAX_FRAMES      = 256;
-    constexpr int PPP_MUX_TX_FLOW_MAX_BYTES       = 1 << 20;  // 1 MiB
-    constexpr int PPP_MUX_RTX_FLOW_MAX_BYTES      = 2 << 20;  // 2 MiB
-    constexpr int PPP_MUX_TX_CTRL_MAX_FRAMES      = 256;
-    constexpr int PPP_MUX_RELIABILITY_RTX_BYTES   = 8 << 20;  // 8 MiB
+    // The upstream copy of this file carried its own copy of the mux
+    // constants. They are the upstream values, not this repository's: the
+    // session retransmit budget is 32 MiB here rather than 8 MiB, and the
+    // per-flow budget is 4 MiB rather than 2 MiB. Testing against the
+    // constants this repository actually ships is the point of running the
+    // file at all, so the local copies are gone and ppp/stdafx.h provides
+    // the real ones.
 }
 
 namespace mux = ppp::app::mux;
@@ -64,8 +67,8 @@ static std::shared_ptr<std::uint8_t> make_buffer(int length, std::uint32_t seed)
 // 1. Per-flow RTX byte cap isolation
 //
 // Simulates the production logic in vmux_net::track_sent_frame():
-//   - Each flow has its own RTX byte counter (rtx_flow_bytes_[cid])
-//   - When a flow's counter exceeds PPP_MUX_RTX_FLOW_MAX_BYTES, that flow
+//   - Each flow has its own RTX byte total (MuxRetransmitBuffer::BytesForCid)
+//   - When a flow's total exceeds the per-flow budget, that flow
 //     is failed (simulated by EraseCid), not the whole session.
 //   - Other flows' RTX entries must survive.
 // ===========================================================================
@@ -75,19 +78,20 @@ BOOST_AUTO_TEST_CASE(per_flow_rtx_cap_isolates_flow_failure) {
     // When flow 1 overflows, only flow 1 is cleaned up; flow 2 is untouched.
     mux::MuxRetransmitBuffer rtx;
     const std::size_t session_cap = PPP_MUX_RELIABILITY_RTX_BYTES;
-    const std::size_t per_flow_cap = PPP_MUX_RTX_FLOW_MAX_BYTES;
-
-    // Simulate per-flow byte tracking (mirrors rtx_flow_bytes_ in vmux_net).
-    std::unordered_map<std::uint32_t, std::size_t> rtx_flow_bytes;
+    // The per-flow budget is the fork's own constant. The accounting it is
+    // checked against is the buffer's own: BytesForCid() is what
+    // vmux_net::rtx_budget_allows() reads before it lets a frame into the
+    // retransmit buffer, so this case tests the real number, not a model
+    // of it.
+    const std::size_t per_flow_cap = PPP_MUX_RELIABILITY_RTX_FLOW_BYTES;
 
     const int frame_len = 64 * 1024; // 64 KiB per frame
 
     // Fill flow 1 up to just below the per-flow cap.
-    // 2 MiB / 64 KiB = 32 frames exactly fills 2 MiB.
+    // 4 MiB / 64 KiB = 64 frames exactly fills the per-flow budget.
     std::uint32_t seq = 1;
-    for (int i = 0; i < 31; ++i) { // 31 * 64K = 1,984K < 2 MiB
+    for (int i = 0; i < 63; ++i) { // 63 * 64K = 4,032K < 4 MiB
         BOOST_TEST(rtx.Track(1, seq, make_buffer(frame_len, seq), frame_len, 1000 + i, session_cap));
-        rtx_flow_bytes[1] += frame_len;
         ++seq;
     }
 
@@ -95,25 +99,24 @@ BOOST_AUTO_TEST_CASE(per_flow_rtx_cap_isolates_flow_failure) {
     for (int i = 0; i < 5; ++i) {
         BOOST_TEST(rtx.Track(2, static_cast<std::uint32_t>(100 + i),
             make_buffer(frame_len, 200 + i), frame_len, 1000 + i, session_cap));
-        rtx_flow_bytes[2] += frame_len;
     }
 
-    BOOST_TEST(rtx.size() == 36u); // 31 + 5
-    BOOST_TEST(rtx.bytes() == 36u * frame_len);
+    BOOST_TEST(rtx.size() == 68u); // 63 + 5
+    BOOST_TEST(rtx.bytes() == 68u * frame_len);
 
-    // The 32nd frame for flow 1 would push flow 1 to exactly 2 MiB (OK).
-    BOOST_TEST(rtx_flow_bytes[1] + frame_len <= per_flow_cap);
+    // The 64th frame for flow 1 would push flow 1 to exactly the budget (OK).
+    BOOST_TEST(rtx.BytesForCid(1) + frame_len <= per_flow_cap);
     BOOST_TEST(rtx.Track(1, seq, make_buffer(frame_len, seq), frame_len, 2000, session_cap));
-    rtx_flow_bytes[1] += frame_len;
     ++seq;
 
-    // The 33rd frame for flow 1 would exceed per-flow cap → fail flow 1.
-    BOOST_TEST(rtx_flow_bytes[1] + frame_len > per_flow_cap);
+    // The 65th frame for flow 1 would exceed the per-flow budget → fail flow 1.
+    BOOST_TEST(rtx.BytesForCid(1) + frame_len > per_flow_cap);
 
     // Production code calls fail_flow(1, "rtx_flow_overflow") which calls
-    // release_flow_reliability_state(1) → EraseCid(1) + rtx_flow_bytes_.erase(1).
+    // release_flow_reliability_state(1) → EraseCid(1). EraseCid releases the
+    // per-space byte total as well, so the budget is whole again afterwards.
     rtx.EraseCid(1);
-    rtx_flow_bytes.erase(1);
+    BOOST_TEST(rtx.BytesForCid(1) == 0u);
 
     // Flow 2 entries must be untouched.
     BOOST_TEST(rtx.size() == 5u);
@@ -133,43 +136,50 @@ BOOST_AUTO_TEST_CASE(per_flow_rtx_cap_does_not_block_other_flows) {
     // another flow can still track frames up to its own cap.
     mux::MuxRetransmitBuffer rtx;
     const std::size_t session_cap = PPP_MUX_RELIABILITY_RTX_BYTES;
-    const std::size_t per_flow_cap = PPP_MUX_RTX_FLOW_MAX_BYTES;
+    const std::size_t per_flow_cap = PPP_MUX_RELIABILITY_RTX_FLOW_BYTES;
 
     // Flow 1 uses its full per-flow budget.
     const int big_frame = 1 * 1024 * 1024; // 1 MiB
-    BOOST_TEST(rtx.Track(1, 1, make_buffer(big_frame, 0x101), big_frame, 1000, session_cap));
-    BOOST_TEST(rtx.Track(1, 2, make_buffer(big_frame, 0x102), big_frame, 1010, session_cap));
-    // 2 MiB used by flow 1 — at per-flow cap.
+    for (int i = 0; i < 4; ++i) {
+        BOOST_TEST(rtx.Track(1, static_cast<std::uint32_t>(i + 1),
+            make_buffer(big_frame, 0x101 + i), big_frame, 1000 + i, session_cap));
+    }
+    // 4 MiB used by flow 1 — at the per-flow budget.
+    BOOST_TEST(rtx.BytesForCid(1) == per_flow_cap);
 
     // Flow 2 can still send.
     BOOST_TEST(rtx.Track(2, 1, make_buffer(big_frame, 0x201), big_frame, 1020, session_cap));
     BOOST_TEST(rtx.Track(2, 2, make_buffer(big_frame, 0x202), big_frame, 1030, session_cap));
 
-    BOOST_TEST(rtx.size() == 4u);
-    BOOST_TEST(rtx.bytes() == static_cast<std::size_t>(4 * big_frame));
+    BOOST_TEST(rtx.size() == 6u);
+    BOOST_TEST(rtx.bytes() == static_cast<std::size_t>(6 * big_frame));
 
-    // Session cap (8 MiB) not yet reached. Flow 2 can continue.
+    // Session cap not yet reached. Flow 2 can continue.
     BOOST_TEST(rtx.Track(2, 3, make_buffer(big_frame, 0x203), big_frame, 1040, session_cap));
-    BOOST_TEST(rtx.size() == 5u);
+    BOOST_TEST(rtx.size() == 7u);
 }
 
 BOOST_AUTO_TEST_CASE(session_rtx_cap_still_enforced_alongside_per_flow_cap) {
     // Even with per-flow caps, the session-wide cap must still prevent
-    // unbounded total RTX growth. With per_flow_cap = 2 MiB and session_cap
-    // = 8 MiB, at most 4 flows can be at their per-flow cap simultaneously.
+    // unbounded total RTX growth. With the per-flow budget at 4 MiB and the
+    // session budget at 32 MiB, eight flows can sit at their per-flow budget
+    // at the same time, and the ninth one is refused.
     mux::MuxRetransmitBuffer rtx;
     const std::size_t session_cap = PPP_MUX_RELIABILITY_RTX_BYTES;
 
-    // 4 flows × 2 MiB = 8 MiB = session cap. The 5th flow should be rejected.
-    for (std::uint32_t cid = 1; cid <= 4; ++cid) {
-        BOOST_TEST(rtx.Track(cid, 1, make_buffer(1 << 20, cid * 100), 1 << 20, 1000, session_cap));
-        BOOST_TEST(rtx.Track(cid, 2, make_buffer(1 << 20, cid * 100 + 1), 1 << 20, 1010, session_cap));
+    // 8 flows × 4 MiB = 32 MiB = session cap. The 9th flow should be rejected.
+    for (std::uint32_t cid = 1; cid <= 8; ++cid) {
+        for (std::uint32_t seq = 1; seq <= 4; ++seq) {
+            BOOST_TEST(rtx.Track(cid, seq, make_buffer(1 << 20, cid * 100 + seq),
+                1 << 20, 1000 + seq, session_cap));
+        }
     }
-    BOOST_TEST(rtx.bytes() == 8u * (1 << 20));
+    BOOST_TEST(rtx.bytes() == 32u * (1 << 20));
+    BOOST_TEST(rtx.BytesForCid(1) == static_cast<std::size_t>(4 << 20));
 
-    // 5th flow: session cap exceeded.
-    BOOST_TEST(!rtx.Track(5, 1, make_buffer(1 << 20, 501), 1 << 20, 1020, session_cap));
-    BOOST_TEST(rtx.size() == 8u); // unchanged
+    // 9th flow: session cap exceeded.
+    BOOST_TEST(!rtx.Track(9, 1, make_buffer(1 << 20, 901), 1 << 20, 1020, session_cap));
+    BOOST_TEST(rtx.size() == 32u); // unchanged
 }
 
 // ===========================================================================
@@ -271,11 +281,11 @@ BOOST_AUTO_TEST_CASE(slow_consumer_isolation_rtx) {
     // Flows 2-5 are normal. When flow 1 is failed, flows 2-5 continue.
     mux::MuxRetransmitBuffer rtx;
     const std::size_t session_cap = PPP_MUX_RELIABILITY_RTX_BYTES;
-    const std::size_t per_flow_cap = PPP_MUX_RTX_FLOW_MAX_BYTES;
+    const std::size_t per_flow_cap = PPP_MUX_RELIABILITY_RTX_FLOW_BYTES;
 
-    // Flow 1: fill per-flow cap (2 MiB / 64 KiB = 32 frames).
+    // Flow 1: fill the per-flow budget (4 MiB / 64 KiB = 64 frames).
     const int frame_len = 64 * 1024;
-    for (int i = 0; i < 32; ++i) {
+    for (int i = 0; i < 64; ++i) {
         rtx.Track(1, static_cast<std::uint32_t>(i + 1),
             make_buffer(frame_len, 0x100 + i), frame_len, 1000 + i, session_cap);
     }
@@ -289,7 +299,7 @@ BOOST_AUTO_TEST_CASE(slow_consumer_isolation_rtx) {
         }
     }
 
-    BOOST_TEST(rtx.size() == 44u); // 32 + 4*3
+    BOOST_TEST(rtx.size() == 76u); // 64 + 4*3
 
     // Flow 1 overflows per-flow cap → fail_flow(1) → EraseCid(1).
     rtx.EraseCid(1);
@@ -496,42 +506,40 @@ BOOST_AUTO_TEST_CASE(ctrl_queue_mixed_eviction_prefers_oldest_ack) {
 BOOST_AUTO_TEST_CASE(ack_release_frees_per_flow_rtx_budget) {
     mux::MuxRetransmitBuffer rtx;
     const std::size_t session_cap = PPP_MUX_RELIABILITY_RTX_BYTES;
-    const std::size_t per_flow_cap = PPP_MUX_RTX_FLOW_MAX_BYTES;
+    const std::size_t per_flow_cap = PPP_MUX_RELIABILITY_RTX_FLOW_BYTES;
 
-    // Simulate per-flow byte tracking.
-    std::unordered_map<std::uint32_t, std::size_t> rtx_flow_bytes;
-
-    // Fill flow 1 to near per-flow cap.
+    // Fill flow 1 to near the per-flow budget. The byte total is the
+    // buffer's own: BytesForCid() is what the production gate reads.
     const int frame_len = 512 * 1024; // 512 KiB
-    // 2 MiB / 512 KiB = 4 frames exactly at cap.
-    for (int i = 0; i < 4; ++i) {
+    // 4 MiB / 512 KiB = 8 frames exactly at the budget.
+    for (int i = 0; i < 8; ++i) {
         rtx.Track(1, static_cast<std::uint32_t>(i + 1),
             make_buffer(frame_len, 0x100 + i), frame_len, 1000 + i, session_cap);
-        rtx_flow_bytes[1] += frame_len;
     }
 
-    BOOST_TEST(rtx_flow_bytes[1] == per_flow_cap);
+    BOOST_TEST(rtx.BytesForCid(1) == per_flow_cap);
 
-    // Per-flow cap would block a 5th frame.
-    BOOST_TEST(rtx_flow_bytes[1] + frame_len > per_flow_cap);
+    // The per-flow budget would block a 9th frame.
+    BOOST_TEST(rtx.BytesForCid(1) + frame_len > per_flow_cap);
 
     // ACK releases seq 1 and 2 (1 MiB freed).
-    std::vector<std::uint64_t> fast;
+    // The upstream signature carries a fast-retransmit candidate list; this
+    // repository has no fast retransmit (the fork detects loss with PTO
+    // alone), so Ack() takes four arguments and returns no candidates.
     std::vector<mux::MuxAckRange> ranges = {{1, 2}};
-    rtx.Ack(1, 2, ranges, 2000, 3, 0, fast);
+    rtx.Ack(1, 2, ranges, 2000);
 
-    // Production code would also decrease rtx_flow_bytes_[1] by the freed bytes.
-    // Simulate: 2 frames × 512 KiB = 1 MiB freed.
-    rtx_flow_bytes[1] -= 2 * frame_len;
+    // The acknowledgement releases the bytes as well: the buffer keeps the
+    // per-space total in step with the entries it holds, so the freed
+    // budget is real and not a number the test maintains by hand.
+    // 2 frames × 512 KiB = 1 MiB freed.
+    BOOST_TEST(rtx.BytesForCid(1) == per_flow_cap - 2 * frame_len);
 
-    BOOST_TEST(rtx_flow_bytes[1] == per_flow_cap - 2 * frame_len);
+    // Now a new frame fits within the per-flow budget.
+    BOOST_TEST(rtx.BytesForCid(1) + frame_len <= per_flow_cap);
+    BOOST_TEST(rtx.Track(1, 9, make_buffer(frame_len, 0x105), frame_len, 2100, session_cap));
 
-    // Now a new frame fits within the per-flow cap.
-    BOOST_TEST(rtx_flow_bytes[1] + frame_len <= per_flow_cap);
-    BOOST_TEST(rtx.Track(1, 5, make_buffer(frame_len, 0x105), frame_len, 2100, session_cap));
-    rtx_flow_bytes[1] += frame_len;
-
-    BOOST_TEST(rtx.size() == 3u); // seq 3, 4, 5
+    BOOST_TEST(rtx.size() == 7u); // seq 3..8 plus the new one
 }
 
 // ===========================================================================
@@ -592,11 +600,11 @@ BOOST_AUTO_TEST_CASE(per_flow_caps_are_reasonable_relative_to_session_caps) {
 
     // Per-flow RTX cap must be less than the session RTX cap, so at least
     // a few flows can coexist.
-    BOOST_TEST(PPP_MUX_RTX_FLOW_MAX_BYTES < PPP_MUX_RELIABILITY_RTX_BYTES);
+    BOOST_TEST(PPP_MUX_RELIABILITY_RTX_FLOW_BYTES < PPP_MUX_RELIABILITY_RTX_BYTES);
 
     // Per-flow RTX cap should be a fraction (e.g. 1/4) of session cap,
     // allowing at least 4 concurrent flows at full per-flow RTX.
-    BOOST_TEST(PPP_MUX_RELIABILITY_RTX_BYTES / PPP_MUX_RTX_FLOW_MAX_BYTES >= 4);
+    BOOST_TEST(PPP_MUX_RELIABILITY_RTX_BYTES / PPP_MUX_RELIABILITY_RTX_FLOW_BYTES >= 4);
 
     // Control queue cap should be smaller than per-flow TX frame cap,
     // because control frames should never monopolize the session.

@@ -126,10 +126,10 @@ BOOST_AUTO_TEST_CASE(rtx_track_and_ack_across_wrap) {
     mux::MuxRetransmitBuffer rtx;
     constexpr std::size_t cap = 1 << 20;
 
-    BOOST_TEST(rtx.Track(1, 0xFFFFFFFEu, make_frame(1), 10, 1000, cap, 0));
-    BOOST_TEST(rtx.Track(1, 0xFFFFFFFFu, make_frame(2), 10, 2000, cap, 0));
-    BOOST_TEST(rtx.Track(1, 0, make_frame(3), 10, 3000, cap, 0));
-    BOOST_TEST(rtx.Track(1, 1, make_frame(4), 10, 4000, cap, 0));
+    BOOST_TEST(rtx.Track(1, 0xFFFFFFFEu, make_frame(1), 10, 1000, cap));
+    BOOST_TEST(rtx.Track(1, 0xFFFFFFFFu, make_frame(2), 10, 2000, cap));
+    BOOST_TEST(rtx.Track(1, 0, make_frame(3), 10, 3000, cap));
+    BOOST_TEST(rtx.Track(1, 1, make_frame(4), 10, 4000, cap));
     BOOST_TEST(rtx.size() == 4u);
 
     // ACK with two non-wrapping ranges (the tracker never generates cross-wrap
@@ -138,8 +138,7 @@ BOOST_AUTO_TEST_CASE(rtx_track_and_ack_across_wrap) {
         {0xFFFFFFFEu, 0xFFFFFFFFu},
         {0u, 1u}
     };
-    std::vector<std::uint64_t> fast_candidates;
-    std::uint64_t rtt = rtx.Ack(1, 1, ranges, 5000, 3, 0, fast_candidates);
+    std::uint64_t rtt = rtx.Ack(1, 1, ranges, 5000);
 
     // All four frames should be released.
     BOOST_TEST(rtx.size() == 0u);
@@ -157,14 +156,13 @@ BOOST_AUTO_TEST_CASE(rtx_partial_ack_across_wrap) {
     mux::MuxRetransmitBuffer rtx;
     constexpr std::size_t cap = 1 << 20;
 
-    rtx.Track(1, 0xFFFFFFFEu, make_frame(1), 10, 1000, cap, 0);
-    rtx.Track(1, 0xFFFFFFFFu, make_frame(2), 10, 2000, cap, 0);
-    rtx.Track(1, 0, make_frame(3), 10, 3000, cap, 0);
-    rtx.Track(1, 1, make_frame(4), 10, 4000, cap, 0);
+    rtx.Track(1, 0xFFFFFFFEu, make_frame(1), 10, 1000, cap);
+    rtx.Track(1, 0xFFFFFFFFu, make_frame(2), 10, 2000, cap);
+    rtx.Track(1, 0, make_frame(3), 10, 3000, cap);
+    rtx.Track(1, 1, make_frame(4), 10, 4000, cap);
 
     std::vector<mux::MuxAckRange> ranges = { {0xFFFFFFFEu, 0xFFFFFFFFu} };
-    std::vector<std::uint64_t> fast_candidates;
-    rtx.Ack(1, 0xFFFFFFFFu, ranges, 5000, 3, 0, fast_candidates);
+    rtx.Ack(1, 0xFFFFFFFFu, ranges, 5000);
 
     BOOST_TEST(rtx.size() == 2u);
     // Remaining: seq 0 and 1.
@@ -179,13 +177,16 @@ BOOST_AUTO_TEST_CASE(rtx_collect_expired_across_wrap) {
     mux::MuxRetransmitBuffer rtx;
     constexpr std::size_t cap = 1 << 20;
 
-    rtx.Track(1, 0xFFFFFFFEu, make_frame(1), 10, 1000, cap, 0);
-    rtx.Track(1, 0xFFFFFFFFu, make_frame(2), 10, 1000, cap, 0);
-    rtx.Track(1, 0, make_frame(3), 10, 1000, cap, 0);
+    rtx.Track(1, 0xFFFFFFFEu, make_frame(1), 10, 1000, cap);
+    rtx.Track(1, 0xFFFFFFFFu, make_frame(2), 10, 1000, cap);
+    rtx.Track(1, 0, make_frame(3), 10, 1000, cap);
 
-    // base_pto=500ms, now=2000 → elapsed=1000 > 500 → expired.
+    // pto=500ms, now=2000 → elapsed=1000 > 500 → expired.
+    // The upstream signature carries a separate pto_max clamp; this
+    // repository's CollectExpired() takes the probe timeout alone and caps
+    // the backoff shift internally, so the clamp argument is gone.
     std::vector<std::uint64_t> expired;
-    rtx.CollectExpired(2000, 500, 60000, 32, expired);
+    rtx.CollectExpired(2000, 500, 32, expired);
     BOOST_TEST(expired.size() == 3u);
 }
 
@@ -194,9 +195,9 @@ BOOST_AUTO_TEST_CASE(rtx_erase_cid_across_wrap) {
     mux::MuxRetransmitBuffer rtx;
     constexpr std::size_t cap = 1 << 20;
 
-    rtx.Track(1, 0xFFFFFFFEu, make_frame(1), 10, 1000, cap, 0);
-    rtx.Track(1, 0, make_frame(2), 10, 1000, cap, 0);
-    rtx.Track(2, 0xFFFFFFFEu, make_frame(3), 10, 1000, cap, 0);
+    rtx.Track(1, 0xFFFFFFFEu, make_frame(1), 10, 1000, cap);
+    rtx.Track(1, 0, make_frame(2), 10, 1000, cap);
+    rtx.Track(2, 0xFFFFFFFEu, make_frame(3), 10, 1000, cap);
 
     rtx.EraseCid(1);
     BOOST_TEST(rtx.size() == 1u);
@@ -366,7 +367,7 @@ BOOST_AUTO_TEST_CASE(rtx_random_track_ack_stress) {
         for (int s = 0; s < frames_per_flow; ++s) {
             rtx.Track(static_cast<std::uint32_t>(f),
                       static_cast<std::uint32_t>(s),
-                      make_frame(f * 100 + s), 10, 1000, cap, 0);
+                      make_frame(f * 100 + s), 10, 1000, cap);
         }
     }
     BOOST_TEST(rtx.size() == static_cast<std::size_t>(num_flows * frames_per_flow));
@@ -377,8 +378,7 @@ BOOST_AUTO_TEST_CASE(rtx_random_track_ack_stress) {
 
         const std::uint32_t largest = frames_per_flow - 1;
         std::vector<mux::MuxAckRange> ranges = { {0, largest} };
-        std::vector<std::uint64_t> fast_candidates;
-        rtx.Ack(static_cast<std::uint32_t>(f), largest, ranges, 2000, 3, 0, fast_candidates);
+        rtx.Ack(static_cast<std::uint32_t>(f), largest, ranges, 2000);
     }
 
     // Odd flows should be empty, even flows should still have all frames.
@@ -409,7 +409,7 @@ BOOST_AUTO_TEST_CASE(rtx_byte_cap_under_random_sizes) {
     for (int i = 0; i < 100; ++i) {
         int frame_size = static_cast<int>(rng.next_in_range(64, 1024));
         bool tracked = rtx.Track(1, static_cast<std::uint32_t>(i),
-                                  make_frame(i), frame_size, 1000, cap, 0);
+                                  make_frame(i), frame_size, 1000, cap);
         if (tracked) {
             total_tracked++;
         }

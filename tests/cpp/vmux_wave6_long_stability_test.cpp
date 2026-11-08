@@ -51,7 +51,7 @@ BOOST_AUTO_TEST_CASE(rtx_full_lifecycle_zero_residual) {
             rtx.Track(static_cast<std::uint32_t>(f),
                       static_cast<std::uint32_t>(s),
                       make_frame(f * 100 + s), 1280,
-                      clock.now(), cap, 0);
+                      clock.now(), cap);
         }
         clock.advance(1);
     }
@@ -62,9 +62,8 @@ BOOST_AUTO_TEST_CASE(rtx_full_lifecycle_zero_residual) {
     for (int f = 1; f <= num_flows; ++f) {
         const std::uint32_t largest = frames_per_flow - 1;
         std::vector<mux::MuxAckRange> ranges = { {0, largest} };
-        std::vector<std::uint64_t> fast_candidates;
         rtx.Ack(static_cast<std::uint32_t>(f), largest, ranges,
-                clock.now(), 3, 0, fast_candidates);
+                clock.now());
         clock.advance(1);
     }
 
@@ -84,7 +83,7 @@ BOOST_AUTO_TEST_CASE(rtx_flow_teardown_one_at_a_time) {
         for (int s = 0; s < frames_per_flow; ++s) {
             rtx.Track(static_cast<std::uint32_t>(f),
                       static_cast<std::uint32_t>(s),
-                      make_frame(f * 100 + s), 512, 1000, cap, 0);
+                      make_frame(f * 100 + s), 512, 1000, cap);
         }
     }
     const std::size_t total = rtx.size();
@@ -108,14 +107,14 @@ BOOST_AUTO_TEST_CASE(rtx_pto_expiry_then_clear_zero_residual) {
 
     for (int i = 0; i < 100; ++i) {
         rtx.Track(1, static_cast<std::uint32_t>(i), make_frame(i), 512,
-                  clock.now(), cap, 0);
+                  clock.now(), cap);
     }
     BOOST_TEST(rtx.size() == 100u);
 
     // Advance past PTO — entries are still retained (CollectExpired just reports).
     clock.advance(10000);
     std::vector<std::uint64_t> expired;
-    rtx.CollectExpired(clock.now(), 500, 60000, 32, expired);
+    rtx.CollectExpired(clock.now(), 500, 32, expired);
     BOOST_TEST(expired.size() > 0u);
     BOOST_TEST(rtx.size() == 100u); // Not yet released
 
@@ -178,7 +177,7 @@ BOOST_AUTO_TEST_CASE(rtx_flow_churn_no_leak) {
         const std::uint32_t cid = 1; // Reuse same cid.
         for (int s = 0; s < 20; ++s) {
             rtx.Track(cid, static_cast<std::uint32_t>(s), make_frame(s), 256,
-                      1000, cap, 0);
+                      1000, cap);
         }
         BOOST_TEST(rtx.size() == 20u);
         BOOST_TEST(rtx.bytes() > 0u);
@@ -198,14 +197,14 @@ BOOST_AUTO_TEST_CASE(rtx_cid_reuse_no_cross_contamination) {
     // First incarnation: sequences 0-9.
     for (int s = 0; s < 10; ++s) {
         rtx.Track(1, static_cast<std::uint32_t>(s), make_frame(s), 100,
-                  1000, cap, 0);
+                  1000, cap);
     }
     rtx.EraseCid(1);
 
     // Second incarnation: sequences 100-109.
     for (int s = 100; s < 110; ++s) {
         rtx.Track(1, static_cast<std::uint32_t>(s), make_frame(s), 100,
-                  2000, cap, 0);
+                  2000, cap);
     }
     BOOST_TEST(rtx.size() == 10u);
 
@@ -231,7 +230,7 @@ BOOST_AUTO_TEST_CASE(rtx_byte_cap_eviction_does_not_corrupt) {
     std::size_t tracked = 0;
     for (int i = 0; i < 20; ++i) {
         bool ok = rtx.Track(1, static_cast<std::uint32_t>(i),
-                            make_frame(i), 256, 1000, cap, 0);
+                            make_frame(i), 256, 1000, cap);
         if (ok) ++tracked;
         BOOST_TEST(rtx.bytes() <= cap);
     }
@@ -257,21 +256,19 @@ BOOST_AUTO_TEST_CASE(rtx_mark_retransmitted_then_ack_full_release) {
     // Track 10 frames.
     for (int i = 0; i < 10; ++i) {
         rtx.Track(1, static_cast<std::uint32_t>(i), make_frame(i), 128,
-                  clock.now(), cap, 0);
+                  clock.now(), cap);
     }
 
     // Retransmit a few.
     clock.advance(500);
-    rtx.MarkRetransmitted(mux::MuxRetransmitBuffer::Key(1, 3), clock.now(), 1);
-    rtx.MarkRetransmitted(mux::MuxRetransmitBuffer::Key(1, 5), clock.now(), 2);
-    rtx.MarkRetransmitted(mux::MuxRetransmitBuffer::Key(1, 7), clock.now(), 1);
+    rtx.MarkRetransmitted(mux::MuxRetransmitBuffer::Key(1, 3), clock.now());
+    rtx.MarkRetransmitted(mux::MuxRetransmitBuffer::Key(1, 5), clock.now());
+    rtx.MarkRetransmitted(mux::MuxRetransmitBuffer::Key(1, 7), clock.now());
 
     // ACK all.
     clock.advance(500);
     std::vector<mux::MuxAckRange> ranges = { {0, 9} };
-    std::vector<std::uint64_t> fast_candidates;
-    std::uint16_t out_link = 0xFFFF;
-    rtx.Ack(1, 9, ranges, clock.now(), 3, 0, fast_candidates, &out_link);
+    rtx.Ack(1, 9, ranges, clock.now());
 
     // All released.
     BOOST_TEST(rtx.size() == 0u);
@@ -300,7 +297,7 @@ BOOST_AUTO_TEST_CASE(resource_cleanup_after_reliability_features) {
     // Simulate: send 100 frames, receive 100 ACKs.
     for (int i = 0; i < 100; ++i) {
         rtx.Track(1, static_cast<std::uint32_t>(i), make_frame(i), 512,
-                  clock.now(), cap, 0);
+                  clock.now(), cap);
         ack_tracker.Add(static_cast<std::uint32_t>(i), max_ranges);
         clock.advance(1);
     }
@@ -310,8 +307,7 @@ BOOST_AUTO_TEST_CASE(resource_cleanup_after_reliability_features) {
 
     // Simulate: all ACKs received.
     std::vector<mux::MuxAckRange> ranges = { {0, 99} };
-    std::vector<std::uint64_t> fast_candidates;
-    rtx.Ack(1, 99, ranges, clock.now(), 3, 0, fast_candidates);
+    rtx.Ack(1, 99, ranges, clock.now());
     ack_tracker.Clear();
 
     // Verify: both resources at zero.
