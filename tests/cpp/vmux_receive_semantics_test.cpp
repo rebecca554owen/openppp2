@@ -332,64 +332,6 @@ struct vmux_net_test_access {
         return ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot().rx_unknown_cmd;
     }
 
-    /**
-     * @brief The per-carrier RTT estimate as the observer keeps it.
-     */
-    struct LinkRttState {
-        std::uint64_t srtt_ms = 0;
-        std::uint64_t rttvar_ms = 0;
-        std::uint64_t min_ms = 0;
-        std::uint64_t samples = 0;
-        bool found = false;
-    };
-
-    /**
-     * @brief Attaches a carrier with a server-assigned id, as the handshake does.
-     */
-    static vmux_net::vmux_linklayer_ptr AttachCarrier(vmux_net& mux, std::uint16_t id) {
-        auto link = MakeDeadLink(true);
-        link->id_ = id;
-        AttachLink(mux, link);
-        return link;
-    }
-
-    /** @brief Attributes one RTT sample to a carrier (the observation path). */
-    static void NoteLinkRttSample(vmux_net& mux, std::uint16_t id, std::uint64_t sample) {
-        RunOnStrandVoid(mux, [&]() { mux.note_link_rtt_sample(id, sample); });
-    }
-
-    /** @brief Reads back one carrier's estimate. */
-    static LinkRttState LinkRttStateOf(vmux_net& mux, std::uint16_t id) {
-        return RunOnStrand(mux, [&]() {
-            LinkRttState state;
-            for (const vmux_net::vmux_linklayer_ptr& link : mux.rx_links_) {
-                if (link && link->id_ == id) {
-                    state.srtt_ms = link->rtt_srtt_ms_;
-                    state.rttvar_ms = link->rtt_rttvar_ms_;
-                    state.min_ms = link->rtt_min_ms_;
-                    state.samples = link->rtt_samples_;
-                    state.found = true;
-                    break;
-                }
-            }
-            return state;
-        });
-    }
-
-    /** @brief The published spread snapshot. */
-    static ppp::app::mux::MuxRuntimeCounters RttSpreadSnapshot() {
-        return ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
-    }
-
-    /** @brief The session-level estimate and probe timeout, i.e. what the decisions use. */
-    static std::uint64_t SessionSrtt(vmux_net& mux) {
-        return RunOnStrand(mux, [&]() { return mux.srtt_ms_; });
-    }
-
-    static std::uint64_t SessionPto(vmux_net& mux) {
-        return RunOnStrand(mux, [&]() { return mux.current_pto(); });
-    }
-
     static void EvictExpired(vmux_net& mux, std::uint64_t now) {
         RunOnStrandVoid(mux, [&]() { mux.flow_evict_expired(now); });
     }
@@ -1821,108 +1763,6 @@ void TestUnknownCommandDoesNotMoveTheCompatFrontier() {
         "an unknown command must not enter the reorder buffer");
 }
 
-// The per-carrier RTT observation: a sample is attributed to the carrier
-// that sent the frame, and the spread across the carriers is published so the
-// operator can see whether the carriers of this session differ at all.
-void TestPerLinkRttSampleIsAttributedToItsCarrier() {
-    auto mux = MakeMux();
-    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
-
-    vmux::vmux_net_test_access::AttachCarrier(*mux, 11);
-    vmux::vmux_net_test_access::AttachCarrier(*mux, 12);
-
-    vmux::vmux_net_test_access::NoteLinkRttSample(*mux, 11, 100);
-    vmux::vmux_net_test_access::NoteLinkRttSample(*mux, 12, 400);
-
-    const auto fast = vmux::vmux_net_test_access::LinkRttStateOf(*mux, 11);
-    Require(fast.found, "carrier 11 must be visible");
-    Require(fast.samples == 1u, "carrier 11 must hold exactly one sample");
-    Require(fast.srtt_ms == 100u, "carrier 11 must carry its own estimate");
-    Require(fast.min_ms == 100u, "carrier 11 minimum");
-
-    const auto slow = vmux::vmux_net_test_access::LinkRttStateOf(*mux, 12);
-    Require(slow.found, "carrier 12 must be visible");
-    Require(slow.srtt_ms == 400u, "carrier 12 must carry its own estimate");
-
-    const auto snap = vmux::vmux_net_test_access::RttSpreadSnapshot();
-    Require(snap.rtt_link_count == 2u, "two carriers hold an estimate");
-    Require(snap.rtt_link_min_srtt_ms == 100u, "the fastest carrier must be published");
-    Require(snap.rtt_link_max_srtt_ms == 400u, "the slowest carrier must be published");
-    Require(snap.rtt_link_spread_ms == 300u, "the spread must be published");
-    Require(snap.rtt_link_heterogeneous == 1u,
-        "a carrier at twice the fastest one must be flagged heterogeneous");
-}
-
-// The estimate is a smoothed one: it must stay on its own carrier and must
-// converge towards the carrier's own round-trip time.
-void TestPerLinkRttEstimateConvergesOnItsOwnCarrier() {
-    auto mux = MakeMux();
-    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
-
-    vmux::vmux_net_test_access::AttachCarrier(*mux, 21);
-    for (int i = 0; i < 20; ++i) {
-        vmux::vmux_net_test_access::NoteLinkRttSample(*mux, 21, 100);
-    }
-
-    const auto converged = vmux::vmux_net_test_access::LinkRttStateOf(*mux, 21);
-    Require(converged.samples == 20u, "every sample must be counted");
-    Require(converged.srtt_ms >= 98u && converged.srtt_ms <= 100u,
-        "the estimate must converge on the carrier's own round-trip time");
-    Require(converged.min_ms == 100u, "the minimum must not drift");
-
-    // A single slow sample moves the estimate, but only towards the new value.
-    vmux::vmux_net_test_access::NoteLinkRttSample(*mux, 21, 300);
-    const auto moved = vmux::vmux_net_test_access::LinkRttStateOf(*mux, 21);
-    Require(moved.srtt_ms > converged.srtt_ms, "a slow sample must move the estimate");
-    Require(moved.srtt_ms < 300u, "one sample must not overwrite the estimate");
-    Require(moved.min_ms == 100u, "a slow sample must not change the minimum");
-}
-
-// A sample whose carrier is gone (retired between the send and the
-// acknowledgement) must not be attributed to another carrier.
-void TestPerLinkRttSampleForAnAbsentCarrierChangesNothing() {
-    auto mux = MakeMux();
-    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
-
-    vmux::vmux_net_test_access::AttachCarrier(*mux, 31);
-    vmux::vmux_net_test_access::NoteLinkRttSample(*mux, 31, 100);
-
-    const auto before = vmux::vmux_net_test_access::RttSpreadSnapshot();
-    vmux::vmux_net_test_access::NoteLinkRttSample(*mux, 99, 500);
-    const auto after = vmux::vmux_net_test_access::RttSpreadSnapshot();
-
-    Require(after.rtt_link_count == before.rtt_link_count,
-        "a sample without a carrier must not add a carrier");
-    Require(after.rtt_link_max_srtt_ms == before.rtt_link_max_srtt_ms,
-        "a sample without a carrier must not change the slowest carrier");
-    Require(after.rtt_link_spread_ms == before.rtt_link_spread_ms,
-        "a sample without a carrier must not change the spread");
-    Require(vmux::vmux_net_test_access::LinkRttStateOf(*mux, 31).srtt_ms == 100u,
-        "a sample without a carrier must not touch another carrier");
-}
-
-// The whole point of the observation: it measures and it publishes, and it
-// changes NOTHING the session decides on. The session keeps its own estimate
-// and its own probe timeout.
-void TestPerLinkRttObservationDoesNotTouchTheSessionDecision() {
-    auto mux = MakeMux();
-    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
-
-    vmux::vmux_net_test_access::AttachCarrier(*mux, 41);
-    vmux::vmux_net_test_access::AttachCarrier(*mux, 42);
-
-    const std::uint64_t srtt_before = vmux::vmux_net_test_access::SessionSrtt(*mux);
-    const std::uint64_t pto_before = vmux::vmux_net_test_access::SessionPto(*mux);
-
-    vmux::vmux_net_test_access::NoteLinkRttSample(*mux, 41, 100);
-    vmux::vmux_net_test_access::NoteLinkRttSample(*mux, 42, 400);
-
-    Require(vmux::vmux_net_test_access::SessionSrtt(*mux) == srtt_before,
-        "a per-carrier sample must not touch the session estimate");
-    Require(vmux::vmux_net_test_access::SessionPto(*mux) == pto_before,
-        "a per-carrier sample must not touch the session probe timeout");
-}
-
 int main() {
     try {
         TestReceiverRefusesUnknownFlow();
@@ -1969,10 +1809,6 @@ int main() {
         TestAckCoalescingNeverSuppressesAForcedAck();
         TestUnknownCommandIsSkippedAndCounted();
         TestUnknownCommandDoesNotMoveTheCompatFrontier();
-        TestPerLinkRttSampleIsAttributedToItsCarrier();
-        TestPerLinkRttEstimateConvergesOnItsOwnCarrier();
-        TestPerLinkRttSampleForAnAbsentCarrierChangesNothing();
-        TestPerLinkRttObservationDoesNotTouchTheSessionDecision();
         std::cout << "vmux_receive_semantics_test: ok" << std::endl;
         return 0;
     }

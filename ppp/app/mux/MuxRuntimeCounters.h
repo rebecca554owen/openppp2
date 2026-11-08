@@ -44,11 +44,6 @@ struct MuxRuntimeCounters final {
     std::uint64_t tx_ctrl_cap_rejected = 0;          ///< mux.tx.ctrl.cap.reject
     std::uint64_t tx_ack_suppressed = 0;               ///< mux.ack.suppressed
     std::uint64_t rx_unknown_cmd = 0;                   ///< mux.rx.unknown_cmd
-    std::uint64_t rtt_link_count = 0;                    ///< mux.rtt.link.count
-    std::uint64_t rtt_link_min_srtt_ms = 0;              ///< mux.rtt.link.min_srtt_ms
-    std::uint64_t rtt_link_max_srtt_ms = 0;              ///< mux.rtt.link.max_srtt_ms
-    std::uint64_t rtt_link_spread_ms = 0;                ///< mux.rtt.link.spread_ms
-    std::uint64_t rtt_link_heterogeneous = 0;             ///< mux.rtt.link.heterogeneous
 };
 
 /**
@@ -148,25 +143,6 @@ public:
         rx_unknown_cmd_.fetch_add(n, std::memory_order_relaxed);
     }
 
-    /**
-     * @brief Publishes the spread of the per-carrier RTT estimates.
-     * @details A snapshot, not a counter: the values describe the carriers as
-     *          they are right now, so they are stored rather than accumulated.
-     * @param count Carriers that have an RTT sample.
-     * @param min_srtt The fastest carrier's smoothed RTT.
-     * @param max_srtt The slowest carrier's smoothed RTT.
-     * @param spread max_srtt minus min_srtt.
-     * @param heterogeneous 1 when the slowest carrier is at least twice the fastest one.
-     */
-    static void SetLinkRttSpread(std::uint64_t count, std::uint64_t min_srtt,
-        std::uint64_t max_srtt, std::uint64_t spread, std::uint64_t heterogeneous) noexcept {
-        rtt_link_count_.store(count, std::memory_order_relaxed);
-        rtt_link_min_srtt_ms_.store(min_srtt, std::memory_order_relaxed);
-        rtt_link_max_srtt_ms_.store(max_srtt, std::memory_order_relaxed);
-        rtt_link_spread_ms_.store(spread, std::memory_order_relaxed);
-        rtt_link_heterogeneous_.store(heterogeneous, std::memory_order_relaxed);
-    }
-
     /** @brief Reads every counter without locking. */
     static MuxRuntimeCounters GetSnapshot() noexcept {
         MuxRuntimeCounters snap;
@@ -192,11 +168,6 @@ public:
         snap.tx_ctrl_cap_rejected = tx_ctrl_cap_rejected_.load(std::memory_order_relaxed);
         snap.tx_ack_suppressed = tx_ack_suppressed_.load(std::memory_order_relaxed);
         snap.rx_unknown_cmd = rx_unknown_cmd_.load(std::memory_order_relaxed);
-        snap.rtt_link_count = rtt_link_count_.load(std::memory_order_relaxed);
-        snap.rtt_link_min_srtt_ms = rtt_link_min_srtt_ms_.load(std::memory_order_relaxed);
-        snap.rtt_link_max_srtt_ms = rtt_link_max_srtt_ms_.load(std::memory_order_relaxed);
-        snap.rtt_link_spread_ms = rtt_link_spread_ms_.load(std::memory_order_relaxed);
-        snap.rtt_link_heterogeneous = rtt_link_heterogeneous_.load(std::memory_order_relaxed);
         return snap;
     }
 
@@ -224,11 +195,6 @@ public:
         tx_ctrl_cap_rejected_.store(0, std::memory_order_relaxed);
         tx_ack_suppressed_.store(0, std::memory_order_relaxed);
         rx_unknown_cmd_.store(0, std::memory_order_relaxed);
-        rtt_link_count_.store(0, std::memory_order_relaxed);
-        rtt_link_min_srtt_ms_.store(0, std::memory_order_relaxed);
-        rtt_link_max_srtt_ms_.store(0, std::memory_order_relaxed);
-        rtt_link_spread_ms_.store(0, std::memory_order_relaxed);
-        rtt_link_heterogeneous_.store(0, std::memory_order_relaxed);
     }
 
 private:
@@ -254,11 +220,6 @@ private:
     inline static std::atomic<std::uint64_t> tx_ctrl_cap_rejected_{ 0 };
     inline static std::atomic<std::uint64_t> tx_ack_suppressed_{ 0 };
     inline static std::atomic<std::uint64_t> rx_unknown_cmd_{ 0 };
-    inline static std::atomic<std::uint64_t> rtt_link_count_{ 0 };
-    inline static std::atomic<std::uint64_t> rtt_link_min_srtt_ms_{ 0 };
-    inline static std::atomic<std::uint64_t> rtt_link_max_srtt_ms_{ 0 };
-    inline static std::atomic<std::uint64_t> rtt_link_spread_ms_{ 0 };
-    inline static std::atomic<std::uint64_t> rtt_link_heterogeneous_{ 0 };
 };
 
 }  // namespace ppp::app::mux

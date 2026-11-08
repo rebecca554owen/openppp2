@@ -59,19 +59,6 @@ namespace vmux {
             ppp::app::mux::MuxLinkDrainState                                        drain_;            ///< Strand-affine in-flight write and retirement state.
             std::atomic<bool>                                                       handshake_complete_{false}; ///< True only after the carrier handshake succeeds. Atomic: written by the carrier handshake (under syncobj_), read lock-free on the vmux strand.
 
-            /**
-             * @brief Per-carrier round-trip estimate (observation only).
-             * @details Strand-affine, same domain as queued_bytes_. The estimate
-             *          is measured but NOT used for any decision: the session
-             *          keeps its own SRTT and its own probe timeout. This exists
-             *          to answer one question with data instead of with argument
-             *          -- are the carriers of this session actually heterogeneous?
-             */
-            uint64_t                                                                rtt_srtt_ms_ = 0;    ///< Smoothed RTT of this carrier (EWMA 7/8), 0 = no sample yet.
-            uint64_t                                                                rtt_rttvar_ms_ = 0;  ///< RTT variance of this carrier (EWMA 3/4).
-            uint64_t                                                                rtt_min_ms_ = 0;     ///< Smallest RTT ever observed on this carrier.
-            uint64_t                                                                rtt_samples_ = 0;    ///< RTT samples attributed to this carrier.
-
 
             /** Unified "can this link accept new work?" predicate. All schedulability
              *  checks (count_live_carriers, turbo, shrink, scheduler) MUST use this
@@ -672,13 +659,7 @@ namespace vmux {
         /** @brief Process an inbound cmd_fec payload: cache the group, attempt single-loss recovery. */
         void                                                                        packet_input_fec(const vmux_linklayer_ptr& linklayer, Byte* buffer, int buffer_size, uint64_t now) noexcept;
         /** @brief Retain a just-sent reliable frame in the retransmit buffer (strand-affine). @return true when this was the first send of the frame. */
-        bool                                                                        track_sent_frame(const std::shared_ptr<Byte>& packet, int packet_length, uint64_t now, uint16_t link_id = 0) noexcept;
-
-        /** @brief Attributes one RTT sample to the carrier that produced it (observation only). */
-        void                                                                        note_link_rtt_sample(uint16_t link_id, uint64_t sample) noexcept;
-
-        /** @brief Publishes the spread of the per-carrier RTT estimates (observation only). */
-        void                                                                        publish_link_rtt_spread() noexcept;
+        bool                                                                        track_sent_frame(const std::shared_ptr<Byte>& packet, int packet_length, uint64_t now) noexcept;
         /**
          * @brief True when one more frame of @p length may be put on the wire
          *        for the sequence space @p key_cid without overrunning the peer's

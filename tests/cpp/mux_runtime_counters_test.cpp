@@ -41,11 +41,6 @@ const std::vector<std::string>& ExpectedCounterKeys() {
         "mux.tx.ctrl.cap.reject",
         "mux.ack.suppressed",
         "mux.rx.unknown_cmd",
-        "mux.rtt.link.count",
-        "mux.rtt.link.min_srtt_ms",
-        "mux.rtt.link.max_srtt_ms",
-        "mux.rtt.link.spread_ms",
-        "mux.rtt.link.heterogeneous",
     };
     return keys;
 }
@@ -102,16 +97,6 @@ BOOST_AUTO_TEST_CASE(registry_accumulates_every_counter) {
     BOOST_TEST(snap.tx_ack_suppressed == 4u);
     BOOST_TEST(snap.rx_unknown_cmd == 5u);
 
-    // The per-carrier RTT spread is a snapshot, not an accumulator: the
-    // carriers as they are right now.
-    mux::MuxRuntimeCounterRegistry::SetLinkRttSpread(4, 20, 380, 360, 1);
-    const mux::MuxRuntimeCounters spread = mux::MuxRuntimeCounterRegistry::GetSnapshot();
-    BOOST_TEST(spread.rtt_link_count == 4u);
-    BOOST_TEST(spread.rtt_link_min_srtt_ms == 20u);
-    BOOST_TEST(spread.rtt_link_max_srtt_ms == 380u);
-    BOOST_TEST(spread.rtt_link_spread_ms == 360u);
-    BOOST_TEST(spread.rtt_link_heterogeneous == 1u);
-
     mux::MuxRuntimeCounterRegistry::Reset();
     const mux::MuxRuntimeCounters zero = mux::MuxRuntimeCounterRegistry::GetSnapshot();
     BOOST_TEST(zero.tx_frames == 0u);
@@ -119,11 +104,6 @@ BOOST_AUTO_TEST_CASE(registry_accumulates_every_counter) {
     BOOST_TEST(zero.rx_flow_refuse_post_failed == 0u);
     BOOST_TEST(zero.rx_syn_ok_refused == 0u);
     BOOST_TEST(zero.rx_syn_ok_refused_no_socket == 0u);
-    BOOST_TEST(zero.rtt_link_count == 0u);
-    BOOST_TEST(zero.rtt_link_min_srtt_ms == 0u);
-    BOOST_TEST(zero.rtt_link_max_srtt_ms == 0u);
-    BOOST_TEST(zero.rtt_link_spread_ms == 0u);
-    BOOST_TEST(zero.rtt_link_heterogeneous == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(stats_json_exposes_the_mux_counters) {
@@ -144,26 +124,6 @@ BOOST_AUTO_TEST_CASE(stats_json_exposes_the_mux_counters) {
     BOOST_TEST(root["mux_counters"]["mux.tx.flow.after_fin"].asUInt64() == 11u);
 }
 
-BOOST_AUTO_TEST_CASE(stats_json_exposes_the_per_link_rtt_spread) {
-    runtime::RuntimeStatsSample sample;
-    sample.mux_counters.rtt_link_count = 3;
-    sample.mux_counters.rtt_link_min_srtt_ms = 18;
-    sample.mux_counters.rtt_link_max_srtt_ms = 240;
-    sample.mux_counters.rtt_link_spread_ms = 222;
-    sample.mux_counters.rtt_link_heterogeneous = 1;
-
-    Json::Value root;
-    Json::Reader reader;
-    const std::string encoded = runtime::SerializeRuntimeStats(sample);
-    BOOST_REQUIRE(reader.parse(encoded.data(), encoded.data() + encoded.size(), root));
-    BOOST_REQUIRE(root["mux_counters"].isObject());
-    BOOST_TEST(root["mux_counters"]["mux.rtt.link.count"].asUInt64() == 3u);
-    BOOST_TEST(root["mux_counters"]["mux.rtt.link.min_srtt_ms"].asUInt64() == 18u);
-    BOOST_TEST(root["mux_counters"]["mux.rtt.link.max_srtt_ms"].asUInt64() == 240u);
-    BOOST_TEST(root["mux_counters"]["mux.rtt.link.spread_ms"].asUInt64() == 222u);
-    BOOST_TEST(root["mux_counters"]["mux.rtt.link.heterogeneous"].asUInt64() == 1u);
-}
-
 BOOST_AUTO_TEST_CASE(stats_json_always_emits_every_counter_key) {
     Json::Value root;
     Json::Reader reader;
@@ -178,6 +138,17 @@ BOOST_AUTO_TEST_CASE(stats_json_always_emits_every_counter_key) {
     }
     // The counter object must not drift away from the telemetry vocabulary.
     BOOST_TEST(counters.getMemberNames().size() == ExpectedCounterKeys().size());
+}
+
+BOOST_AUTO_TEST_CASE(the_registry_and_the_published_key_set_stay_in_lockstep) {
+    // Every member of the snapshot struct is a std::uint64_t and the struct
+    // carries nothing else, so its size IS the member count. Adding a
+    // counter to the registry without publishing it (or publishing a key
+    // without a counter behind it) moves this number and fails here.
+    //
+    // Without this, a counter could sit in the struct updating on the hot
+    // path while nothing in the stats file ever showed it.
+    BOOST_TEST(sizeof(mux::MuxRuntimeCounters) == ExpectedCounterKeys().size() * sizeof(std::uint64_t));
 }
 
 BOOST_AUTO_TEST_CASE(stats_json_keeps_the_v1_contract_intact) {
