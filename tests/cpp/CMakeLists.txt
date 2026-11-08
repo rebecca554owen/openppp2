@@ -505,6 +505,14 @@ openppp2_add_cpp_test(peer_route_announce_policy_test SOURCES
     peer_route_announce_policy_test.cpp)
 openppp2_add_cpp_test(vmux_link_churn_test SOURCES
     vmux_link_churn_test.cpp)
+# 上游接了这三个，本仓库的文件一直都在但没接线（见 upstream-reference/README.md）。
+# 它们只依赖 fork 现有的头文件，接进来即可跑，不需要移植。
+openppp2_add_cpp_test(vmux_qa001_fec_race_test SOURCES
+    vmux_qa001_fec_race_test.cpp)
+openppp2_add_cpp_test(vmux_qa001_write_failure_test SOURCES
+    vmux_qa001_write_failure_test.cpp)
+openppp2_add_cpp_test(vmux_wave5_control_plane_test SOURCES
+    vmux_wave5_control_plane_test.cpp)
 openppp2_add_cpp_test(mux_transport_adapter_test SOURCES
     mux_transport_adapter_test.cpp)
 target_link_libraries(mux_transport_adapter_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
