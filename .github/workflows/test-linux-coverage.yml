@@ -6,15 +6,15 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: test-linux-coverage-${{ github.event.pull_request.number || github.ref }}
+  group: test-linux-coverage-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   proxy-unit-coverage:
     name: Unit tests + LLVM cov
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install build dependencies
         run: |

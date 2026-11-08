@@ -48,6 +48,12 @@ namespace ppp {
              * @param handshake_type Handshake role/type.
              * @param y Coroutine yield context.
              * @return true if handshake succeeds.
+             *
+             * @note This overloads the WebSocket template's pure virtual, which takes a
+             *       shared_ptr<IWebsocket>; the parameter here is the concrete websocket
+             *       type, so it is a distinct declaration rather than an override.  Do
+             *       not add `override` — clang's -Winconsistent-missing-override flags
+             *       it by name alone and the compiler then rejects the keyword.
              */
             virtual bool                                                HandshakeWebsocket(
                 const AppConfigurationPtr&                              configuration,
@@ -124,6 +130,11 @@ namespace ppp {
              * @param handshake_type Handshake role/type.
              * @param y Coroutine yield context.
              * @return true if handshake succeeds.
+             *
+             * @note Same as the plain-websocket overload above: the concrete
+             *       sslwebsocket parameter makes this a distinct declaration,
+             *       not an override of the template's IWebsocket-parameterised
+             *       pure virtual.
              */
             virtual bool                                                HandshakeWebsocket(
                 const AppConfigurationPtr&                              configuration,

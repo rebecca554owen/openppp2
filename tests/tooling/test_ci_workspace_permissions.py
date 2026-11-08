@@ -20,9 +20,15 @@ class CIWorkspacePermissionTests(unittest.TestCase):
         self.assertLess(create, privileged)
 
     def test_workspace_permission_regression_runs_in_ci(self) -> None:
-        self.assertIn(
-            "python3 -m unittest tests.tooling.test_ci_workspace_permissions -v",
-            self.workflow(),
+        # The test must be wired into the CI unit workflow. It may be invoked
+        # either by an explicit `unittest` line or by the tooling discovery
+        # command that now covers the whole tests/tooling suite.
+        workflow = self.workflow()
+        self.assertTrue(
+            "python3 -m unittest tests.tooling.test_ci_workspace_permissions -v"
+            in workflow
+            or "python3 -m unittest discover -s tests/tooling" in workflow,
+            "test_ci_workspace_permissions is not wired into the CI unit workflow",
         )
 
 

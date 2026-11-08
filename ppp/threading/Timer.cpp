@@ -217,8 +217,10 @@ namespace ppp {
             auto self = shared_from_this();
             /**
              * @brief Executor-posted invoker that finalizes timer lifetime.
+             * @note Must not be 'final': Boost 1.92.0's is_executor trait
+             *       uses SFINAE that requires derivability from this type.
              */
-            struct DisposeInvoker final {
+            struct DisposeInvoker {
                 std::shared_ptr<Timer> self;
                 void operator()() const noexcept {
                     self->Finalize();
