@@ -162,7 +162,7 @@ namespace ppp {
             /**
              * @brief Looks up a cached DNS response and applies caller transaction id.
              *
-             * @details **Copy-on-read fix (P0-5):** The cached response buffer is immutable
+             * @details **Copy-on-read fix:** The cached response buffer is immutable
              *          shared state.  On cache hit the method allocates a local copy, writes
              *          the caller-supplied @p trans_id into the copy, and returns the copy.
              *          This eliminates the data race where concurrent Get() callers would

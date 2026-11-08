@@ -122,11 +122,18 @@ namespace ppp {
                     virtual bool                                                        RunAfterHandshakeWithoutBridge(YieldContext& y) noexcept override;
 
                 private:
+                    /** @brief Upper bound on distinct UDP ASSOCIATE destinations. */
+                    static constexpr int MaxUdpAssociateDestinations = 64;
+
                     std::shared_ptr<boost::asio::ip::udp::socket>                       udp_socket_;
                     std::shared_ptr<Byte>                                               udp_buffer_;
                     boost::asio::ip::udp::endpoint                                      udp_remote_ep_;
                     boost::asio::ip::udp::endpoint                                      udp_client_ep_;
                     UdpAssociateEndpointTable                                           udp_destination_clients_;
+                    /** @brief Every source endpoint we registered a datagram handler for
+                     *         Kept so the destructor can release all of them,
+                     *         not just the last one. */
+                    ppp::unordered_set<boost::asio::ip::udp::endpoint>                 udp_registered_handlers_;
                 };
             }
         }

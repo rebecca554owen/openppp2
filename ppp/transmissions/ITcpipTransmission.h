@@ -60,6 +60,8 @@ namespace ppp {
             bool                                                                                ShutdownSend() noexcept override;
             /** @brief Reports a clean TCP peer FIN observed by ReadBytes. */
             bool                                                                                IsReceiveClosed() const noexcept override;
+            /** @brief Drains the unread receive queue so close() emits FIN instead of RST. */
+            bool                                                                                DrainReceive() noexcept override;
             /**
              * @brief Reads an exact number of bytes from the socket.
              * @param y Coroutine yield context.
