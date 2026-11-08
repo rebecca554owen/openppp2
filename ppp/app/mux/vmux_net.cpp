@@ -807,6 +807,7 @@ namespace vmux {
     }
 
     void vmux_net::enqueue_flow_tx(uint32_t connection_id, tx_packet&& packet) noexcept {
+        assert_on_strand("enqueue_flow_tx");
         // connection_id 0 is session control; data frames use non-zero cids.
         // Still route cid=0 through DRR as a single "control-data" bucket if needed.
         flow_tx_context& fx = tx_flows_[connection_id];
@@ -2859,6 +2860,7 @@ namespace vmux {
     }
 
     void vmux_net::note_ack_pending(uint32_t connection_id, uint32_t seq, uint64_t now) noexcept {
+        assert_on_strand("note_ack_pending");
         if (!reliability_on_) {
             return;
         }
@@ -2907,6 +2909,7 @@ namespace vmux {
     }
 
     void vmux_net::maybe_send_ack(uint64_t now, bool force) noexcept {
+        assert_on_strand("maybe_send_ack");
         if (!reliability_on_ || !base_.established_) {
             return;
         }
@@ -3739,6 +3742,10 @@ namespace vmux {
     /**
      * @brief Queues or directly dispatches a prepared packet frame for transmit.
      */
+    // No strand assertion here: this entry point is deliberately callable
+    // from outside the strand and reports that by returning false, which is
+    // checked below. The strand-affine work it does is guarded at the far end
+    // of the path, where the queues are actually touched.
     bool vmux_net::post_internal(const std::shared_ptr<Byte>& packet, int packet_length, bool acceleration, const PostInternalAsynchronousCallback& posted_ac, bool* recoverable) noexcept {
         if (NULLPTR != recoverable) {
             *recoverable = false;
@@ -4182,6 +4189,7 @@ namespace vmux {
 
     /** @brief Drains queued packets according to selected scheduler mode. */
     bool vmux_net::process_tx_all_packets() noexcept {
+        assert_on_strand("process_tx_all_packets");
         // Always flush the high-priority control queue first (flow v2 only; empty
         // under compat). Keeps new-connection setup and heartbeats alive even when
         // the data queue is backlogged.
@@ -4205,6 +4213,7 @@ namespace vmux {
     /**
      * @brief Builds a vmux frame from command/payload and schedules transmit.
      */
+    // No strand assertion here, for the same reason as the overload above.
     bool vmux_net::post_internal(Byte cmd, const void* buffer, int buffer_size, uint32_t connection_id, bool acceleration, const PostInternalAsynchronousCallback& posted_ac, bool* recoverable) noexcept {
         if (NULLPTR != recoverable) {
             *recoverable = false;

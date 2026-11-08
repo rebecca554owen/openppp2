@@ -7,6 +7,7 @@
  */
 
 #include "vmux.h"
+#include <cassert>
 #include <cstdint>
 #include <unordered_set>
 #include <vector>
@@ -560,6 +561,28 @@ namespace vmux {
             return NULLPTR != strand_ && strand_->running_in_this_thread();
         }
 
+        /**
+         * @brief Debug-only assertion that the caller runs on this session's strand.
+         * @details The vmux state that the strand owns -- the transmit queues, the
+         *          acknowledgement bookkeeping, the reorder buffer, the per-flow
+         *          retransmit state -- has no lock of its own. It is protected by
+         *          the fact that only this strand touches it, which is an
+         *          invariant nothing in the type system enforces. In a debug
+         *          build this turns a violation of that invariant into an
+         *          immediate, located failure instead of a rare corruption that
+         *          shows up much later as a torn queue.
+         *
+         *          In a release build the check compiles away entirely.
+         * @param where A short description of the caller, used in the message.
+         */
+        void                                                                        assert_on_strand(const char* where) const noexcept {
+#ifndef NDEBUG
+            assert(is_strand_thread() && where);
+#else
+            (void)where;
+#endif
+        }
+
         /** @brief Send packet to one specific underlying link-layer endpoint. */
         bool                                                                        underlyin_sent(const vmux_linklayer_ptr& linklayer, const std::shared_ptr<Byte>& packet, int packet_length, const tx_completion_ptr& completion) noexcept;
 
@@ -949,12 +972,37 @@ namespace vmux {
             std::atomic<uint64_t>                                                   heartbeat_timeout_ {0}; ///< Deadline tick beyond which session is considered dead. Atomic: written by carrier handshake and vmux strand.
         }                                                                           status_;
 
-        SynchronizationObject                                                       syncobj_;           ///< Mutex protecting shared connection map and the link containers (rx_links_/tx_links_) against the carrier handshake strand.
+        /**
+         * @brief Lock domain 1 of 3: the carrier handshake domain.
+         * @details Protects the shared connection map and the link containers
+         *          (rx_links_ / tx_links_) against the carrier handshake
+         *          strand, which may attach or retire a carrier while this
+         *          session's strand is running.
+         *
+         *          **Nesting rule: this lock is never taken together with
+         *          tx_completion_mutex_ or runtime_state_mutex_.** The three
+         *          domains are independent, and a function that needs two of
+         *          them releases the first before taking the second. The
+         *          rule is checked by tests/cpp/mux_invariants_contract_test.
+         */
+        SynchronizationObject                                                       syncobj_;
         /**
          * @brief Cross-thread terminal state for accepted TX completions only.
          * @details This deliberately does not protect scheduler containers: those
          * remain VMUX-strand-affine. It lets a stop/close caller fail waiters without
          * touching queues, links, maps, or socket state off strand.
+         */
+        /**
+         * @brief Lock domain 2 of 3: the transmit completion domain.
+         * @details Protects the pending transmit completion list and the
+         *          completion accounting. A completion can run on a carrier
+         *          executor rather than on this session's strand, which is why
+         *          this domain exists at all and why it is separate from
+         *          syncobj_.
+         *
+         *          **Nesting rule: never taken together with syncobj_ or
+         *          runtime_state_mutex_.** Checked by
+         *          tests/cpp/mux_invariants_contract_test.
          */
         mutable std::mutex                                                          tx_completion_mutex_;
         // M5 fix: use unordered_set for O(1) completion lookup instead of linear scan
@@ -970,7 +1018,17 @@ namespace vmux {
         };
         std::unordered_set<tx_completion_ptr, tx_completion_hash, tx_completion_eq> pending_tx_completions_;
         bool                                                                        close_requested_ = false;
-        mutable std::mutex                                                          runtime_state_mutex_; ///< Guards runtime_state_ writes; prefer strand.
+        /**
+         * @brief Lock domain 3 of 3: the published runtime state domain.
+         * @details Guards the runtime_state_ writes that readers outside this
+         *          strand make. The strand is the usual writer; the lock exists
+         *          for the few places that publish state from elsewhere.
+         *
+         *          **Nesting rule: never taken together with syncobj_ or
+         *          tx_completion_mutex_.** Checked by
+         *          tests/cpp/mux_invariants_contract_test.
+         */
+        mutable std::mutex                                                          runtime_state_mutex_;
         ppp::app::mux::MuxRuntimeState                                               runtime_state_;       ///< Authoritative runtime facts.
         mutable std::shared_ptr<const ppp::app::mux::MuxRuntimeState>               runtime_snapshot_;    ///< Lock-free published copy for cross-thread reads.
 

@@ -490,6 +490,11 @@ target_link_libraries(mux_connect_yield_lifetime_contract_test PRIVATE OpenSSL::
 target_compile_definitions(mux_flow_refusal_contract_test PRIVATE
     OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
 target_link_libraries(mux_flow_refusal_contract_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(mux_invariants_contract_test SOURCES
+    mux_invariants_contract_test.cpp)
+target_compile_definitions(mux_invariants_contract_test PRIVATE
+    OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
+target_link_libraries(mux_invariants_contract_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(mux_runtime_counters_test SOURCES
     mux_runtime_counters_test.cpp
     "${OPENPPP2_ROOT}/common/json/src/json_reader.cpp"
