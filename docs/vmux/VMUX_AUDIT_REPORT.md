@@ -35,6 +35,32 @@
 > - **P2-8**：条目描述的是上游行为（未知 cmd 杀会话），**fork 实际不杀会话**（越界 cmd 只让载波退出，会话存活）。这条偏离此前没有记录。**第一阶段已落地（2026-11-06）**：未知命令只跳过、只计数（`mux.rx.unknown_cmd`），会话与载波都存活；**第二阶段评估结论是维持现状、不改成杀会话**（理由见该条目）。
 > - **P2-9**：唯一主动标注「未闭环」的条目，已在上游原条目里更正。
 >
+>
+> **fork 与上游的实际差异量级（2026-11-08 复核）**：用 `git diff upstream/main dev -- ppp/app/mux/` 看，
+> `vmux_net.cpp` 是 9218 行、`vmux_skt.cpp` 是 2225 行，很容易得出「fork 把 mux 改得面目全非」的结论。
+> **这个数字有一半是行尾造成的假象**：上游这两个文件的行尾是 CRLF/CR/LF 混排（`vmux_net.cpp` 4043 行带 CR，
+> `vmux_skt.cpp` 1042 行带 CR），fork 侧是干净 LF。忽略空白后的**真实语义差异**是：
+> `vmux_net.cpp` **1766 行**（+1577 / −382）、`vmux_skt.cpp` **193 行**。
+>
+> 逐个核对符号存在性之后的语义差异，比 diff 摘要更可信（同名符号常常只是搬家）：
+>
+> - **fork 独有、上游没有对应物**：`closed_flow` 家族（27 处：`closed_flow_record` / `remember_closed_flow` /
+>   `acknowledge_closed_flow` / `refuse_flow` / `reack_delivered`）、`SessionEpoch`、`MuxBacklogWatchdog`、
+>   `is_known_cmd`、`post_internal(..., bool* recoverable)`。
+> - **上游有、fork 真的没有**（只有 5 个，且都是「搬家」或「主动不做」）：`min_rtt_ms_` / `has_rtt_sample_`
+>   （上游的 per-link 最小 RTT，只写不读）→ 随 per-link 判定一起**主动不做**；`rtx_flow_bytes_` →
+>   搬进重写过的 `MuxRetransmitBuffer::bytes_by_cid_`；`tx_backlog_since_` → 换成 `MuxBacklogWatchdog`；
+>   `visit_count` → DRR 已重写；`oldest_buffered_tick_` → 换成 per-flow 的 `gap_opened_tick_`。
+>
+> ⇒ **fork 不是「少了上游功能」，而是同一批边界换了一套（多数更严）实现。** 真实成本不是功能缺口，
+> 而是**同步成本**：上游那两个文件行尾混排，每次同步都是全文冲突。
+>
+> **上游实线的真实缺口不是「没搬过来」，而是「搬过来没接线」**：上游把 10 个 vmux 测试全部接进了构建，
+> fork 一个都没接，文件却都在仓库里躺着（5154 行）。其中 3 个在 fork 的接口下**直接能编译**。
+> **2026-11-08 已处理**：9 个接线并跑起来（3 个零成本 + 6 个按 fork 接口移植），
+> 剩下的 `vmux_wave3_per_link_rtt_test` 测的是上面那条「主动不做」的 per-link 设计，移入
+> `tests/cpp/upstream-reference/` 并附说明；该目录的 README 同时列出了其余 14 个仍未接线的继承测试文件。
+>
 > 其余条目的复核结论见各条目末尾的「2026-11-04 fork 复核与修复」段落。
 
 ---
