@@ -532,17 +532,47 @@ RtxBuffer make_rtx_buffer(const std::string& payload) {
 void test_ack_unsent_dsn_no_effect() {
     MuxRetransmitBuffer rtx;
     auto buf = make_rtx_buffer("hello");
-    CHECK(rtx.Track(0, 10, buf.data, buf.length, 100, 1024 * 1024, 1));
+    CHECK(rtx.Track(0, 10, buf.data, buf.length, 100, 1024 * 1024));
     CHECK(rtx.size() == 1);
 
-    // ACK for DSN 50-100, which was never sent.
+    // ACK for DSN 50-100, which was never sent, with a delivery frontier
+    // BELOW our entry. Our entry is neither under the frontier nor inside a
+    // range, so it must survive.
+    //
+    // The frontier is deliberately 5 and not 100. In this repository the
+    // acknowledgement's largest is the peer's DELIVERY frontier: a frame is
+    // acknowledged only once it was delivered in order, so everything at or
+    // below it is released. Upstream released only the frames named in the
+    // SACK ranges and kept the rest, which with a frontier of 100 would have
+    // kept a frame the peer had already delivered -- and gone on
+    // retransmitting it until its attempt budget ran out. The cumulative
+    // semantics is this repository's deliberate choice and is covered by
+    // cumulative_ack_releases_entries_missing_from_ranges in
+    // vmux_retransmit_buffer_test.
     std::vector<MuxAckRange> ranges = {{50, 100}};
-    std::vector<std::uint64_t> fast_candidates;
-    rtx.Ack(0, 100, ranges, 200, 3, 0, fast_candidates);
+    rtx.Ack(0, 5, ranges, 200);
 
     // RTX buffer should still have our entry.
     CHECK(rtx.size() == 1);
     CHECK(rtx.bytes() == static_cast<std::size_t>(buf.length));
+}
+
+// 8.1b: The delivery frontier is cumulative. Everything at or below it was
+// delivered in order and is released, even when the SACK ranges name only
+// sequences that were never sent.
+void test_ack_releases_below_the_delivery_frontier() {
+    MuxRetransmitBuffer rtx;
+    auto buf = make_rtx_buffer("hello");
+    CHECK(rtx.Track(0, 10, buf.data, buf.length, 100, 1024 * 1024));
+    CHECK(rtx.Track(0, 20, buf.data, buf.length, 100, 1024 * 1024));
+    CHECK(rtx.size() == 2);
+
+    // The ranges name nothing that was sent; the frontier covers both frames.
+    std::vector<MuxAckRange> ranges = {{50, 100}};
+    rtx.Ack(0, 20, ranges, 200);
+
+    CHECK(rtx.size() == 0);
+    CHECK(rtx.bytes() == 0);
 }
 
 // 8.2: ACK with valid range removes the right entry
@@ -552,19 +582,25 @@ void test_ack_removes_correct_entry() {
     auto buf2 = make_rtx_buffer("bbb");
     auto buf3 = make_rtx_buffer("ccc");
 
-    CHECK(rtx.Track(0, 10, buf1.data, buf1.length, 100, 1024 * 1024, 1));
-    CHECK(rtx.Track(0, 20, buf2.data, buf2.length, 100, 1024 * 1024, 1));
-    CHECK(rtx.Track(0, 30, buf3.data, buf3.length, 100, 1024 * 1024, 1));
+    CHECK(rtx.Track(0, 10, buf1.data, buf1.length, 100, 1024 * 1024));
+    CHECK(rtx.Track(0, 20, buf2.data, buf2.length, 100, 1024 * 1024));
+    CHECK(rtx.Track(0, 30, buf3.data, buf3.length, 100, 1024 * 1024));
     CHECK(rtx.size() == 3);
 
-    // ACK DSN 20 only.
+    // The delivery frontier is 20: entries 10 and 20 were delivered in
+    // order and are released. Entry 30 is above the frontier and is still
+    // in flight.
+    //
+    // Upstream released only the entries the SACK ranges named, so with a
+    // frontier of 30 it kept entries 10 and 30 and released only 20. In this
+    // repository the frontier is cumulative -- a frame is acknowledged only
+    // once it was delivered in order -- so everything at or below it goes.
     std::vector<MuxAckRange> ranges = {{20, 20}};
-    std::vector<std::uint64_t> fast_candidates;
-    rtx.Ack(0, 30, ranges, 200, 3, 0, fast_candidates);
+    rtx.Ack(0, 20, ranges, 200);
 
-    CHECK(rtx.size() == 2);
-    // Entries 10 and 30 should remain.
-    CHECK(rtx.Find(MuxRetransmitBuffer::Key(0, 10)) != nullptr);
+    CHECK(rtx.size() == 1);
+    // Entry 10 and 20 are released, 30 remains.
+    CHECK(rtx.Find(MuxRetransmitBuffer::Key(0, 10)) == nullptr);
     CHECK(rtx.Find(MuxRetransmitBuffer::Key(0, 20)) == nullptr);
     CHECK(rtx.Find(MuxRetransmitBuffer::Key(0, 30)) != nullptr);
 }
@@ -573,12 +609,11 @@ void test_ack_removes_correct_entry() {
 void test_ack_different_cid_no_effect() {
     MuxRetransmitBuffer rtx;
     auto buf = make_rtx_buffer("test");
-    CHECK(rtx.Track(5, 10, buf.data, buf.length, 100, 1024 * 1024, 1));
+    CHECK(rtx.Track(5, 10, buf.data, buf.length, 100, 1024 * 1024));
 
     // ACK for cid 3.
     std::vector<MuxAckRange> ranges = {{10, 10}};
-    std::vector<std::uint64_t> fast_candidates;
-    rtx.Ack(3, 10, ranges, 200, 3, 0, fast_candidates);
+    rtx.Ack(3, 10, ranges, 200);
 
     CHECK(rtx.size() == 1);
     CHECK(rtx.Find(MuxRetransmitBuffer::Key(5, 10)) != nullptr);
@@ -589,13 +624,12 @@ void test_ack_overlapping_ranges_no_double_free() {
     MuxRetransmitBuffer rtx;
     auto buf = make_rtx_buffer("overlap");
 
-    CHECK(rtx.Track(0, 50, buf.data, buf.length, 100, 1024 * 1024, 1));
+    CHECK(rtx.Track(0, 50, buf.data, buf.length, 100, 1024 * 1024));
     CHECK(rtx.size() == 1);
 
     // Overlapping ranges both covering DSN 50.
     std::vector<MuxAckRange> ranges = {{40, 60}, {50, 70}};
-    std::vector<std::uint64_t> fast_candidates;
-    rtx.Ack(0, 100, ranges, 200, 3, 0, fast_candidates);
+    rtx.Ack(0, 100, ranges, 200);
 
     // Entry should be removed exactly once.
     CHECK(rtx.size() == 0);
@@ -607,14 +641,13 @@ void test_ack_overlapping_ranges_no_double_free() {
 void test_rtx_ack_range_exceeds_largest() {
     MuxRetransmitBuffer rtx;
     auto buf = make_rtx_buffer("test");
-    CHECK(rtx.Track(0, 50, buf.data, buf.length, 100, 1024 * 1024, 1));
+    CHECK(rtx.Track(0, 50, buf.data, buf.length, 100, 1024 * 1024));
 
     // Malicious range: end > largest.  RTX.Ack doesn't validate this; it just
     // checks if seq is in [start, end].  DSN 50 is in [40, 200], so it gets
     // acked.  This is not a security issue — the entry is correctly released.
     std::vector<MuxAckRange> ranges = {{40, 200}};
-    std::vector<std::uint64_t> fast_candidates;
-    rtx.Ack(0, 100, ranges, 200, 3, 0, fast_candidates);
+    rtx.Ack(0, 100, ranges, 200);
 
     CHECK(rtx.size() == 0);
 }
@@ -624,11 +657,15 @@ void test_rtx_ack_range_exceeds_largest() {
 void test_rtx_ack_start_greater_than_end() {
     MuxRetransmitBuffer rtx;
     auto buf = make_rtx_buffer("test");
-    CHECK(rtx.Track(0, 50, buf.data, buf.length, 100, 1024 * 1024, 1));
+    CHECK(rtx.Track(0, 50, buf.data, buf.length, 100, 1024 * 1024));
 
+    // The frontier is 10, below the entry: the entry is not delivered, so
+    // only the ranges can release it -- and a range with start > end matches
+    // nothing. The frontier stays below the entry on purpose: this
+    // repository releases cumulatively below the frontier, so a frontier of
+    // 100 would have released the entry regardless of the malformed range.
     std::vector<MuxAckRange> ranges = {{100, 40}}; // start > end
-    std::vector<std::uint64_t> fast_candidates;
-    rtx.Ack(0, 100, ranges, 200, 3, 0, fast_candidates);
+    rtx.Ack(0, 10, ranges, 200);
 
     // No entry should be removed (no seq satisfies start <= seq <= end when start > end).
     CHECK(rtx.size() == 1);
@@ -638,11 +675,12 @@ void test_rtx_ack_start_greater_than_end() {
 void test_rtx_ack_empty_ranges() {
     MuxRetransmitBuffer rtx;
     auto buf = make_rtx_buffer("test");
-    CHECK(rtx.Track(0, 50, buf.data, buf.length, 100, 1024 * 1024, 1));
+    CHECK(rtx.Track(0, 50, buf.data, buf.length, 100, 1024 * 1024));
 
+    // The frontier is below the entry, so nothing is released: the ranges
+    // are empty and the entry has not been delivered.
     std::vector<MuxAckRange> ranges;
-    std::vector<std::uint64_t> fast_candidates;
-    rtx.Ack(0, 100, ranges, 200, 3, 0, fast_candidates);
+    rtx.Ack(0, 10, ranges, 200);
 
     CHECK(rtx.size() == 1);
 }
@@ -654,7 +692,7 @@ void test_rtx_ack_many_ranges() {
     for (int i = 0; i < 100; ++i) {
         auto buf = make_rtx_buffer("x");
         CHECK(rtx.Track(0, static_cast<std::uint32_t>(i), buf.data, buf.length,
-                        100, 1024 * 1024, 1));
+                        100, 1024 * 1024));
     }
     CHECK(rtx.size() == 100);
 
@@ -664,8 +702,7 @@ void test_rtx_ack_many_ranges() {
         ranges.push_back({static_cast<std::uint32_t>(i * 4),
                           static_cast<std::uint32_t>(i * 4 + 3)});
     }
-    std::vector<std::uint64_t> fast_candidates;
-    rtx.Ack(0, 95, ranges, 200, 3, 0, fast_candidates);
+    rtx.Ack(0, 95, ranges, 200);
 
     // 24 * 4 = 96 entries should be acked.
     CHECK(rtx.size() == 4);
@@ -677,12 +714,12 @@ void test_rtx_byte_cap() {
     auto buf = make_rtx_buffer(std::string(100, 'x'));
 
     // byte_cap = 50, frame = 100 → should fail.
-    CHECK(!rtx.Track(0, 1, buf.data, buf.length, 100, 50, 1));
+    CHECK(!rtx.Track(0, 1, buf.data, buf.length, 100, 50));
     CHECK(rtx.size() == 0);
     CHECK(rtx.bytes() == 0);
 
     // byte_cap = 200 → should succeed.
-    CHECK(rtx.Track(0, 1, buf.data, buf.length, 100, 200, 1));
+    CHECK(rtx.Track(0, 1, buf.data, buf.length, 100, 200));
     CHECK(rtx.size() == 1);
     CHECK(rtx.bytes() == 100);
 }
@@ -691,9 +728,9 @@ void test_rtx_byte_cap() {
 void test_erase_cid() {
     MuxRetransmitBuffer rtx;
     auto buf = make_rtx_buffer("x");
-    rtx.Track(0, 10, buf.data, buf.length, 100, 1024 * 1024, 1);
-    rtx.Track(0, 20, buf.data, buf.length, 100, 1024 * 1024, 1);
-    rtx.Track(1, 30, buf.data, buf.length, 100, 1024 * 1024, 1);
+    rtx.Track(0, 10, buf.data, buf.length, 100, 1024 * 1024);
+    rtx.Track(0, 20, buf.data, buf.length, 100, 1024 * 1024);
+    rtx.Track(1, 30, buf.data, buf.length, 100, 1024 * 1024);
 
     rtx.EraseCid(0);
     CHECK(rtx.size() == 1);
@@ -706,45 +743,25 @@ void test_erase_cid() {
 void test_reack_already_acked() {
     MuxRetransmitBuffer rtx;
     auto buf = make_rtx_buffer("test");
-    CHECK(rtx.Track(0, 50, buf.data, buf.length, 100, 1024 * 1024, 1));
+    CHECK(rtx.Track(0, 50, buf.data, buf.length, 100, 1024 * 1024));
 
     std::vector<MuxAckRange> ranges = {{50, 50}};
-    std::vector<std::uint64_t> fast_candidates;
 
     // First ack removes entry.
-    rtx.Ack(0, 50, ranges, 200, 3, 0, fast_candidates);
+    rtx.Ack(0, 50, ranges, 200);
     CHECK(rtx.size() == 0);
 
     // Second ack on same DSN — should be safe, no crash, no negative bytes.
-    rtx.Ack(0, 50, ranges, 300, 3, 0, fast_candidates);
+    rtx.Ack(0, 50, ranges, 300);
     CHECK(rtx.size() == 0);
     CHECK(rtx.bytes() == 0);
 }
 
 // 8.12: Fast retransmit candidate detection — spurious fast rtx should be deduped
-void test_fast_rtx_dedup() {
-    MuxRetransmitBuffer rtx;
-    // Track entries DSN 10..15.
-    for (int i = 10; i <= 15; ++i) {
-        auto buf = make_rtx_buffer("x");
-        CHECK(rtx.Track(0, static_cast<std::uint32_t>(i), buf.data, buf.length,
-                        100, 1024 * 1024, 1));
-    }
-
-    // ACK DSN 15 (largest).  DSN 10 is 5 below largest, with threshold=3.
-    // Time threshold=0 (disabled).  DSN 10 should become a fast candidate.
-    std::vector<MuxAckRange> ranges = {{15, 15}};
-    std::vector<std::uint64_t> fast_candidates;
-    rtx.Ack(0, 15, ranges, 200, 3, 0, fast_candidates);
-
-    // DSN 10, 11, 12 are ≥3 below largest=15.
-    CHECK(fast_candidates.size() == 3);
-
-    // Second ACK with same largest — should NOT produce duplicates.
-    fast_candidates.clear();
-    rtx.Ack(0, 15, ranges, 250, 3, 0, fast_candidates);
-    CHECK(fast_candidates.empty()); // Deduped via fast_rtx_mark.
-}
+// The upstream case that covered fast-retransmit candidate dedup is not
+// ported: this repository detects loss with the probe timeout alone, so no
+// candidate list exists to dedup. The decision is recorded in
+// docs/vmux/VMUX_AUDIT_REPORT.md (P1-5).
 
 // ===========================================================================
 // Group 9: Round-trip encode → decode fidelity
@@ -912,6 +929,7 @@ int main() {
 
     // Group 8: RTX buffer interaction
     RUN_TEST(test_ack_unsent_dsn_no_effect);
+    RUN_TEST(test_ack_releases_below_the_delivery_frontier);
     RUN_TEST(test_ack_removes_correct_entry);
     RUN_TEST(test_ack_different_cid_no_effect);
     RUN_TEST(test_ack_overlapping_ranges_no_double_free);
@@ -922,7 +940,7 @@ int main() {
     RUN_TEST(test_rtx_byte_cap);
     RUN_TEST(test_erase_cid);
     RUN_TEST(test_reack_already_acked);
-    RUN_TEST(test_fast_rtx_dedup);
+    // the fast-retransmit dedup case is not ported (see the note above)
 
     // Group 9: Round-trip
     RUN_TEST(test_encode_decode_roundtrip);

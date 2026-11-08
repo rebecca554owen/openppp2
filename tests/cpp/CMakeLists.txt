@@ -513,6 +513,20 @@ openppp2_add_cpp_test(vmux_qa001_write_failure_test SOURCES
     vmux_qa001_write_failure_test.cpp)
 openppp2_add_cpp_test(vmux_wave5_control_plane_test SOURCES
     vmux_wave5_control_plane_test.cpp)
+openppp2_add_cpp_test(vmux_wave2_flow_isolation_test SOURCES
+    vmux_wave2_flow_isolation_test.cpp)
+openppp2_add_cpp_test(vmux_wave6_property_wrap_test SOURCES
+    vmux_wave6_property_wrap_test.cpp)
+openppp2_add_cpp_test(vmux_wave0_rtx_release_test SOURCES
+    vmux_wave0_rtx_release_test.cpp)
+openppp2_add_cpp_test(vmux_wave6_long_stability_test SOURCES
+    vmux_wave6_long_stability_test.cpp)
+openppp2_add_cpp_test(vmux_qa001_ack_malicious_test SOURCES
+    vmux_qa001_ack_malicious_test.cpp)
+openppp2_add_cpp_test(vmux_wave4_pto_rtx_test SOURCES
+    vmux_wave4_pto_rtx_test.cpp)
+# 该文件包含 ppp/stdafx.h 以使用本仓库真实的 mux 常量，因此需要 OpenSSL。
+target_link_libraries(vmux_wave2_flow_isolation_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(mux_transport_adapter_test SOURCES
     mux_transport_adapter_test.cpp)
 target_link_libraries(mux_transport_adapter_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
