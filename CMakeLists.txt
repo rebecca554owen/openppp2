@@ -2,7 +2,7 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.0.0)
 
 # Define the solutions name.
 SET(NAME ppp)
-PROJECT(${NAME} VERSION 2.1.6.0 LANGUAGES C CXX)# CMAKE_CURRENT_SOURCE_DIR
+PROJECT(${NAME} VERSION 2.3.0.0 LANGUAGES C CXX)# CMAKE_CURRENT_SOURCE_DIR
 
 # Allow CI to inject a concrete version label (e.g. v2.2.0-<short sha>).
 # Overrides the hardcoded PPP_APPLICATION_VERSION default in ppp/stdafx.h.
@@ -53,7 +53,7 @@ IF(MSVC)
     SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MT")
 ELSE()
     SET(CMAKE_C_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-implicit-function-declaration")
-    SET(CMAKE_CXX_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-inconsistent-missing-override -Wno-pointer-bool-conversion -Wno-unsequenced -Wno-null-dereference -Wno-gnu-variable-sized-type-not-at-end -Wno-tautological-undefined-compare -Wno-deprecated-declarations -Wno-shift-count-overflow")
+    SET(CMAKE_CXX_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-inconsistent-missing-override -Wno-pointer-bool-conversion -Wno-unsequenced -Wno-null-dereference -Wno-gnu-variable-sized-type-not-at-end -Wno-tautological-undefined-compare -Wno-deprecated-declarations -Wno-deprecated-literal-operator -Wno-shift-count-overflow")
 ENDIF()
 
 # Configure predefined compilation macros.
@@ -214,6 +214,12 @@ ENDIF()
 OPTION(ENABLE_TESTS "Build unit tests (GTest)" OFF)
 OPTION(ENABLE_VMUX_CHURN_TEST "Build the root-linked VMUX carrier churn test" OFF)
 OPTION(ENABLE_VMUX_RECEIVE_SEMANTICS_TEST "Build the root-linked VMUX receive-semantics test" OFF)
+# The VMUX fuzz targets (audit follow-up VMUX-FUZZ-001). They need the
+# libFuzzer runtime, so they only build with a clang that ships it: the Linux
+# CI image and the Homebrew LLVM on macOS. Apple's own clang has no libFuzzer
+# runtime and the link fails, so the option stays off by default. Build it
+# with -DENABLE_ASAN=ON as well, so the library itself is instrumented.
+OPTION(ENABLE_VMUX_FUZZ_TEST "Build the VMUX fuzz targets (needs a clang with libFuzzer)" OFF)
 OPTION(ENABLE_COVERAGE "Enable LLVM source coverage instrumentation" OFF)
 OPTION(ENABLE_XTCP "Build with the pinned XTCP userspace TCP/IP stack (Linux desktop only)" OFF)
 SET(XTCP_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/xtcp" CACHE PATH "Path to the pinned XTCP source tree")
@@ -239,6 +245,17 @@ IF(ENABLE_XTCP)
     ADD_SUBDIRECTORY("${XTCP_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/third-party/xtcp" EXCLUDE_FROM_ALL)
     IF(NOT TARGET xtcp_static)
         MESSAGE(FATAL_ERROR "XTCP source tree did not define the required xtcp_static target.")
+    ENDIF()
+    # Feature probe: only some XTCP revisions expose a per-connection timer
+    # deadline (XtcpStack::NextTimerDeadlineUs). The runtime compiles the
+    # deadline-driven poll path only when the pinned tree provides it and
+    # otherwise falls back to a fixed poll cadence.
+    SET(XTCP_HAS_TIMER_DEADLINE OFF)
+    IF(EXISTS "${XTCP_SOURCE_DIR}/include/xtcp/core/stack.h")
+        FILE(READ "${XTCP_SOURCE_DIR}/include/xtcp/core/stack.h" _xtcp_stack_header)
+        IF(_xtcp_stack_header MATCHES "NextTimerDeadlineUs")
+            SET(XTCP_HAS_TIMER_DEADLINE ON)
+        ENDIF()
     ENDIF()
 ENDIF()
 
@@ -493,8 +510,10 @@ IF(ENABLE_XTCP)
     TARGET_LINK_LIBRARIES(openppp2_lib xtcp_static)
     TARGET_COMPILE_DEFINITIONS(openppp2_lib PRIVATE
         PPP_ENABLE_XTCP=1
-        PPP_XTCP_RUNTIME_WIRED=1
-        PPP_XTCP_HAS_TIMER_DEADLINE=1)
+        PPP_XTCP_RUNTIME_WIRED=1)
+    IF(XTCP_HAS_TIMER_DEADLINE)
+        TARGET_COMPILE_DEFINITIONS(openppp2_lib PRIVATE PPP_XTCP_HAS_TIMER_DEADLINE=1)
+    ENDIF()
 ENDIF()
 
 SET(PPP_EXECUTABLE_SOURCES ${PPP_MAIN_SOURCE})
@@ -672,6 +691,25 @@ IF(ENABLE_VMUX_RECEIVE_SEMANTICS_TEST)
             "-Wl,--exclude-libs,ALL")
     ENDIF()
     ADD_TEST(NAME vmux_receive_semantics_test COMMAND vmux_receive_semantics_test)
+ENDIF()
+
+IF(ENABLE_VMUX_FUZZ_TEST)
+    ENABLE_TESTING()
+    ADD_EXECUTABLE(fuzz_vmux_ack
+        tests/fuzz/fuzz_vmux_ack.cpp)
+    ADD_EXECUTABLE(fuzz_vmux_frame
+        tests/fuzz/fuzz_vmux_frame.cpp)
+    FOREACH(PPP_FUZZ_TARGET fuzz_vmux_ack fuzz_vmux_frame)
+        TARGET_LINK_LIBRARIES(${PPP_FUZZ_TARGET} openppp2_lib)
+        TARGET_COMPILE_OPTIONS(${PPP_FUZZ_TARGET} PRIVATE
+            -fsanitize=fuzzer,address -fno-omit-frame-pointer -g)
+        TARGET_LINK_OPTIONS(${PPP_FUZZ_TARGET} PRIVATE
+            -fsanitize=fuzzer,address)
+        IF(PLATFORM_SYSTEM_LINUX)
+            TARGET_LINK_OPTIONS(${PPP_FUZZ_TARGET} PRIVATE
+                "-Wl,--exclude-libs,ALL")
+        ENDIF()
+    ENDFOREACH()
 ENDIF()
 
 IF(ENABLE_TESTS)
