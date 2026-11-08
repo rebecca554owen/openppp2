@@ -1,7 +1,9 @@
 #include "vmux_skt.h"
 #include "vmux_net.h"
+#include <ppp/threading/BufferswapAllocator.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/diagnostics/Error.h>
+#include <ppp/app/mux/MuxRuntimeCounters.h>
 #include <ppp/transmissions/ITransmissionStatistics.h>
 
 /**
@@ -109,10 +111,16 @@ namespace vmux {
             event(this, false);
         }
 
-        mux_->release_connection(connection_id_, this);
+        // The FIN must be queued while tx_flow_seq_ still holds this flow's
+        // send frontier. release_connection() drops that counter, so a FIN
+        // posted afterwards restarts the per-flow DSN numbering at one; the
+        // receiver treats a frame below its delivery frontier as a duplicate
+        // and acknowledges it WITHOUT delivering it, so the peer would never
+        // learn that the flow ended.
         if (fin) {
             mux_->post(vmux_net::cmd_fin, NULLPTR, 0, connection_id_);
         }
+        mux_->release_connection(connection_id_, this);
 
         if (NULLPTR != tx_socket) {
             auto tx_context = tx_context_;
@@ -602,6 +610,23 @@ namespace vmux {
             return false;
         }
 
+        // The FIN of this flow already went out (the local read side reached
+        // EOF), so the peer already treats the flow as closed. A data frame
+        // posted now would carry a DSN beyond the FIN's, and the peer drops
+        // every such frame WITHOUT acknowledging it -- it never took the data.
+        // The sender would then retransmit it until its attempt budget runs
+        // out (30 s with the current grace) and reset a flow that is already
+        // dead, burning every carrier meanwhile.
+        //
+        // The local peer closed its write side, so there is nothing
+        // legitimate left to send: refuse the write.
+        if (status_.fin_) {
+            ppp::telemetry::Count("mux.tx.flow.after_fin", 1);
+            ppp::app::mux::MuxRuntimeCounterRegistry::AddTxFlowAfterFin();
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendAfterFin);
+            return false;
+        }
+
         std::shared_ptr<boost::asio::ip::tcp::socket> tx_socket = tx_socket_;
         if (NULLPTR == tx_socket || NULLPTR == tx_buffer_) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendContextNotReady);
@@ -953,8 +978,46 @@ namespace vmux {
                                 close();
                                 return false;
                             }
+                            Byte* push_data = tx_buffer_.get();
+                            int push_size = bytes_transferred;
+                            if (client_data_transform_) {
+                                ppp::string rewritten;
+                                client_data_transform_(tx_buffer_.get(), bytes_transferred, rewritten);
+
+                                int rewritten_size = static_cast<int>(rewritten.size());
+                                if (rewritten_size < 1) {
+                                    if (forward_to_rx_socket()) {
+                                        return true;
+                                    }
+                                    close();
+                                    return false;
+                                }
+
+                                if (NULLPTR == rewrite_buffer_ || rewrite_buffer_size_ < rewritten_size) {
+                                    auto allocator = mux_ ? mux_->AppConfiguration->GetBufferAllocator() : NULLPTR;
+                                    // Size the destination to the actual rewritten
+                                    // length, not to the vmux frame cap: the rewriter
+                                    // can emit more than it consumed (an 8 KiB header
+                                    // line is relayed verbatim in Passthrough), and a
+                                    // fixed max_buffers_size buffer would then be
+                                    // memcpy'd past its end.  RinetdConnection's
+                                    // bridge already allocates per actual size.
+                                    rewrite_buffer_ = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, (std::size_t)rewritten_size);
+                                    rewrite_buffer_size_ = (NULLPTR != rewrite_buffer_) ? (int)rewritten_size : 0;
+                                }
+
+                                if (NULLPTR == rewrite_buffer_) {
+                                    close();
+                                    return false;
+                                }
+
+                                ::memcpy(rewrite_buffer_.get(), rewritten.data(), rewritten_size);
+                                push_data = rewrite_buffer_.get();
+                                push_size = rewritten_size;
+                            }
+
                             bool forwarding = 
-                                mux_->post(vmux_net::cmd_push, tx_buffer_.get(), bytes_transferred, connection_id_, status_.tx_acceleration_,
+                                mux_->post(vmux_net::cmd_push, push_data, push_size, connection_id_, status_.tx_acceleration_,
                                     [self, this](bool successed) noexcept {
                                         if (successed) {
                                             if (forward_to_rx_socket()) {

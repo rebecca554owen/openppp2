@@ -3,17 +3,17 @@
 
 /**
  * @file vmux_wave0_rtx_release_test.cpp
- * @brief Wave 0 test: verify RTX state is released when a flow is closed.
+ * @brief Wave 0 tests: the reliability primitives that flow teardown relies on.
  * @license GPL-3.0
  *
- * Tests the P2-9 fix: release_connection() must call
- * release_flow_reliability_state() to free RTX/FEC entries for the
- * closed connection_id, preventing idle-timeout RTX retention.
- *
- * Also tests:
+ * NOTE (2026-11-03): this file does NOT cover vmux_net::release_connection().
+ * The P2-9 closure it used to claim — release_connection() calling
+ * release_flow_reliability_state() — was lost in the 57f0ffa5 rewrite and is
+ * not implemented; docs/vmux/VMUX_AUDIT_REPORT.md now says so. What is tested
+ * here is the primitives the release paths DO use:
+ *   - MuxRetransmitBuffer EraseCid / Track / Ack / CollectExpired
  *   - FakeClock deterministic time advancement
  *   - DeliveryOracle data-correctness verification
- *   - MuxRetransmitBuffer PTO expiry and ACK paths
  *   - MuxLinkDrainState lifecycle (P0-T1 teardown scenario)
  *   - MuxAckTracker wrap-around and range merging
  */
@@ -133,12 +133,12 @@ BOOST_AUTO_TEST_CASE(rtx_pto_expiry_uses_fake_clock) {
     // Not expired yet.
     clock.advance(1199);
     std::vector<std::uint64_t> expired;
-    rtx.CollectExpired(clock.now(), pto, 60000, 10, expired);
+    rtx.CollectExpired(clock.now(), pto, 10, expired);
     BOOST_TEST(expired.empty());
 
     // Now expired.
     clock.advance(1); // now = 1200
-    rtx.CollectExpired(clock.now(), pto, 60000, 10, expired);
+    rtx.CollectExpired(clock.now(), pto, 10, expired);
     BOOST_REQUIRE_EQUAL(expired.size(), 1u);
     BOOST_TEST(mux::MuxRetransmitBuffer::KeyCid(expired[0]) == 1u);
 }
@@ -274,9 +274,8 @@ BOOST_AUTO_TEST_CASE(ack_returns_rtt_sample_only_for_non_retransmitted_frame) {
 
     // ACK at t=1600 covers seq 1..2.
     clock.advance(1600);
-    std::vector<std::uint64_t> fast;
     std::vector<mux::MuxAckRange> ranges = { {1, 2} };
-    const std::uint64_t sample = rtx.Ack(1, 2, ranges, clock.now(), 3, 0, fast);
+    const std::uint64_t sample = rtx.Ack(1, 2, ranges, clock.now());
 
     // seq=2 was never retransmitted: RTT = 1600 - 1010 = 590.
     // seq=1 was retransmitted: no sample.
@@ -284,50 +283,11 @@ BOOST_AUTO_TEST_CASE(ack_returns_rtt_sample_only_for_non_retransmitted_frame) {
     BOOST_TEST(rtx.size() == 0u);
 }
 
-BOOST_AUTO_TEST_CASE(fast_retransmit_triggers_when_gap_exceeds_threshold) {
-    mux::MuxRetransmitBuffer rtx;
-    const std::size_t cap = 1 << 20;
-
-    // Frames 1..6 for cid=1.
-    for (std::uint32_t seq = 1; seq <= 6; ++seq) {
-        rtx.Track(1, seq, make_buffer(50, 0x600 + seq), 50, 1000 + seq * 10, cap);
-    }
-
-    // ACK covers 4..6, largest=6. Frames 1..3 sit >= 3 below largest.
-    std::vector<std::uint64_t> fast;
-    std::vector<mux::MuxAckRange> ranges = { {4, 6} };
-    rtx.Ack(1, 6, ranges, 2000, 3, 0, fast);
-
-    BOOST_TEST(rtx.size() == 3u); // 4..6 released.
-    BOOST_REQUIRE_EQUAL(fast.size(), 3u);
-
-    // Each fast candidate must be seq <= 3.
-    for (std::uint64_t key : fast) {
-        const std::uint32_t seq = static_cast<std::uint32_t>(key & 0xFFFFFFFFu);
-        BOOST_TEST(seq <= 3u);
-    }
-}
-
-BOOST_AUTO_TEST_CASE(fast_retransmit_not_triggered_below_threshold) {
-    mux::MuxRetransmitBuffer rtx;
-    const std::size_t cap = 1 << 20;
-
-    for (std::uint32_t seq = 1; seq <= 5; ++seq) {
-        rtx.Track(1, seq, make_buffer(50, 0x700 + seq), 50, 1000 + seq * 10, cap);
-    }
-
-    // ACK covers 3..5, largest=5. Frame 1 is distance 4 (>= 3), frame 2 is distance 3 (>= 3).
-    std::vector<std::uint64_t> fast;
-    std::vector<mux::MuxAckRange> ranges = { {3, 5} };
-    rtx.Ack(1, 5, ranges, 2000, 3, 0, fast);
-
-    BOOST_REQUIRE_EQUAL(fast.size(), 2u); // seq 1 and 2.
-
-    // Second ACK with same largest must NOT re-trigger (dedup via fast_rtx_mark).
-    std::vector<std::uint64_t> fast2;
-    rtx.Ack(1, 5, ranges, 2100, 3, 0, fast2);
-    BOOST_TEST(fast2.empty());
-}
+// The two upstream cases that covered fast retransmit are not ported:
+// this repository detects loss with the probe timeout alone, so there is no
+// candidate list to hand back and no threshold to cross. The decision is
+// recorded in docs/vmux/VMUX_AUDIT_REPORT.md (P1-5), and the backoff that
+// replaced it is covered by vmux_retransmit_buffer_test.
 
 // ===========================================================================
 // 6. MuxAckTracker wrap-around and range merging
@@ -467,9 +427,8 @@ BOOST_AUTO_TEST_CASE(rtx_byte_cap_prevents_unbounded_growth) {
     BOOST_TEST(rtx.size() == 2u);
 
     // After ACK releases 400 bytes, the third frame can fit.
-    std::vector<std::uint64_t> fast;
     std::vector<mux::MuxAckRange> ranges = { {1, 1} };
-    rtx.Ack(1, 1, ranges, 1100, 3, 0, fast);
+    rtx.Ack(1, 1, ranges, 1100);
     BOOST_TEST(rtx.bytes() == 400u);
 
     BOOST_TEST(rtx.Track(1, 3, make_buffer(400, 0x803), 400, 1030, cap));

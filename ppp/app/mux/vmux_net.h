@@ -7,6 +7,7 @@
  */
 
 #include "vmux.h"
+#include <cassert>
 #include <cstdint>
 #include <unordered_set>
 #include <vector>
@@ -87,6 +88,7 @@ namespace vmux {
     private:
         friend class                                                                vmux_skt;
         friend struct                                                               vmux_net_test_access;
+        friend struct                                                               vmux_fuzz_test_access; ///< The fuzz target reaches the private dispatch path on purpose.
 
         template <typename _Tp>
         struct packet_less {
@@ -385,6 +387,18 @@ namespace vmux {
             return cmd == cmd_push || cmd == cmd_fin;
         }
         /**
+         * @brief True for a command byte this build knows how to act on.
+         * @details Derived from the four classifiers above, so it never drifts
+         *          from the dispatch: a command that belongs to no group is
+         *          not one this build can handle. A peer that speaks another
+         *          dialect sends exactly those, and they must not take the
+         *          carrier or the session down -- they are counted and skipped.
+         */
+        static bool                                                                 is_known_cmd(Byte cmd) noexcept {
+            return is_session_control(cmd) || is_connection_control(cmd) ||
+                is_reliability_control(cmd) || is_per_flow_data(cmd);
+        }
+        /**
          * @brief True when this scheduler configuration uses negotiated per-flow
          *        receiver ordering (flow v2 / per-flow DSN).
          * @details balance spreads one session's frames across links by competition
@@ -548,6 +562,28 @@ namespace vmux {
             return NULLPTR != strand_ && strand_->running_in_this_thread();
         }
 
+        /**
+         * @brief Debug-only assertion that the caller runs on this session's strand.
+         * @details The vmux state that the strand owns -- the transmit queues, the
+         *          acknowledgement bookkeeping, the reorder buffer, the per-flow
+         *          retransmit state -- has no lock of its own. It is protected by
+         *          the fact that only this strand touches it, which is an
+         *          invariant nothing in the type system enforces. In a debug
+         *          build this turns a violation of that invariant into an
+         *          immediate, located failure instead of a rare corruption that
+         *          shows up much later as a torn queue.
+         *
+         *          In a release build the check compiles away entirely.
+         * @param where A short description of the caller, used in the message.
+         */
+        void                                                                        assert_on_strand(const char* where) const noexcept {
+#ifndef NDEBUG
+            assert(is_strand_thread() && where);
+#else
+            (void)where;
+#endif
+        }
+
         /** @brief Send packet to one specific underlying link-layer endpoint. */
         bool                                                                        underlyin_sent(const vmux_linklayer_ptr& linklayer, const std::shared_ptr<Byte>& packet, int packet_length, const tx_completion_ptr& completion) noexcept;
 
@@ -596,8 +632,31 @@ namespace vmux {
         void                                                                        maybe_release_flow(uint32_t connection_id, flow_rx_context& fx) noexcept;
         /** @brief Remember a finished flow so a retransmitted frame for it can be acknowledged again. */
         void                                                                        remember_closed_flow(uint32_t connection_id, uint32_t last_dsn, uint64_t now) noexcept;
+        /**
+         * @brief Remembers a flow whose receive context is about to disappear.
+         * @details The peer keeps retransmitting a flow's frames until it hears
+         *          that they were delivered. When the receive context vanishes
+         *          without a record, those retransmissions look like frames of a
+         *          flow this side never had: they are refused as unknown, and
+         *          the peer gives up on a flow whose data may in fact have
+         *          arrived.
+         *
+         *          Only the FIN-convergence path (maybe_release_flow) used to
+         *          leave such a record. A socket that closes first — a local
+         *          error, a write failure, an aging timeout, a flow reset —
+         *          dropped the context and left nothing behind, so every late
+         *          frame of that flow was refused as an unknown flow.
+         *
+         *          The record is written only while the receive context still
+         *          exists, which is exactly when no record was written before:
+         *          the FIN path erases the context in the same step that records
+         *          it, and it is the only other writer.
+         */
+        void                                                                        remember_closed_flow_from_context(uint32_t connection_id) noexcept;
         /** @brief Acknowledge a frame of an already finished flow (the peer is still retransmitting it). */
         void                                                                        acknowledge_closed_flow(uint32_t connection_id, uint32_t seq, uint64_t now) noexcept;
+        /** @brief Tell the peer that this flow is gone, so it stops retransmitting it. */
+        void                                                                        refuse_flow(uint32_t connection_id) noexcept;
 
         /**
          * @brief Reliability sub-protocol (negotiated; strand-affine).
@@ -687,19 +746,32 @@ namespace vmux {
             PostInternalAsynchronousCallback null_expr;
             return post(cmd, packet, packet_length, connection_id, acceleration, null_expr);
         }
-        /** @brief Post a vmux command with optional completion callback. */
+        /** @brief Post a vmux command with optional completion callback.
+         *  @details A control queue that reached its hard cap is a backpressure
+         *           outcome, not a broken session: the frame is refused, but the
+         *           session and every other flow must keep running. Escalating
+         *           that refusal to close_exec() would let a peer that floods
+         *           the control plane tear the whole session down with a
+         *           handful of frames. Every other post failure stays fatal. */
         bool                                                                        post(Byte cmd, const void* packet, int packet_length, uint32_t connection_id, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept {
-            bool successing = post_internal(cmd, packet, packet_length, connection_id, acceleration, posted_ac);
-            if (!successing) {
+            bool recoverable = false;
+            bool successing = post_internal(cmd, packet, packet_length, connection_id, acceleration, posted_ac, &recoverable);
+            if (!successing && !recoverable) {
                 close_exec();
             }
 
             return successing;
         }
-        /** @brief Build and enqueue one vmux framed packet; synchronously requires the mux strand. */
-        bool                                                                        post_internal(Byte cmd, const void* packet, int packet_length, uint32_t connection_id, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept;
-        /** @brief Enqueue a prebuilt frame; synchronously requires the mux strand. */
-        bool                                                                        post_internal(const std::shared_ptr<Byte>& packet, int packet_length, bool acceleration, const PostInternalAsynchronousCallback& posted_ac) noexcept;
+        /** @brief Build and enqueue one vmux framed packet; synchronously requires the mux strand.
+         *  @param recoverable Set to true when the only reason for the refusal is
+         *         backpressure (the control queue hit its hard cap). The caller
+         *         must not treat that as a broken session. */
+        bool                                                                        post_internal(Byte cmd, const void* packet, int packet_length, uint32_t connection_id, bool acceleration, const PostInternalAsynchronousCallback& posted_ac, bool* recoverable = NULLPTR) noexcept;
+        /** @brief Enqueue a prebuilt frame; synchronously requires the mux strand.
+         *  @param recoverable Set to true when the only reason for the refusal is
+         *         backpressure (the control queue hit its hard cap). The caller
+         *         must not treat that as a broken session. */
+        bool                                                                        post_internal(const std::shared_ptr<Byte>& packet, int packet_length, bool acceleration, const PostInternalAsynchronousCallback& posted_ac, bool* recoverable = NULLPTR) noexcept;
         /** @brief True when an underlying link-layer endpoint is usable. */
         static bool                                                                 is_linklayer_active(const vmux_linklayer_ptr& linklayer) noexcept;
         /** @brief Pick the next active link-layer round-robin (stripe distribution). */
@@ -784,6 +856,39 @@ namespace vmux {
         static void                                                                 drain_carrier_receive(const IMuxTransportPtr& connection) noexcept;
         /** @brief Enqueue one data frame into the per-flow DRR queue (strand-affine). */
         void                                                                        enqueue_flow_tx(uint32_t connection_id, tx_packet&& packet) noexcept;
+
+        /**
+         * @brief Bytes one flow has queued for transmission (strand-affine).
+         * @details This is the number the per-flow transmit quota is measured
+         *          against: it is how much of the flow's window the sender is
+         *          holding before the carriers have taken it.
+         */
+        size_t                                                                      flow_tx_queued_bytes(uint32_t connection_id) const noexcept;
+
+        /**
+         * @brief Makes room in the control queue under its hard cap.
+         * @details Drops the oldest expendable control frame (ACK / FEC /
+         *          keep-alive / refusing SYN-OK) when the queue already holds
+         *          PPP_MUX_TX_CTRL_MAX_FRAMES frames. Critical frames (SYN,
+         *          accepting SYN-OK, FIN, mode-set) are never dropped.
+         * @return false when every queued frame is critical: the caller must
+         *         reject the frame it wanted to queue.
+         */
+        bool                                                                        ctrl_queue_makes_room() noexcept;
+
+        /**
+         * @brief True when a queued control frame may be dropped to make room.
+         * @details ACK / FEC / keep-alive are regenerated or re-asked by the
+         *          peer. A SYN-OK that carries a refusal (any status other than
+         *          'A') is a best-effort go-away: dropping it costs the peer
+         *          nothing but its retransmission budget, and it keeps a refusal
+         *          flood from filling the control queue with frames that would
+         *          block every real control frame. A SYN-OK that accepts a
+         *          connection is critical, as are SYN, mode-set and acceleration.
+         * @param buffer The queued frame buffer (header first).
+         * @param length The queued frame length in bytes.
+         */
+        static bool                                                                 is_expendable_ctrl_frame(const Byte* buffer, int length) noexcept;
         /** @brief Total queued data frames across all per-flow TX queues. */
         size_t                                                                      tx_data_depth() const noexcept;
         /** @brief Total queued data bytes across all per-flow TX queues. */
@@ -876,12 +981,37 @@ namespace vmux {
             std::atomic<uint64_t>                                                   heartbeat_timeout_ {0}; ///< Deadline tick beyond which session is considered dead. Atomic: written by carrier handshake and vmux strand.
         }                                                                           status_;
 
-        SynchronizationObject                                                       syncobj_;           ///< Mutex protecting shared connection map and the link containers (rx_links_/tx_links_) against the carrier handshake strand.
+        /**
+         * @brief Lock domain 1 of 3: the carrier handshake domain.
+         * @details Protects the shared connection map and the link containers
+         *          (rx_links_ / tx_links_) against the carrier handshake
+         *          strand, which may attach or retire a carrier while this
+         *          session's strand is running.
+         *
+         *          **Nesting rule: this lock is never taken together with
+         *          tx_completion_mutex_ or runtime_state_mutex_.** The three
+         *          domains are independent, and a function that needs two of
+         *          them releases the first before taking the second. The
+         *          rule is checked by tests/cpp/mux_invariants_contract_test.
+         */
+        SynchronizationObject                                                       syncobj_;
         /**
          * @brief Cross-thread terminal state for accepted TX completions only.
          * @details This deliberately does not protect scheduler containers: those
          * remain VMUX-strand-affine. It lets a stop/close caller fail waiters without
          * touching queues, links, maps, or socket state off strand.
+         */
+        /**
+         * @brief Lock domain 2 of 3: the transmit completion domain.
+         * @details Protects the pending transmit completion list and the
+         *          completion accounting. A completion can run on a carrier
+         *          executor rather than on this session's strand, which is why
+         *          this domain exists at all and why it is separate from
+         *          syncobj_.
+         *
+         *          **Nesting rule: never taken together with syncobj_ or
+         *          runtime_state_mutex_.** Checked by
+         *          tests/cpp/mux_invariants_contract_test.
          */
         mutable std::mutex                                                          tx_completion_mutex_;
         // M5 fix: use unordered_set for O(1) completion lookup instead of linear scan
@@ -897,7 +1027,17 @@ namespace vmux {
         };
         std::unordered_set<tx_completion_ptr, tx_completion_hash, tx_completion_eq> pending_tx_completions_;
         bool                                                                        close_requested_ = false;
-        mutable std::mutex                                                          runtime_state_mutex_; ///< Guards runtime_state_ writes; prefer strand.
+        /**
+         * @brief Lock domain 3 of 3: the published runtime state domain.
+         * @details Guards the runtime_state_ writes that readers outside this
+         *          strand make. The strand is the usual writer; the lock exists
+         *          for the few places that publish state from elsewhere.
+         *
+         *          **Nesting rule: never taken together with syncobj_ or
+         *          tx_completion_mutex_.** Checked by
+         *          tests/cpp/mux_invariants_contract_test.
+         */
+        mutable std::mutex                                                          runtime_state_mutex_;
         ppp::app::mux::MuxRuntimeState                                               runtime_state_;       ///< Authoritative runtime facts.
         mutable std::shared_ptr<const ppp::app::mux::MuxRuntimeState>               runtime_snapshot_;    ///< Lock-free published copy for cross-thread reads.
 
@@ -940,6 +1080,10 @@ namespace vmux {
         ppp::app::mux::MuxBacklogWatchdog                                           tx_backlog_watchdog_;   ///< D11 stall watchdog: a full queue that keeps draining is slow, not wedged.
         size_t                                                                      tx_queue_high_water_    = (size_t)PPP_MUX_TX_QUEUE_HIGH_WATER; ///< Aggregate data-frame high-water (tx_data_frames_) for D11 backpressure.
         uint64_t                                                                    tx_backlog_stall_ms_    = (uint64_t)PPP_MUX_TX_BACKLOG_STALL_TIMEOUT; ///< Backlog stall timeout in ms (from config; D11 watchdog).
+        size_t                                                                      tx_flow_max_bytes_     = (size_t)PPP_MUX_TX_FLOW_MAX_BYTES; ///< Per-flow TX queue byte quota (from config, else the flow's own protocol window). Above it the flow is throttled, not killed.
+        size_t                                                                      tx_flow_hard_bytes_    = (size_t)PPP_MUX_TX_FLOW_MAX_BYTES * (size_t)PPP_MUX_TX_FLOW_HARD_FACTOR; ///< The DoS backstop: this multiple of the effective per-flow quota, past which the flow IS failed.
+        size_t                                                                      tx_flow_max_frames_    = (size_t)PPP_MUX_TX_FLOW_MAX_FRAMES; ///< Per-flow TX queue frame quota, scaled with the byte quota.
+        size_t                                                                      tx_flow_hard_frames_   = (size_t)PPP_MUX_TX_FLOW_MAX_FRAMES * (size_t)PPP_MUX_TX_FLOW_HARD_FACTOR; ///< The DoS backstop in frames: twice the frame quota, mirroring the byte ceiling.
         bool                                                                        turbo_                  = false; ///< flow-mode turbo enabled (from config; best-link-first first packet).
         uint64_t                                                                    turbo_last_adjust_      = 0;     ///< Tick of the last turbo pool grow/shrink step (cooldown base).
         uint64_t                                                                    turbo_grow_hold_since_  = 0;     ///< When backlog first crossed grow threshold (0 = not armed).
@@ -980,6 +1124,7 @@ namespace vmux {
         vmux::unordered_map<uint32_t, ppp::app::mux::MuxAckTracker>                 ack_trackers_;      ///< Received-sequence trackers; cid 0 = compat global space (strand-affine).
         uint32_t                                                                    ack_pending_count_ = 0;      ///< Reliable frames received since the last emitted ACK.
         uint64_t                                                                    ack_first_pending_tick_ = 0; ///< Tick the oldest un-ACKed frame arrived (delayed-ACK base).
+        uint64_t                                                                    ack_last_sent_tick_ = 0;    ///< Tick the last ACK frame was emitted (opens the coalescing window).
         uint64_t                                                                    srtt_ms_ = 0;              ///< Smoothed RTT estimate in ms (0 = no sample yet).
         std::vector<uint64_t>                                                       rtx_pending_;       ///< Retransmit-buffer keys scheduled for re-send.
         std::shared_ptr<boost::asio::steady_timer>                                  reliability_timer_; ///< Maintenance timer (ACK delay / PTO / FEC flush).

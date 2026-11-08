@@ -1,5 +1,6 @@
 #include <ppp/stdafx.h>
 #include <ppp/app/mux/vmux_net.h>
+#include <ppp/app/mux/MuxRuntimeCounters.h>
 #include <ppp/app/mux/vmux_skt.h>
 #include <ppp/configurations/AppConfiguration.h>
 
@@ -97,6 +98,25 @@ struct vmux_net_test_access {
         return RunOnStrand(mux, [&]() { return mux.tx_ctrl_queue_.size(); });
     }
 
+    /** @brief Turns the reliability sub-protocol on (ACK frames become possible). */
+    static void EnableReliability(vmux_net& mux, bool enabled) {
+        RunOnStrandVoid(mux, [&]() { mux.reliability_on_ = enabled; });
+    }
+
+    /** @brief Records one received sequence as pending acknowledgement. */
+    static void NoteAckPending(
+        vmux_net& mux,
+        std::uint32_t connection_id,
+        std::uint32_t seq,
+        std::uint64_t now) {
+        RunOnStrandVoid(mux, [&]() { mux.note_ack_pending(connection_id, seq, now); });
+    }
+
+    /** @brief Runs the acknowledgement flush (force=false honours both windows). */
+    static void MaybeSendAck(vmux_net& mux, std::uint64_t now, bool force) {
+        RunOnStrandVoid(mux, [&]() { mux.maybe_send_ack(now, force); });
+    }
+
     static void EmplaceCtrlFrame(vmux_net& mux, int n) {
         RunOnStrandVoid(mux, [&]() {
             for (int i = 0; i < n; ++i) {
@@ -107,6 +127,102 @@ struct vmux_net_test_access {
                 h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_keep_alived);
                 mux.tx_ctrl_queue_.emplace_back(vmux_net::tx_packet{ buf, static_cast<int>(sizeof(vmux_net::vmux_hdr)), nullptr });
             }
+        });
+    }
+
+    /**
+     * @brief Fills the control queue with n frames of one command.
+     * @details The frames are pushed straight into the queue so a test can
+     *          reach the hard cap without a live carrier.
+     */
+    static void EmplaceCtrlFrameWithCmd(vmux_net& mux, std::uint8_t cmd, int n) {
+        RunOnStrandVoid(mux, [&]() {
+            for (int i = 0; i < n; ++i) {
+                auto buf = mux.make_byte_array(static_cast<int>(sizeof(vmux_net::vmux_hdr)));
+                if (!buf) throw std::runtime_error("alloc");
+                auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(buf.get());
+                std::memset(h, 0, sizeof(*h));
+                h->cmd = cmd;
+                mux.tx_ctrl_queue_.emplace_back(vmux_net::tx_packet{ buf, static_cast<int>(sizeof(vmux_net::vmux_hdr)), nullptr });
+            }
+        });
+    }
+
+    /**
+     * @brief Fills the control queue with n SYN-OK frames carrying one status byte.
+     * @details 'A' accepts the connection, every other byte refuses it. The two
+     *          shapes have different drop semantics under the control cap: a
+     *          refusal is a best-effort go-away, an acceptance is critical.
+     */
+    static void EmplaceCtrlSynOk(vmux_net& mux, std::uint8_t status, int n) {
+        RunOnStrandVoid(mux, [&]() {
+            for (int i = 0; i < n; ++i) {
+                const int len = static_cast<int>(sizeof(vmux_net::vmux_hdr)) + 1;
+                auto buf = mux.make_byte_array(len);
+                if (!buf) throw std::runtime_error("alloc");
+                auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(buf.get());
+                std::memset(h, 0, sizeof(*h));
+                h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_syn_ok);
+                reinterpret_cast<std::uint8_t*>(h + 1)[0] = status;
+                mux.tx_ctrl_queue_.emplace_back(vmux_net::tx_packet{ buf, len, nullptr });
+            }
+        });
+    }
+
+    /**
+     * @brief Posts one frame through the normal post() path.
+     * @return false when the frame was refused (e.g. the control queue was full).
+     */
+    static bool PostCtrlFrame(
+        vmux_net& mux,
+        std::uint8_t cmd,
+        const void* payload,
+        int payload_len,
+        std::uint32_t connection_id) {
+        return RunOnStrand(mux, [&]() {
+            return mux.post(cmd, payload, payload_len, connection_id);
+        });
+    }
+
+    /** @brief The KEEP-ALIVE command byte (the friend struct may read it). */
+    static std::uint8_t CmdKeepAlived() {
+        return static_cast<std::uint8_t>(vmux_net::cmd_keep_alived);
+    }
+
+    /** @brief The SYN command byte (the friend struct may read it). */
+    static std::uint8_t CmdSyn() {
+        return static_cast<std::uint8_t>(vmux_net::cmd_syn);
+    }
+
+    /**
+     * @brief Asks the control queue to make room under its hard cap.
+     * @return false when every queued frame is critical.
+     */
+    static bool CtrlQueueMakesRoom(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.ctrl_queue_makes_room(); });
+    }
+
+    /**
+     * @brief Enqueues n data frames for one flow and returns the queue depth.
+     */
+    static std::size_t EnqueueFlowTx(
+        vmux_net& mux,
+        std::uint32_t connection_id,
+        int n,
+        int payload_bytes) {
+        return RunOnStrand(mux, [&]() {
+            for (int i = 0; i < n; ++i) {
+                const int len = static_cast<int>(sizeof(vmux_net::vmux_hdr)) + payload_bytes;
+                auto buf = mux.make_byte_array(len);
+                if (!buf) throw std::runtime_error("alloc");
+                auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(buf.get());
+                std::memset(h, 0, sizeof(*h));
+                h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_push);
+                h->connection_id = htonl(connection_id);
+                mux.enqueue_flow_tx(connection_id, vmux_net::tx_packet{ buf, len, nullptr });
+            }
+            const auto it = mux.tx_flows_.find(connection_id);
+            return (it != mux.tx_flows_.end()) ? it->second.queue.size() : static_cast<std::size_t>(0);
         });
     }
 
@@ -195,6 +311,83 @@ struct vmux_net_test_access {
         });
     }
 
+    /**
+     * @brief Injects one frame carrying a command byte this build does not know.
+     * @details The frame goes through the same receive path as a real one, so
+     *          the test sees what the session does with it.
+     */
+    static bool InjectUnknownCmd(vmux_net& mux, std::uint8_t cmd, std::uint64_t now) {
+        return RunOnStrand(mux, [&]() {
+            const int frame_len = static_cast<int>(sizeof(vmux_net::vmux_hdr));
+            std::vector<std::uint8_t> frame(static_cast<std::size_t>(frame_len));
+            auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(frame.data());
+            std::memset(h, 0, sizeof(*h));
+            h->cmd = cmd;
+            return mux.packet_input_flow(vmux_net::vmux_linklayer_ptr{}, h, frame_len, now);
+        });
+    }
+
+    /** @brief The number of unknown commands seen so far (process-wide counter). */
+    static std::uint64_t UnknownCmdCount() {
+        return ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot().rx_unknown_cmd;
+    }
+
+    /**
+     * @brief Latches the config-derived bounds the way the session does.
+     * @details set_ordering_mode() is where the transmit quotas, the reorder
+     *          bounds and the watchdog timers are read from the configuration.
+     *          The test calls it before the session is established, exactly
+     *          like the real handshake does.
+     */
+    static void LatchConfigBounds(vmux_net& mux, vmux_net::receiver_ordering_mode mode) {
+        RunOnStrandVoid(mux, [&]() { mux.set_ordering_mode(mode); });
+    }
+
+    /** @brief The effective per-flow transmit quota. */
+    static std::size_t FlowTxQuota(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.tx_flow_max_bytes_; });
+    }
+
+    /** @brief The DoS backstop: the hard ceiling of the per-flow transmit queue. */
+    static std::size_t FlowTxHardQuota(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.tx_flow_hard_bytes_; });
+    }
+
+    /** @brief Turns the acceleration fast path on (the read pump then runs ahead of the drain). */
+    static void SetAcceleration(vmux_net& mux, bool on) {
+        RunOnStrandVoid(mux, [&]() { mux.base_.acceleration_ = on; });
+    }
+
+    /** @brief Bytes one flow has queued for transmission. */
+    static std::size_t FlowTxQueuedBytes(vmux_net& mux, std::uint32_t cid) {
+        return RunOnStrand(mux, [&]() { return mux.flow_tx_queued_bytes(cid); });
+    }
+
+    /**
+     * @brief Posts one data frame through the real transmit path.
+     * @details This is the path where the per-flow quota is turned into a
+     *          decision: with the acceleration fast path on, a frame whose
+     *          flow is over its quota keeps its completion instead of having it
+     *          fired early, which re-couples that flow's read pump to the
+     *          drain.
+     */
+    static bool PostDataFrame(vmux_net& mux, std::uint32_t cid, int payload_len, bool acceleration) {
+        return RunOnStrand(mux, [&]() {
+            const int frame_len = static_cast<int>(sizeof(vmux_net::vmux_hdr)) + payload_len;
+            auto buf = ppp::make_shared_alloc<Byte>(frame_len);
+            if (!buf) {
+                return false;
+            }
+            auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(buf.get());
+            std::memset(h, 0, sizeof(vmux_net::vmux_hdr));
+            h->cmd = vmux_net::cmd_push;
+            h->connection_id = htonl(cid);
+            h->seq = htonl(1);
+            vmux_net::PostInternalAsynchronousCallback callback;
+            return mux.post_internal(buf, frame_len, acceleration, callback);
+        });
+    }
+
     static void EvictExpired(vmux_net& mux, std::uint64_t now) {
         RunOnStrandVoid(mux, [&]() { mux.flow_evict_expired(now); });
     }
@@ -280,6 +473,205 @@ struct vmux_net_test_access {
 
     static bool SendToPeerOffStrand(const std::shared_ptr<vmux_skt>& skt, const void* packet, int packet_length) {
         return skt->send_to_peer(packet, packet_length, nullptr);
+    }
+
+    /**
+     * @brief Sends a data frame on a flow whose FIN already went out.
+     * @param sent  Set to whether the frame was accepted.
+     * @return The diagnostic code the send failed with (read on the strand, so
+     *         it is the one the send itself published).
+     */
+    static std::uint32_t SendToPeerAfterFin(
+        const std::shared_ptr<vmux_skt>& skt,
+        const void* packet,
+        int packet_length,
+        bool* sent) {
+        return RunOnStrand(*skt->mux_, [&]() {
+            skt->status_.fin_ = true;
+            const bool ok = skt->send_to_peer(packet, packet_length, nullptr);
+            if (NULLPTR != sent) {
+                *sent = ok;
+            }
+            return static_cast<std::uint32_t>(ppp::diagnostics::GetLastErrorCode());
+        });
+    }
+
+    /** @brief Number of frames queued for one connection's transmit path. */
+    static std::size_t FlowTxQueueSize(vmux_net& mux, std::uint32_t connection_id) {
+        return RunOnStrand(mux, [&]() {
+            auto it = mux.tx_flows_.find(connection_id);
+            return it == mux.tx_flows_.end() ? 0 : it->second.queue.size();
+        });
+    }
+
+    /** @brief One queued transmit frame's command byte and DSN. */
+    struct TxFrameInfo {
+        bool                                     present = false;
+        std::uint8_t                             cmd = 0;
+        std::uint32_t                            seq = 0;
+    };
+
+    /** @brief Reads one queued transmit frame (index 0 is the oldest). */
+    static TxFrameInfo FlowTxFrame(vmux_net& mux, std::uint32_t connection_id, std::size_t index) {
+        return RunOnStrand(mux, [&]() {
+            TxFrameInfo info;
+            auto it = mux.tx_flows_.find(connection_id);
+            if (it == mux.tx_flows_.end()) {
+                return info;
+            }
+            auto qit = it->second.queue.begin();
+            for (std::size_t i = 0; i < index && qit != it->second.queue.end(); ++i) {
+                ++qit;
+            }
+            if (qit == it->second.queue.end() || NULLPTR == qit->buffer ||
+                qit->length < static_cast<int>(sizeof(vmux_net::vmux_hdr))) {
+                return info;
+            }
+            const auto* h = reinterpret_cast<const vmux_net::vmux_hdr*>(qit->buffer.get());
+            info.present = true;
+            info.cmd = h->cmd;
+            info.seq = ntohl(h->seq);
+            return info;
+        });
+    }
+
+    /** @brief Whether a queued transmit frame is a per-flow data frame. */
+    static bool FlowTxFrameIsPush(vmux_net& mux, std::uint32_t connection_id, std::size_t index) {
+        const TxFrameInfo info = FlowTxFrame(mux, connection_id, index);
+        return info.present && info.cmd == static_cast<std::uint8_t>(vmux_net::cmd_push);
+    }
+
+    /** @brief Whether a queued transmit frame is the flow's FIN. */
+    static bool FlowTxFrameIsFin(vmux_net& mux, std::uint32_t connection_id, std::size_t index) {
+        const TxFrameInfo info = FlowTxFrame(mux, connection_id, index);
+        return info.present && info.cmd == static_cast<std::uint8_t>(vmux_net::cmd_fin);
+    }
+
+    /** @brief Queues one per-flow data frame for a connection. */
+    static bool PostDataFrame(vmux_net& mux, std::uint32_t connection_id, const void* payload, int payload_len) {
+        return RunOnStrand(mux, [&]() {
+            const int frame_len = static_cast<int>(sizeof(vmux_net::vmux_hdr)) + payload_len;
+            auto frame = mux.make_byte_array(frame_len);
+            if (!frame) {
+                throw std::runtime_error("alloc data frame");
+            }
+            std::memset(frame.get(), 0, sizeof(vmux_net::vmux_hdr));
+            auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(frame.get());
+            h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_push);
+            h->connection_id = htonl(connection_id);
+            if (payload_len > 0 && payload != nullptr) {
+                std::memcpy(h + 1, payload, static_cast<std::size_t>(payload_len));
+            }
+            vmux_net::PostInternalAsynchronousCallback callback;
+            return mux.post_internal(frame, frame_len, false, callback);
+        });
+    }
+
+    /** @brief Flips the "session established" flag (post() refuses without it). */
+    static void SetEstablished(vmux_net& mux, bool value) {
+        RunOnStrandVoid(mux, [&]() { mux.base_.established_ = value; });
+    }
+
+    /** @brief Whether a socket still exists for a connection id. */
+    static bool SocketExists(vmux_net& mux, std::uint32_t connection_id) {
+        return RunOnStrand(mux, [&]() {
+            return mux.skts_.find(connection_id) != mux.skts_.end();
+        });
+    }
+
+    /**
+     * @brief Closes a socket and runs the strand until the close took effect.
+     * @details vmux_skt::close() posts the finalization to the mux strand, and
+     *          vmux_post_exec() drops that post when the io_context is already
+     *          stopped. Boost.Asio marks a context stopped as soon as it has
+     *          no outstanding work left, and this harness runs one handler at a
+     *          time, so between two strand calls the work count drops to zero.
+     *          The close is therefore issued from inside the strand, where the
+     *          context is still live, and the finalization it queues is drained
+     *          by the marker handler that follows it on the same strand.
+     */
+    static void CloseSocket(const std::shared_ptr<vmux_net>& mux, vmux_skt& skt) {
+        RunOnStrandVoid(*mux, [&]() {
+            skt.close();
+        });
+        RunOnStrandVoid(*mux, []() {});
+    }
+
+    /**
+     * @brief Delivers a syn-ok frame (the connect/refuse channel) for one flow.
+     * @param err The error byte the peer sent; anything but 'A' is a refusal.
+     */
+    static bool InjectSynOk(
+        vmux_net& mux,
+        std::uint32_t connection_id,
+        ppp::Byte err,
+        std::uint64_t now) {
+        return RunOnStrand(mux, [&]() {
+            const int frame_len = static_cast<int>(sizeof(vmux_net::vmux_hdr)) + 1;
+            std::vector<std::uint8_t> frame(static_cast<std::size_t>(frame_len));
+            auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(frame.data());
+            std::memset(h, 0, sizeof(*h));
+            h->cmd = static_cast<std::uint8_t>(vmux_net::cmd_syn_ok);
+            h->connection_id = htonl(connection_id);
+            reinterpret_cast<std::uint8_t*>(h + 1)[0] = err;
+            std::shared_ptr<ppp::Byte> owner;
+            return mux.packet_input(
+                static_cast<ppp::Byte>(vmux_net::cmd_syn_ok),
+                frame.data(), frame_len, now, owner);
+        });
+    }
+
+    /** @brief Retains one frame in the sender's retransmit buffer. */
+    static bool TrackRtxFrame(
+        vmux_net& mux,
+        std::uint32_t connection_id,
+        std::uint32_t sequence,
+        int length,
+        std::uint64_t now) {
+        return RunOnStrand(mux, [&]() {
+            auto buffer = std::make_shared<std::uint8_t>(
+                static_cast<std::size_t>(length > 0 ? length : 1));
+            return mux.rtx_.Track(
+                connection_id, sequence, buffer, length, now, mux.rtx_cap_bytes_);
+        });
+    }
+
+    /** @brief Bytes still retained for one flow in the retransmit buffer. */
+    static std::size_t RtxBytesForCid(vmux_net& mux, std::uint32_t connection_id) {
+        return RunOnStrand(mux, [&]() { return mux.rtx_.BytesForCid(connection_id); });
+    }
+
+    struct CtrlFrameInfo {
+        bool                                     present = false;
+        std::uint8_t                             cmd = 0;
+        std::uint32_t                            connection_id = 0;
+        std::uint8_t                             payload = 0;
+    };
+
+    /** @brief The syn-ok command byte (private inside vmux_net; reachable through friendship). */
+    static constexpr std::uint8_t kCmdSynOk = static_cast<std::uint8_t>(vmux_net::cmd_syn_ok);
+
+    /** @brief The last frame queued on the high-priority control path. */
+    static CtrlFrameInfo LastCtrlFrame(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() {
+            CtrlFrameInfo info;
+            if (mux.tx_ctrl_queue_.empty()) {
+                return info;
+            }
+            const vmux_net::tx_packet& packet = mux.tx_ctrl_queue_.back();
+            if (NULLPTR == packet.buffer ||
+                packet.length < static_cast<int>(sizeof(vmux_net::vmux_hdr))) {
+                return info;
+            }
+            const auto* h = reinterpret_cast<const vmux_net::vmux_hdr*>(packet.buffer.get());
+            info.present = true;
+            info.cmd = h->cmd;
+            info.connection_id = ntohl(h->connection_id);
+            if (packet.length > static_cast<int>(sizeof(vmux_net::vmux_hdr))) {
+                info.payload = static_cast<std::uint8_t>(reinterpret_cast<const std::uint8_t*>(h + 1)[0]);
+            }
+            return info;
+        });
     }
 
     static bool PostCommand(vmux_net& mux, bool on_strand) {
@@ -922,8 +1314,785 @@ void TestStrandAffineSendAndPostRejectOffStrand() {
         "frame post_internal remains synchronous on strand");
 }
 
+// A frame of a flow the receiver does not have must be refused explicitly.
+//
+// The receiver may not acknowledge it as delivered (it never took the data),
+// so dropping it in silence left the sender retransmitting into the void:
+// it burned its whole attempt budget (30 s with the current grace) and then
+// reset a flow that was already gone, over every carrier.
+void TestReceiverRefusesUnknownFlow() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 4242;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    // The runtime counters are the only trace this leaves in production, so
+    // they must move: the stats file is what localizes the failure later.
+    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
+
+    // No socket for this cid here: the peer still has the flow, we do not.
+    const char payload[] = "X";
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 1, payload, 1, 1000), "inject");
+
+    const auto info = vmux::vmux_net_test_access::LastCtrlFrame(*mux);
+    Require(info.present, "the refusal must be queued for the peer");
+    Require(info.cmd == vmux::vmux_net_test_access::kCmdSynOk, "the refusal rides the syn-ok channel");
+    Require(info.connection_id == cid, "the refusal names the refused flow");
+    Require(info.payload != 'A', "the refusal must not look like an accept");
+
+    const auto counters = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(counters.rx_flow_unknown_cid == 1,
+        "the unknown cid must be counted for the runtime stats");
+    Require(counters.rx_flow_refused == 1,
+        "the refusal must be counted for the runtime stats");
+}
+
+// A refusal must release the sender's retained frames even when this side
+// has no socket for the flow any more.
+//
+// Production shape (v2.2.16, 32 judge-dead flows in one evening): the peer's
+// first frame of a flow was refused ("I do not have this flow"), the local
+// socket was already gone, and the refusal handler therefore never reached
+// the release. The retransmit entry survived, the sender retransmitted the
+// dead flow over every carrier until its 30 s attempt budget ran out, and
+// only then declared the flow dead.
+//
+// The counters tell the two shapes apart in production:
+//   mux.rx.syn_ok.refused           -- refusals received
+//   mux.rx.syn_ok.refused.no_socket -- refusals for a flow we no longer have
+void TestRefusalReleasesRetainedFramesWithoutLocalSocket() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 9090;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
+
+    // The sender still holds unacknowledged frames of this flow...
+    Require(vmux::vmux_net_test_access::TrackRtxFrame(*mux, cid, 1, 128, 1000),
+        "the sender must retain the frame");
+    Require(vmux::vmux_net_test_access::RtxBytesForCid(*mux, cid) > 0,
+        "the frame must be retained before the refusal");
+
+    // ...but this side has no socket for it any more.
+    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid),
+        "the flow must be unknown here");
+
+    // The peer refuses the flow.
+    Require(vmux::vmux_net_test_access::InjectSynOk(*mux, cid, 'N', 1100),
+        "the refusal must be accepted");
+
+    Require(vmux::vmux_net_test_access::RtxBytesForCid(*mux, cid) == 0,
+        "a refusal must release the retained frames even without a local socket");
+
+    const auto counters = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(counters.rx_syn_ok_refused == 1,
+        "the refusal must be counted for the runtime stats");
+    Require(counters.rx_syn_ok_refused_no_socket == 1,
+        "a refusal without a local socket must be counted for the runtime stats");
+}
+
+// A refusal that cannot be queued must leave a trace.
+//
+// The refusal is the only signal the peer gets that the flow is gone. When the
+// frame cannot even be queued, the peer keeps retransmitting until its own
+// budget runs out — and nothing in the stats would say why. The counter makes
+// that shape visible in production.
+void TestRefusalThatCannotBePostedIsCounted() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 5150;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    // Without an established session the refusal frame cannot be queued.
+    vmux::vmux_net_test_access::SetEstablished(*mux, false);
+
+    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
+    const char payload[] = "X";
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 1, payload, 1, 1000), "inject");
+
+    const auto counters = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(counters.rx_flow_refused == 1,
+        "the refusal attempt must be counted for the runtime stats");
+    Require(counters.rx_flow_refuse_post_failed == 1,
+        "a refusal that could not be queued must be counted for the runtime stats");
+}
+
+// A socket that closes before the FIN converges must leave a record of the
+// flow behind.
+//
+// The peer keeps retransmitting a flow's frames until it hears that they were
+// delivered. Only the FIN-convergence path (maybe_release_flow) used to leave
+// such a record: a socket that closed first — a local error, a write failure,
+// an aging timeout, a flow reset — dropped the receive context and left
+// nothing, so every late frame of that flow looked like a frame of a flow
+// this side never had. Those frames were refused as an unknown flow, and the
+// peer was told to give up on a flow whose data may in fact have arrived.
+//
+// This is the shape of the production failures: the peer refused the flow's
+// FIRST frame, so nothing had been delivered yet, and the refusal count grew
+// while mux.rx.closed_flow.drop stayed at zero.
+void TestClosedSocketRemembersTheFlow() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 6161;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+
+    // The peer sends one data frame: it is delivered, so the delivery
+    // frontier moves to two.
+    const char payload[] = "D";
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 1, payload, 1, 1000), "inject");
+    Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 1, "the frame must be delivered");
+
+    // The socket now closes locally, before the FIN converges.
+    vmux::vmux_net_test_access::CloseSocket(mux, *skt);
+    Require(!vmux::vmux_net_test_access::SocketExists(*mux, cid), "the socket must be gone");
+    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid), "the receive context must be gone");
+
+    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
+
+    // The peer retransmits the frame it already sent: its acknowledgement was
+    // lost. That frame belongs to a flow this side DID have.
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 1, payload, 1, 1100), "retransmit");
+
+    const auto counters = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(counters.rx_flow_unknown_cid == 0,
+        "a late frame of a closed flow must not be refused as an unknown flow");
+    Require(counters.rx_closed_flow_reack == 1,
+        "a late frame of a closed flow must be acknowledged again");
+}
+
+// A flow that is reset must leave a record of the flow behind.
+//
+// A flow reset (gap timeout, reorder-buffer overflow) drops the receive
+// context the same way a local socket close does. The peer may still be
+// retransmitting the frames of that flow: they were taken here, so they have
+// to be acknowledged again instead of being refused as an unknown flow.
+void TestResetFlowRemembersTheFlow() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 6162;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+
+    const char payload[] = "D";
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 1, payload, 1, 1000), "inject");
+    Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 1, "the frame must be delivered");
+
+    // The flow is reset: the receive context goes away, the socket is closed.
+    vmux::vmux_net_test_access::FailFlow(*mux, cid, "test");
+    Require(!vmux::vmux_net_test_access::FlowExists(*mux, cid), "the receive context must be gone");
+
+    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
+
+    // The peer retransmits the frame it already sent.
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, cid, 1, payload, 1, 1100), "retransmit");
+
+    const auto counters = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(counters.rx_flow_unknown_cid == 0,
+        "a late frame of a reset flow must not be refused as an unknown flow");
+    Require(counters.rx_closed_flow_reack == 1,
+        "a late frame of a reset flow must be acknowledged again");
+}
+
+// A FIN posted as the socket closes must continue the flow's DSN space.
+//
+// The receiver delivers a per-flow data frame only at the delivery frontier
+// and answers anything below it with another acknowledgement WITHOUT
+// delivering it. A FIN that restarts the DSN numbering at one is therefore
+// discarded as a duplicate: the peer never learns the flow ended, keeps its
+// context, and the connection lingers until something else tears it down.
+//
+// release_connection() drops tx_flow_seq_ before finalize() posts the FIN, so
+// the FIN would restart at one. The counter must outlive the socket for the
+// whole of the close sequence, exactly as maybe_release_flow() documents.
+void TestFinAfterSocketCloseUsesTheFlowsDsn() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 6163;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+
+    // One data frame goes out, so the flow's send frontier moves to two.
+    const char payload[] = "D";
+    Require(vmux::vmux_net_test_access::PostDataFrame(*mux, cid, payload, 1), "post data frame");
+    const auto data = vmux::vmux_net_test_access::FlowTxFrame(*mux, cid, 0);
+    Require(vmux::vmux_net_test_access::FlowTxFrameIsPush(*mux, cid, 0),
+            "the data frame must be queued");
+    Require(data.seq == 1, "the first data frame must carry DSN 1");
+
+    // The socket now closes without a FIN of its own: finalize() posts one.
+    vmux::vmux_net_test_access::CloseSocket(mux, *skt);
+
+    const auto fin = vmux::vmux_net_test_access::FlowTxFrame(*mux, cid, 1);
+    Require(vmux::vmux_net_test_access::FlowTxFrameIsFin(*mux, cid, 1),
+            "the close must queue a FIN");
+    Require(fin.seq == 2,
+            "the FIN must continue the flow's DSN space, not restart it at one");
+}
+
+// A local socket close must NOT drop the flow's retained frames.
+//
+// release_connection() drops the receive context and the send DSN counter, but
+// it deliberately keeps the flow's retransmit entries. Those frames were
+// already sent and the peer is waiting for exactly their sequence numbers;
+// dropping them leaves a hole in the peer's sequence space that only a gap
+// timeout can close, and closing it rebuilds the whole session. The peer
+// releases them by acknowledging, or by refusing the flow once it has no
+// context for it.
+void TestSocketCloseKeepsRetainedFrames() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 6164;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+
+    Require(vmux::vmux_net_test_access::TrackRtxFrame(*mux, cid, 1, 128, 1000), "retain");
+    Require(vmux::vmux_net_test_access::RtxBytesForCid(*mux, cid) == 128,
+            "the frame must be retained before the close");
+
+    vmux::vmux_net_test_access::CloseSocket(mux, *skt);
+
+    Require(vmux::vmux_net_test_access::RtxBytesForCid(*mux, cid) == 128,
+            "a local close must not drop frames the peer is still waiting for");
+}
+
+// A data frame must never follow the flow's FIN.
+//
+// The FIN says "no more data from me", so the peer treats the flow as closed
+// and drops every later frame WITHOUT acknowledging it. The sender would then
+// retransmit it until its attempt budget ran out.
+void TestSenderRefusesDataAfterFin() {
+    auto mux = MakeMux();
+    constexpr std::uint32_t cid = 77;
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+    const char payload[] = "late";
+    ppp::app::mux::MuxRuntimeCounterRegistry::Reset();
+
+    bool sent = true;
+    const std::uint32_t code =
+        vmux::vmux_net_test_access::SendToPeerAfterFin(skt, payload, 4, &sent);
+    Require(!sent, "a data frame after the FIN must be refused");
+    // The FIN guard must be the reason. Without it the send would fail later,
+    // on the missing local socket, and this test would pass vacuously.
+    Require(code == static_cast<std::uint32_t>(ppp::diagnostics::ErrorCode::VmuxSocketSendAfterFin),
+            "the write must be refused by the FIN guard");
+    Require(vmux::vmux_net_test_access::FlowTxQueueSize(*mux, cid) == 0,
+            "no data frame may be queued after the FIN");
+    // The refused write must be visible in the runtime counters, so a
+    // production deployment can see how often the FIN guard fires.
+    const auto counters = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(counters.tx_flow_after_fin == 1,
+            "the refused write must be counted for the runtime stats");
+}
+
+// A single slow consumer must not be able to fill the session's TX memory.
+//
+// The per-flow TX queue has its own hard bound (the audit report records the
+// missing bound as P1-3): past it, only that flow is failed -- the session and
+// every other flow keep running.
+void TestPerFlowTxQueueStopsAtItsCap() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    constexpr std::uint32_t cid = 5150;
+    // The frame backstop is twice the frame quota, mirroring the byte
+    // ceiling. Using the soft frame quota here failed the flow long before
+    // the byte quota was reached, because the frames on this path are large
+    // (the sender reads up to 64 KiB per frame): 257 frames are already
+    // about 15 MiB, so the byte quota of 16 MiB could never be reached and
+    // the backpressure never engaged.
+    //
+    // Ask for more frames than the backstop allows, so the queue really
+    // stops at it.
+    const std::size_t queued =
+        vmux::vmux_net_test_access::EnqueueFlowTx(*mux, cid, 1000, /*payload*/ 64);
+
+    Require(queued == static_cast<std::size_t>(PPP_MUX_TX_FLOW_MAX_FRAMES) * 2u,
+        "the per-flow TX queue must stop at its hard cap");
+}
+
+// The hard ceiling is a separate bound: a single frame bigger than it must
+// be refused outright instead of being queued. The soft quota below it is a
+// throttle -- a frame that is over the quota but inside the ceiling is
+// queued, and the flow is slowed down rather than torn down.
+void TestPerFlowTxQueueRefusesAnOversizedFrame() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    const std::size_t soft = vmux::vmux_net_test_access::FlowTxQuota(*mux);
+    const std::size_t hard = vmux::vmux_net_test_access::FlowTxHardQuota(*mux);
+    Require(hard > soft, "the hard ceiling must sit above the quota");
+
+    constexpr std::uint32_t cid = 5151;
+    const std::size_t refused = vmux::vmux_net_test_access::EnqueueFlowTx(
+        *mux, cid, /*n*/ 1, /*payload*/ static_cast<int>(hard));
+
+    Require(refused == 0,
+        "a frame larger than the per-flow hard ceiling must be refused, not queued");
+
+    // A frame that is over the soft quota but inside the ceiling is queued:
+    // the quota throttles the flow, it does not refuse the frame.
+    constexpr std::uint32_t cid2 = 5152;
+    const std::size_t queued = vmux::vmux_net_test_access::EnqueueFlowTx(
+        *mux, cid2, /*n*/ 1, /*payload*/ static_cast<int>(soft));
+
+    Require(queued == 1u,
+        "a frame inside the hard ceiling must be queued even past the soft quota");
+}
+
+// The per-flow quota kills only the flow that hit it: the session and every
+// other flow keep running. That is the invariant the audit report records as
+// P1-3, and it is what separates it from the session-level D11 kill.
+/**
+ * @brief A flow of small frames must not be killed by the frame backstop.
+ * @details The TX queue is bounded by a byte ceiling and a frame ceiling.
+ *          The frame ceiling used to be twice the frame quota, which is
+ *          derived from the byte quota at the largest frame size -- so it is
+ *          only reachable by a flow of large frames. A flow of small frames
+ *          needs far more frames to reach the byte quota, and the frame
+ *          ceiling killed it first: production saw mux.tx.flow.throttled
+ *          stuck at 0 while mux.tx.flow.overflow moved, which is the signature
+ *          of a flow that never reached the byte quota at all.
+ *
+ *          The frame backstop therefore has to be at least the number of
+ *          frames the byte ceiling can hold, so the byte ceiling stays the
+ *          one that decides.
+ */
+void TestPerFlowTxSmallFramesAreNotKilledByTheFrameBackstop() {
+    auto mux = MakeMux();
+    mux->AppConfiguration->mux.tx.flow.max_bytes = 1024 * 1024;
+    vmux::vmux_net_test_access::LatchConfigBounds(*mux, vmux::vmux_net::ordering_flow_v2);
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    constexpr std::uint32_t cid = 6200;
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, cid);
+
+    const std::size_t hard_bytes = vmux::vmux_net_test_access::FlowTxHardQuota(*mux);
+
+    // Small frames: the byte ceiling is still far away, but the frame count
+    // is already past what the frame quota alone would allow.
+    const int frames = static_cast<int>(PPP_MUX_TX_FLOW_MAX_FRAMES) * 4;
+    const int payload = 64;
+    vmux::vmux_net_test_access::EnqueueFlowTx(*mux, cid, frames, /*payload*/ payload);
+
+    Require(static_cast<std::size_t>(frames) * payload < hard_bytes,
+        "the byte ceiling must still be out of reach in this case");
+
+    vmux::vmux_net_test_access::RunOnStrandVoid(*mux, []() {});
+
+    Require(!vmux::vmux_net_test_access::SktDisposed(*mux, *skt),
+        "a flow of small frames must not be killed by the frame backstop");
+}
+
+void TestPerFlowTxOverflowFailsOnlyThatFlow() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    constexpr std::uint32_t hot_cid = 6100;
+    constexpr std::uint32_t calm_cid = 6101;
+    auto hot = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, hot_cid);
+    auto calm = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, calm_cid);
+
+    // The hot flow fills its own quota; the calm flow sends a single frame.
+    // The queue is bounded by two ceilings -- the byte one and the frame one --
+    // and either of them may be the one that is reached, so the hot flow is
+    // given enough frames to pass both.
+    const std::size_t hard_bytes = vmux::vmux_net_test_access::FlowTxHardQuota(*mux);
+    const int frames_to_fill =
+        static_cast<int>(hard_bytes / 64) + static_cast<int>(PPP_MUX_TX_FLOW_MAX_FRAMES) + 16;
+    vmux::vmux_net_test_access::EnqueueFlowTx(*mux, hot_cid, frames_to_fill, /*payload*/ 64);
+    vmux::vmux_net_test_access::EnqueueFlowTx(*mux, calm_cid, 1, /*payload*/ 64);
+
+    // Drain the close that fail_flow() posted for the hot flow.
+    vmux::vmux_net_test_access::RunOnStrandVoid(*mux, []() {});
+
+    Require(vmux::vmux_net_test_access::SktDisposed(*mux, *hot),
+        "the flow that hit its quota must be closed");
+    Require(!vmux::vmux_net_test_access::SktDisposed(*mux, *calm),
+        "the other flow must survive the quota kill");
+    Require(!vmux::vmux_net_test_access::IsDisposed(*mux),
+        "the session must survive the quota kill");
+}
+
+// The control queue has its own hard bound (the audit report records the
+// missing bound as P1-6). When it is full the oldest expendable frame is
+// dropped to make room -- a keep-alive is regenerated, and the peer re-asks
+// for anything it never saw acknowledged.
+void TestControlQueueCapDropsTheOldestFeedbackFrame() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::EmplaceCtrlFrameWithCmd(
+        *mux, vmux::vmux_net_test_access::CmdKeepAlived(), static_cast<int>(PPP_MUX_TX_CTRL_MAX_FRAMES));
+
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) ==
+            static_cast<std::size_t>(PPP_MUX_TX_CTRL_MAX_FRAMES),
+        "the control queue must be full before the cap is consulted");
+
+    Require(vmux::vmux_net_test_access::CtrlQueueMakesRoom(*mux),
+        "a feedback frame must make room under the cap");
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) ==
+            static_cast<std::size_t>(PPP_MUX_TX_CTRL_MAX_FRAMES) - 1,
+        "exactly one frame must be dropped to make room");
+}
+
+// A critical frame (SYN) is never dropped: losing one would strand a
+// connection that is still being set up. The new frame is refused instead of
+// the queue growing past its cap.
+void TestControlQueueCapNeverDropsACriticalFrame() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::EmplaceCtrlFrameWithCmd(
+        *mux, vmux::vmux_net_test_access::CmdSyn(), static_cast<int>(PPP_MUX_TX_CTRL_MAX_FRAMES));
+
+    Require(!vmux::vmux_net_test_access::CtrlQueueMakesRoom(*mux),
+        "a full queue of critical frames must refuse the new frame");
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) ==
+            static_cast<std::size_t>(PPP_MUX_TX_CTRL_MAX_FRAMES),
+        "no critical frame may be dropped");
+}
+
+// A refused control frame is backpressure, not a broken session. A peer that
+// floods the control plane must not be able to tear the whole session down
+// with a handful of frames: the session survives the refusal.
+void TestControlQueueCapRejectionKeepsTheSessionAlive() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    vmux::vmux_net_test_access::EmplaceCtrlFrameWithCmd(
+        *mux, vmux::vmux_net_test_access::CmdSyn(), static_cast<int>(PPP_MUX_TX_CTRL_MAX_FRAMES));
+
+    // Every queued frame is critical, so the new frame must be refused.
+    Require(!vmux::vmux_net_test_access::PostCtrlFrame(
+        *mux, vmux::vmux_net_test_access::CmdKeepAlived(), nullptr, 0, 0),
+        "a control frame must be refused when the queue is all critical");
+
+    Require(!vmux::vmux_net_test_access::IsDisposed(*mux),
+        "a refused control frame must not tear the session down");
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) ==
+            static_cast<std::size_t>(PPP_MUX_TX_CTRL_MAX_FRAMES),
+        "the control queue must stay at its cap");
+}
+
+// A SYN-OK that refuses a flow is a best-effort go-away: dropping it costs
+// the peer nothing but its retransmission budget, so it must not block the
+// control queue. A SYN-OK that accepts a connection is critical.
+void TestControlQueueCapDropsARefusalButNotAnAcceptance() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    vmux::vmux_net_test_access::EmplaceCtrlSynOk(
+        *mux, /*status*/ 'N', static_cast<int>(PPP_MUX_TX_CTRL_MAX_FRAMES));
+
+    Require(vmux::vmux_net_test_access::CtrlQueueMakesRoom(*mux),
+        "a refusal must make room under the cap");
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) ==
+            static_cast<std::size_t>(PPP_MUX_TX_CTRL_MAX_FRAMES) - 1,
+        "exactly one refusal must be dropped to make room");
+
+    auto accept_mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*accept_mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    vmux::vmux_net_test_access::EmplaceCtrlSynOk(
+        *accept_mux, /*status*/ 'A', static_cast<int>(PPP_MUX_TX_CTRL_MAX_FRAMES));
+
+    Require(!vmux::vmux_net_test_access::CtrlQueueMakesRoom(*accept_mux),
+        "an accepting syn-ok must never be dropped");
+}
+
+// Two acknowledgements inside the same half-delay window are merged: the
+// second one is suppressed and rides the next acknowledgement instead of
+// spending a control-queue slot and a carrier frame.
+void TestAckCoalescingMergesAFrameInsideTheWindow() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    vmux::vmux_net_test_access::EnableReliability(*mux, true);
+
+    constexpr std::uint64_t t0 = 100000;
+
+    // One pending sequence: the delayed-ACK window holds the answer back.
+    vmux::vmux_net_test_access::NoteAckPending(*mux, 7, 1, t0);
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) == 0,
+        "the delayed-ACK window must hold the first acknowledgement back");
+
+    vmux::vmux_net_test_access::MaybeSendAck(*mux, t0 + 20, false);
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) == 1,
+        "the acknowledgement must go out once the delayed window expired");
+
+    // Two more sequences inside the coalescing window: the acknowledgement
+    // they would trigger is merged into the next one.
+    vmux::vmux_net_test_access::NoteAckPending(*mux, 7, 2, t0 + 21);
+    vmux::vmux_net_test_access::NoteAckPending(*mux, 7, 3, t0 + 21);
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) == 1,
+        "an acknowledgement inside the coalescing window must be suppressed");
+
+    // Past the window it goes out again, carrying what was merged.
+    vmux::vmux_net_test_access::MaybeSendAck(*mux, t0 + 26, false);
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) == 2,
+        "the merged acknowledgement must go out after the window");
+}
+
+// A forced acknowledgement answers a retransmission and is never suppressed:
+// the peer is waiting for that answer.
+void TestAckCoalescingNeverSuppressesAForcedAck() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    vmux::vmux_net_test_access::EnableReliability(*mux, true);
+
+    constexpr std::uint64_t t0 = 200000;
+    vmux::vmux_net_test_access::NoteAckPending(*mux, 9, 1, t0);
+    vmux::vmux_net_test_access::MaybeSendAck(*mux, t0 + 20, false);
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) == 1,
+        "the first acknowledgement must go out");
+
+    vmux::vmux_net_test_access::NoteAckPending(*mux, 9, 2, t0 + 21);
+    vmux::vmux_net_test_access::MaybeSendAck(*mux, t0 + 21, true);
+    Require(vmux::vmux_net_test_access::CtrlQueueSize(*mux) == 2,
+        "a forced acknowledgement must never be suppressed");
+}
+
+// A command this build does not know is skipped and counted: it must not
+// take the session down, and the frames that follow it must still be
+// delivered. This is the first stage of the P2-8 decision: make the event
+// observable before deciding whether it should ever be fatal.
+void TestUnknownCommandIsSkippedAndCounted() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, 42);
+
+    const std::uint64_t before = vmux::vmux_net_test_access::UnknownCmdCount();
+    Require(vmux::vmux_net_test_access::InjectUnknownCmd(*mux, 0xFF, 9000),
+        "an unknown command must be skipped, not fatal");
+    Require(!vmux::vmux_net_test_access::IsDisposed(*mux),
+        "an unknown command must not tear the session down");
+    Require(vmux::vmux_net_test_access::UnknownCmdCount() == before + 1,
+        "an unknown command must be counted");
+
+    // The next frame still goes through.
+    const char p[] = "A";
+    Require(vmux::vmux_net_test_access::InjectPush(*mux, 42, 1, p, 1, 9100),
+        "a frame after an unknown command must still be delivered");
+    Require(vmux::vmux_net_test_access::QueuedRx(*skt) == 1,
+        "the frame after an unknown command must reach the socket");
+}
+
+// The same in compat ordering, where an unknown command must not move the
+// delivery frontier either: the peer keeps its copy and retransmits it, and
+// an acknowledgement for a frame we never acted on would tell the peer it was
+// delivered.
+void TestUnknownCommandDoesNotMoveTheCompatFrontier() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureCompat(*mux, /*gap timeout*/ 1000);
+
+    const std::uint64_t before = vmux::vmux_net_test_access::UnknownCmdCount();
+    Require(vmux::vmux_net_test_access::InjectUnknownCmd(*mux, 0xFE, 9000),
+        "an unknown command must be skipped in compat ordering too");
+    Require(!vmux::vmux_net_test_access::IsDisposed(*mux),
+        "an unknown command must not tear the compat session down");
+    Require(vmux::vmux_net_test_access::UnknownCmdCount() == before + 1,
+        "an unknown command must be counted in compat ordering too");
+    Require(vmux::vmux_net_test_access::CompatReorderSize(*mux) == 0,
+        "an unknown command must not enter the reorder buffer");
+}
+
+// ---------------------------------------------------------------------------
+// The per-flow transmit quota
+//
+// The quota used to be a fixed 1 MiB, copied from upstream. That number is
+// smaller than the window the peer allows for the flow, so the queue -- not
+// the window -- became what limited the flow: one flow was capped at about
+// 93 Mbps on a path that does 900, and a carrier that stalled for a moment
+// killed the flow outright. The quota now follows the flow's own window, and
+// going over it throttles the flow instead of tearing it down.
+// ---------------------------------------------------------------------------
+
+void TestThePerFlowTransmitQuotaFollowsTheFlowWindow() {
+    auto mux = MakeMux();
+
+    // The default configuration gives every flow an 8 MiB window.
+    vmux::vmux_net_test_access::LatchConfigBounds(*mux, vmux::vmux_net::ordering_flow_v2);
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    const std::size_t quota = vmux::vmux_net_test_access::FlowTxQuota(*mux);
+    Require(quota == static_cast<std::size_t>(PPP_MUX_FLOW_REORDER_BYTES),
+        "the per-flow transmit quota must follow the flow's own window");
+    Require(quota > static_cast<std::size_t>(PPP_MUX_TX_FLOW_MAX_BYTES),
+        "the per-flow transmit quota must not be the old fixed one mebibyte");
+    Require(vmux::vmux_net_test_access::FlowTxHardQuota(*mux) == quota * 2u,
+        "the DoS backstop must sit at twice the quota");
+}
+
+void TestAConfiguredPerFlowQuotaOverridesTheWindow() {
+    auto mux = MakeMux();
+    mux->AppConfiguration->mux.tx.flow.max_bytes = 4 * 1024 * 1024;
+
+    vmux::vmux_net_test_access::LatchConfigBounds(*mux, vmux::vmux_net::ordering_flow_v2);
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    Require(vmux::vmux_net_test_access::FlowTxQuota(*mux) == 4u * 1024u * 1024u,
+        "a configured per-flow quota must override the window");
+}
+
+void TestAFlowOverItsQuotaIsThrottledAndNotKilled() {
+    auto mux = MakeMux();
+    // One mebibyte is the tightest quota the configuration can ask for, and
+    // twice it is the DoS backstop.
+    mux->AppConfiguration->mux.tx.flow.max_bytes = 1024 * 1024;
+    vmux::vmux_net_test_access::LatchConfigBounds(*mux, vmux::vmux_net::ordering_flow_v2);
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    Require(vmux::vmux_net_test_access::FlowTxQuota(*mux) == 1024u * 1024u,
+        "the quota must be the configured one");
+
+    // A carrier to send on: the acceleration fast path only runs when there
+    // is one.
+    vmux::vmux_net_test_access::AttachLink(*mux, vmux::vmux_net_test_access::MakeDeadLink(true));
+    vmux::vmux_net_test_access::SetAcceleration(*mux, true);
+
+    const auto before = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+
+    // Fill the flow past its quota. Nothing drains it here, so the bytes
+    // stay queued -- which is the state a stalled carrier produces.
+    constexpr std::uint32_t kCid = 4242;
+    constexpr int kChunk = 128 * 1024;
+    for (int i = 0; i < 10; ++i) {
+        vmux::vmux_net_test_access::EmplaceDataFrame(*mux, kCid, kChunk);
+    }
+    Require(vmux::vmux_net_test_access::FlowTxQueuedBytes(*mux, kCid) > 1024u * 1024u,
+        "the flow must be over its quota");
+
+    // Now the real transmit path runs with the flow over its quota. The
+    // return value is the send result, not the enqueue result: the carrier
+    // here is a dead one, so the send fails and that is expected.
+    vmux::vmux_net_test_access::PostDataFrame(*mux, kCid, 1024, true);
+
+    const auto after = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(after.tx_flow_throttled > before.tx_flow_throttled,
+        "a flow over its quota must be throttled");
+    Require(after.tx_flow_overflow == before.tx_flow_overflow,
+        "a flow over its quota must not be counted as an overflow");
+    Require(after.rx_flow_reset == before.rx_flow_reset,
+        "a flow over its quota must not be reset");
+}
+
+/**
+ * @brief A flow over its quota is throttled even when every carrier is busy.
+ * @details The quota check used to live inside the acceleration fast path,
+ *          which only runs when a carrier is free to send on. The moment every
+ *          carrier was busy the frame took the fallback path, where the quota
+ *          was never consulted: the queue grew to the hard ceiling and the
+ *          flow was failed. Production showed it as mux.tx.flow.throttled
+ *          stuck at 0 while mux.tx.flow.overflow and mux.rx.flow.reset moved
+ *          in lockstep. This test pins the fallback path: no carrier is
+ *          attached, so the frame cannot be sent on one, and the flow is
+ *          already over its quota.
+ */
+void TestAFlowOverItsQuotaIsThrottledWithNoFreeCarrier() {
+    auto mux = MakeMux();
+    mux->AppConfiguration->mux.tx.flow.max_bytes = 1024 * 1024;
+    vmux::vmux_net_test_access::LatchConfigBounds(*mux, vmux::vmux_net::ordering_flow_v2);
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    Require(vmux::vmux_net_test_access::FlowTxQuota(*mux) == 1024u * 1024u,
+        "the quota must be the configured one");
+
+    // No carrier is attached at all: tx_links_ stays empty, which is the
+    // state a fully busy path produces.
+    vmux::vmux_net_test_access::SetAcceleration(*mux, true);
+
+    const auto before = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+
+    // Fill the flow past its quota. Nothing drains it here, so the bytes
+    // stay queued.
+    constexpr std::uint32_t kCid = 4141;
+    constexpr int kChunk = 128 * 1024;
+    for (int i = 0; i < 10; ++i) {
+        vmux::vmux_net_test_access::EmplaceDataFrame(*mux, kCid, kChunk);
+    }
+    Require(vmux::vmux_net_test_access::FlowTxQueuedBytes(*mux, kCid) > 1024u * 1024u,
+        "the flow must be over its quota");
+
+    // The transmit path runs with the flow over its quota and no carrier to
+    // send on. The quota has to be honoured here too.
+    vmux::vmux_net_test_access::PostDataFrame(*mux, kCid, 1024, true);
+
+    const auto after = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(after.tx_flow_throttled > before.tx_flow_throttled,
+        "a flow over its quota must be throttled even with no free carrier");
+    Require(after.tx_flow_overflow == before.tx_flow_overflow,
+        "a flow over its quota must not be counted as an overflow");
+    Require(after.rx_flow_reset == before.rx_flow_reset,
+        "a flow over its quota must not be reset");
+}
+
+
+void TestAFlowPastTheHardCeilingIsStillFailed() {
+    auto mux = MakeMux();
+    mux->AppConfiguration->mux.tx.flow.max_bytes = 1024 * 1024;
+    vmux::vmux_net_test_access::LatchConfigBounds(*mux, vmux::vmux_net::ordering_flow_v2);
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    const auto before = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+
+    // Past twice the quota the flow is not draining at all and would sit on
+    // the session's transmit memory by itself: that flow is failed, and
+    // only that flow.
+    constexpr std::uint32_t kCid = 4343;
+    constexpr int kChunk = 128 * 1024;
+    for (int i = 0; i < 24; ++i) {
+        vmux::vmux_net_test_access::EmplaceDataFrame(*mux, kCid, kChunk);
+    }
+
+    const auto after = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(after.tx_flow_overflow > before.tx_flow_overflow,
+        "a flow past the hard ceiling must be counted as an overflow");
+    Require(after.rx_flow_reset > before.rx_flow_reset,
+        "a flow past the hard ceiling must be failed");
+}
+
+/**
+ * @brief A closed session must release itself.
+ * @details A session owns its flows and a flow owns the session, so an open
+ *          flow keeps the session alive -- that is the normal state of a
+ *          running session. The teardown is what breaks the cycle: the
+ *          finalizer drops the flow map, and only then does the session have
+ *          no owner left. A session that is abandoned without being closed
+ *          stays alive until the process exits, which is the leak that the
+ *          fuzz target runs into when it drops a session it did not close.
+ */
+void TestClosedSessionIsReleased() {
+    auto context = std::make_shared<boost::asio::io_context>();
+    auto strand = std::make_shared<Executors::Strand>(context->get_executor());
+    auto mux = ppp::make_shared_object<vmux::vmux_net>(
+        context, strand, 1, true, false, vmux::vmux_net::mux_mode_balance);
+    Require(static_cast<bool>(mux), "vmux allocation failed");
+    auto cfg = ppp::make_shared_object<ppp::configurations::AppConfiguration>();
+    Require(static_cast<bool>(cfg), "cfg allocation failed");
+    cfg->mux.congestions = 0;
+    mux->AppConfiguration = cfg;
+
+    // An open flow: the flow holds the session, the session holds the flow.
+    auto skt = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, 42);
+    std::weak_ptr<vmux::vmux_net> weak = mux;
+
+    // Closing posts the finalizer to the strand, so the context has to run it.
+    mux->close_exec();
+    context->restart();
+    context->poll();
+
+    // The caller drops every handle it holds.
+    mux.reset();
+    skt.reset();
+    context.reset();
+    strand.reset();
+
+    Require(weak.expired(), "a closed session must be released");
+}
+
 int main() {
     try {
+        TestReceiverRefusesUnknownFlow();
+        TestClosedSessionIsReleased();
+        TestRefusalThatCannotBePostedIsCounted();
+        TestRefusalReleasesRetainedFramesWithoutLocalSocket();
+        TestClosedSocketRemembersTheFlow();
+        TestResetFlowRemembersTheFlow();
+        TestFinAfterSocketCloseUsesTheFlowsDsn();
+        TestSocketCloseKeepsRetainedFrames();
+        TestSenderRefusesDataAfterFin();
         TestTxFlowDrrPrefersOtherCidAfterQuantum();
         TestTxFlowDrrDrainsBytesWithinQuantumBeforeRotating();
         TestInOrderStillDelivers();
@@ -949,6 +2118,23 @@ int main() {
         TestLinkByteCreditHighWater();
         TestVmuxCreatesMissingStrand();
         TestStrandAffineSendAndPostRejectOffStrand();
+        TestPerFlowTxQueueStopsAtItsCap();
+        TestPerFlowTxQueueRefusesAnOversizedFrame();
+        TestPerFlowTxSmallFramesAreNotKilledByTheFrameBackstop();
+        TestPerFlowTxOverflowFailsOnlyThatFlow();
+        TestControlQueueCapDropsTheOldestFeedbackFrame();
+        TestControlQueueCapNeverDropsACriticalFrame();
+        TestControlQueueCapRejectionKeepsTheSessionAlive();
+        TestControlQueueCapDropsARefusalButNotAnAcceptance();
+        TestAckCoalescingMergesAFrameInsideTheWindow();
+        TestAckCoalescingNeverSuppressesAForcedAck();
+        TestUnknownCommandIsSkippedAndCounted();
+        TestUnknownCommandDoesNotMoveTheCompatFrontier();
+        TestThePerFlowTransmitQuotaFollowsTheFlowWindow();
+        TestAConfiguredPerFlowQuotaOverridesTheWindow();
+        TestAFlowOverItsQuotaIsThrottledAndNotKilled();
+        TestAFlowOverItsQuotaIsThrottledWithNoFreeCarrier();
+        TestAFlowPastTheHardCeilingIsStillFailed();
         std::cout << "vmux_receive_semantics_test: ok" << std::endl;
         return 0;
     }
