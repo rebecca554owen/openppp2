@@ -181,6 +181,9 @@ namespace ppp {
                     struct {
                         int                                                 budget_frames;  ///< Max control frames drained before data per process_tx_all_packets turn; strictly > 0.
                     }                                                       ctrl;
+                    struct {
+                        int                                                 max_bytes;      ///< Per-flow TX queue byte quota; 0 = follow the flow's own protocol window (mux.flow.reorder.bytes). Above it the flow is throttled, not killed.
+                    }                                                       flow;
                 }                                                           tx;             ///< Transmit-side flow-control / backpressure parameters.
                 struct {
                     ppp::string                                             key;            ///< Shared debug secret (`--debug-key`); empty disables remote mux-mode control.

@@ -40,6 +40,7 @@ struct MuxRuntimeCounters final {
     std::uint64_t rx_syn_ok_refused = 0;            ///< mux.rx.syn_ok.refused
     std::uint64_t rx_syn_ok_refused_no_socket = 0;  ///< mux.rx.syn_ok.refused.no_socket
     std::uint64_t tx_flow_overflow = 0;              ///< mux.tx.flow.overflow
+    std::uint64_t tx_flow_throttled = 0;             ///< mux.tx.flow.throttled
     std::uint64_t tx_ctrl_cap = 0;                   ///< mux.tx.ctrl.cap
     std::uint64_t tx_ctrl_cap_rejected = 0;          ///< mux.tx.ctrl.cap.reject
     std::uint64_t tx_ack_suppressed = 0;               ///< mux.ack.suppressed
@@ -127,6 +128,11 @@ public:
         tx_flow_overflow_.fetch_add(n, std::memory_order_relaxed);
     }
 
+    /** @brief A frame was held back because its flow was over its transmit quota. */
+    static void AddTxFlowThrottled(std::uint64_t n = 1) noexcept {
+        tx_flow_throttled_.fetch_add(n, std::memory_order_relaxed);
+    }
+
     static void AddTxCtrlCap(std::uint64_t n = 1) noexcept {
         tx_ctrl_cap_.fetch_add(n, std::memory_order_relaxed);
     }
@@ -164,6 +170,7 @@ public:
         snap.rx_syn_ok_refused = rx_syn_ok_refused_.load(std::memory_order_relaxed);
         snap.rx_syn_ok_refused_no_socket = rx_syn_ok_refused_no_socket_.load(std::memory_order_relaxed);
         snap.tx_flow_overflow = tx_flow_overflow_.load(std::memory_order_relaxed);
+        snap.tx_flow_throttled = tx_flow_throttled_.load(std::memory_order_relaxed);
         snap.tx_ctrl_cap = tx_ctrl_cap_.load(std::memory_order_relaxed);
         snap.tx_ctrl_cap_rejected = tx_ctrl_cap_rejected_.load(std::memory_order_relaxed);
         snap.tx_ack_suppressed = tx_ack_suppressed_.load(std::memory_order_relaxed);
@@ -191,6 +198,7 @@ public:
         rx_syn_ok_refused_.store(0, std::memory_order_relaxed);
         rx_syn_ok_refused_no_socket_.store(0, std::memory_order_relaxed);
         tx_flow_overflow_.store(0, std::memory_order_relaxed);
+        tx_flow_throttled_.store(0, std::memory_order_relaxed);
         tx_ctrl_cap_.store(0, std::memory_order_relaxed);
         tx_ctrl_cap_rejected_.store(0, std::memory_order_relaxed);
         tx_ack_suppressed_.store(0, std::memory_order_relaxed);
@@ -216,6 +224,7 @@ private:
     inline static std::atomic<std::uint64_t> rx_syn_ok_refused_{ 0 };
     inline static std::atomic<std::uint64_t> rx_syn_ok_refused_no_socket_{ 0 };
     inline static std::atomic<std::uint64_t> tx_flow_overflow_{ 0 };
+    inline static std::atomic<std::uint64_t> tx_flow_throttled_{ 0 };
     inline static std::atomic<std::uint64_t> tx_ctrl_cap_{ 0 };
     inline static std::atomic<std::uint64_t> tx_ctrl_cap_rejected_{ 0 };
     inline static std::atomic<std::uint64_t> tx_ack_suppressed_{ 0 };

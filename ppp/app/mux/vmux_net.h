@@ -858,6 +858,14 @@ namespace vmux {
         void                                                                        enqueue_flow_tx(uint32_t connection_id, tx_packet&& packet) noexcept;
 
         /**
+         * @brief Bytes one flow has queued for transmission (strand-affine).
+         * @details This is the number the per-flow transmit quota is measured
+         *          against: it is how much of the flow's window the sender is
+         *          holding before the carriers have taken it.
+         */
+        size_t                                                                      flow_tx_queued_bytes(uint32_t connection_id) const noexcept;
+
+        /**
          * @brief Makes room in the control queue under its hard cap.
          * @details Drops the oldest expendable control frame (ACK / FEC /
          *          keep-alive / refusing SYN-OK) when the queue already holds
@@ -1072,6 +1080,9 @@ namespace vmux {
         ppp::app::mux::MuxBacklogWatchdog                                           tx_backlog_watchdog_;   ///< D11 stall watchdog: a full queue that keeps draining is slow, not wedged.
         size_t                                                                      tx_queue_high_water_    = (size_t)PPP_MUX_TX_QUEUE_HIGH_WATER; ///< Aggregate data-frame high-water (tx_data_frames_) for D11 backpressure.
         uint64_t                                                                    tx_backlog_stall_ms_    = (uint64_t)PPP_MUX_TX_BACKLOG_STALL_TIMEOUT; ///< Backlog stall timeout in ms (from config; D11 watchdog).
+        size_t                                                                      tx_flow_max_bytes_     = (size_t)PPP_MUX_TX_FLOW_MAX_BYTES; ///< Per-flow TX queue byte quota (from config, else the flow's own protocol window). Above it the flow is throttled, not killed.
+        size_t                                                                      tx_flow_hard_bytes_    = (size_t)PPP_MUX_TX_FLOW_MAX_BYTES * (size_t)PPP_MUX_TX_FLOW_HARD_FACTOR; ///< The DoS backstop: this multiple of the effective per-flow quota, past which the flow IS failed.
+        size_t                                                                      tx_flow_max_frames_    = (size_t)PPP_MUX_TX_FLOW_MAX_FRAMES; ///< Per-flow TX queue frame quota, scaled with the byte quota.
         bool                                                                        turbo_                  = false; ///< flow-mode turbo enabled (from config; best-link-first first packet).
         uint64_t                                                                    turbo_last_adjust_      = 0;     ///< Tick of the last turbo pool grow/shrink step (cooldown base).
         uint64_t                                                                    turbo_grow_hold_since_  = 0;     ///< When backlog first crossed grow threshold (0 = not armed).

@@ -360,7 +360,7 @@ session-level `srtt_ms_` 保留为单链路/无 sample 时的回退。
 | **最终严重级别** | **P1** |
 | **关闭日期** | 2026-08-03 |
 | **修复 commit** | Wave 2（工作树未 commit）；fork 侧 2026-11-04 重新落地 |
-| **状态** | ✅ **2026-11-04 已闭环** —— `57f0ffa5` 删掉的 per-flow 配额已恢复 |
+| **状态** | ✅ **2026-11-04 已闭环** —— `57f0ffa5` 删掉的 per-flow 配额已恢复；⚠️ **2026-11-08 修正**：恢复时照搬了上游的固定数值（1 MiB），与本 fork 的每流窗口不匹配，**已改为跟随该流的协议窗口并把超限改成背压**（见本条目末尾） |
 | **回归测试** | ⚠️ `vmux_wave2_flow_isolation_test` **存在，但测的是模拟** —— 它用同一套常量与数据结构复刻 per-flow TX 配额与控制队列的逻辑，**不触碰 `vmux_net` 的生产路径**（文件头已写明「vmux_net 无法在独立测试套件里实例化」）；2026-11-04 新增 `vmux_receive_semantics_test` 三个用例（帧数上限、字节上限、超限只关该 flow），跑的是生产代码 |
 | **验证方式** | ASan/UBSan 全绿 |
 | **协议变更** | 无 |
@@ -382,6 +382,48 @@ session-level `srtt_ms_` 保留为单链路/无 sample 时的回退。
 **与上游 Wave 2 的差异**：上游在 `fail_flow()` 里还会清理该 flow 的 TX 队列残留帧，避免失败流继续占 DRR 发送预算。本仓库**没有**照搬这一步：清理残留帧会让已经发出的数据在序号空间里留下洞，而洞只能等 gap timeout 重建整个会话 —— 代价远大于多发几帧。当前实现的边界是「配额封顶 + 关掉该流」，被拒流最多再占用 256 帧 / 1 MiB 的队列额度，随后自然排空。
 
 **回归**：`tests/cpp/vmux_receive_semantics_test.cpp`（主工程 `ENABLE_VMUX_RECEIVE_SEMANTICS_TEST` 目标构建，`tests/cpp` 树不编译 `vmux_net.cpp`）：`TestPerFlowTxQueueStopsAtItsCap`、`TestPerFlowTxQueueRefusesAnOversizedFrame`、`TestPerFlowTxOverflowFailsOnlyThatFlow`（超限只关这一条流，会话与其余流照常）。负向验证：去掉配额判据后报 `the per-flow TX queue must stop at its hard cap`；去掉 `fail_flow()` 后报 `the flow that hit its quota must be closed`。
+
+**2026-11-08 修正：固定 1 MiB 的配额与本 fork 的每流窗口不匹配**
+
+上面那次「重新落地」把上游的**固定数值**原样搬了过来：`PPP_MUX_TX_FLOW_MAX_BYTES = 1 MiB`。
+这个数字在本 fork 的配置下**比该流的协议窗口小一个数量级以上**：
+
+| 量 | 现网取值 | 来源 |
+|---|---|---|
+| 每流协议窗口（接收侧可容忍的重排量） | **40 MiB** | `mux.flow.reorder.bytes` |
+| 每流发送队列配额（修复前） | **1 MiB** | `PPP_MUX_TX_FLOW_MAX_BYTES`，写死 |
+| 每流重传预算 | 4 MiB | `PPP_MUX_RELIABILITY_RTX_FLOW_BYTES` |
+
+**队列上限本该是「这条流被允许有多少在途」的缓冲，却比协议允许的窗口小 40 倍** ⇒
+**它成了真正的窗口**，带来两个后果：
+
+1. **吞吐天花板**：每流在途被压到 1 MiB，单流上限 = 1 MiB ÷ 载波 RTT。实测（载波 RTT 82–95ms）
+   单流约 93 Mbps；4 并发恰好 11.3 MB/s/流、合计 381 Mbps，与 1 MiB/RTT 的预测完全吻合。
+   旧配置（每流窗口 20 MiB）时单流上限是 227 MB/s，多流可打满这条路径的约 900 Mbps。
+   **这就是路径峰值从 900 掉到约 380 Mbps 的原因。**
+2. **崩塌**：瞬时超限不是回压而是 `fail_flow()` 直接杀流 → 整条下载中断（curl exit 18/28）→
+   吞吐塌到 3–25 Mbps。实测因果链在 dmit 服务端闭合：
+   `mux.tx.flow.overflow = 6` 与 `mux.rx.flow.reset = 6` 一一对应（`fail_flow()` 记的就是 RX 侧 reset），
+   同时 `mux.rx.flow.refused = 6`、`mux.rx.flow.unknown_cid = 6`（服务端已不认识该 cid ⇒ 客户端重试 ⇒ 循环）。
+   累积值 `mux.tx.flow.overflow = mux.rx.flow.reset = 81` 也对得上。
+
+**修复（2026-11-08）**：
+
+- **配额跟随该流的协议窗口**：有效配额 = `mux.tx.flow.max_bytes`（新增可配置项，0 = 自动），
+  自动时取 `mux.flow.reorder.bytes`，并夹在 [1 MiB, 64 MiB] 内；帧数配额按配额同步放大。
+  ⇒ 队列上限不再比窗口小，窗口重新成为真正的窗口。
+- **超软限改成背压，不再杀流**：加速快路径上，把「该流已超配额」也计入节流条件 ——
+  该帧的 completion 不再立即触发，而是挂到帧上随发送完成才触发，**读泵与排空重新耦合**，
+  应用侧被 TCP 窗口顶住而自然停读。**载波卡顿是背压事件，不是拆掉一条健康传输的理由。**
+- **DoS 兜底保留**：硬上限 = 2 × 有效配额；越过它才 `fail_flow()`（只关这一条流，会话与其余流照常），
+  P1-3 的原始不变量（单流不得独占会话 TX 内存）仍然成立。
+- 新增计数器 `mux.tx.flow.throttled`（被配额挡下的帧数）。
+
+**回归**：`TestThePerFlowTransmitQuotaFollowsTheFlowWindow`、`TestAConfiguredPerFlowQuotaOverridesTheWindow`、
+`TestAFlowOverItsQuotaIsThrottledAndNotKilled`、`TestAFlowPastTheHardCeilingIsStillFailed`；
+`TestPerFlowTxQueueRefusesAnOversizedFrame` 改为按两级语义断言（越过硬上限才拒收）。
+负向验证：把配额改回不跟随窗口 ⇒ 报 `the per-flow transmit quota must follow the flow's own window`；
+把软限改回杀流 ⇒ 报 `a frame inside the hard ceiling must be queued even past the soft quota`。
 
 ### P1-4：慢消费者隔离失败 — D11 杀整个会话
 

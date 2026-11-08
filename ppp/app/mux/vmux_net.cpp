@@ -128,6 +128,42 @@ namespace vmux {
             int qstall = AppConfiguration->mux.tx.queue.stall;
             tx_queue_high_water_ = (qmax > 0) ? (size_t)qmax : (size_t)PPP_MUX_TX_QUEUE_HIGH_WATER;
             tx_backlog_stall_ms_ = (qstall > 0) ? (uint64_t)qstall : (uint64_t)PPP_MUX_TX_BACKLOG_STALL_TIMEOUT;
+
+            // The per-flow transmit quota follows the flow's own protocol
+            // window: the peer allows that much reordering for this flow, so
+            // the queue may legitimately hold that much before the queue --
+            // rather than the window -- is what limits the flow.
+            //
+            // The old fixed 1 MiB was forty times smaller than the window on
+            // this path. That capped one flow at about 93 Mbps (1 MiB over
+            // the carrier round trip) and, worse, killed the flow outright
+            // whenever a carrier stalled for a moment -- a carrier stall is
+            // a backpressure event, not a reason to tear the flow down.
+            {
+                const size_t floor_bytes = (size_t)PPP_MUX_TX_FLOW_MAX_BYTES;
+                size_t quota = 0;
+                const int configured = AppConfiguration->mux.tx.flow.max_bytes;
+                if (configured > 0) {
+                    quota = (size_t)configured;
+                }
+                else {
+                    const int window = AppConfiguration->mux.flow.reorder.bytes;
+                    quota = (window > 0) ? (size_t)window : floor_bytes;
+                }
+                if (quota < floor_bytes) {
+                    quota = floor_bytes;
+                }
+                if (quota > (size_t)PPP_MUX_TX_FLOW_MAX_CEILING) {
+                    quota = (size_t)PPP_MUX_TX_FLOW_MAX_CEILING;
+                }
+                tx_flow_max_bytes_ = quota;
+                tx_flow_hard_bytes_ = quota * (size_t)PPP_MUX_TX_FLOW_HARD_FACTOR;
+                // The frame quota follows the byte quota: the queue has to be
+                // able to hold a window's worth of frames at the largest frame
+                // size, or the byte quota would be unreachable.
+                const size_t frame_quota = quota / (size_t)(64 * 1024) + 1u;
+                tx_flow_max_frames_ = std::max((size_t)PPP_MUX_TX_FLOW_MAX_FRAMES, frame_quota);
+            }
             // flow turbo: only meaningful under flow mode; harmless to latch always.
             turbo_ = AppConfiguration->mux.turbo && (mode_ == mux_mode_flow);
             {
@@ -812,12 +848,19 @@ namespace vmux {
         // Still route cid=0 through DRR as a single "control-data" bucket if needed.
         flow_tx_context& fx = tx_flows_[connection_id];
         const size_t nbytes = packet.length > 0 ? (size_t)packet.length : 0;
-        // Per-flow TX quota: a single slow consumer must not be able to fill the
-        // session's TX memory. When the per-flow frame or byte cap is exceeded
-        // only THIS flow is failed -- the session and every other flow keep
-        // running (the invariant the audit report records as P1-3).
-        if (fx.queue.size() >= (size_t)PPP_MUX_TX_FLOW_MAX_FRAMES ||
-            fx.bytes + nbytes > (size_t)PPP_MUX_TX_FLOW_MAX_BYTES) {
+        // The per-flow transmit quota is a throttle, not a kill. Past the
+        // quota the flow's read pump is re-coupled to the drain (see the
+        // acceleration path), so the application stalls and the flow
+        // survives: a carrier that stalls for a moment is backpressure, not a
+        // reason to tear a healthy transfer down.
+        //
+        // The DoS backstop is the hard ceiling, twice the quota. A flow that
+        // is not draining at all would otherwise sit on the session's
+        // transmit memory by itself; past the ceiling only THIS flow is
+        // failed -- the session and every other flow keep running (the
+        // invariant the audit report records as P1-3).
+        if (fx.queue.size() >= tx_flow_max_frames_ ||
+            fx.bytes + nbytes > tx_flow_hard_bytes_) {
             ppp::telemetry::Count("mux.tx.flow.overflow", 1);
             ppp::app::mux::MuxRuntimeCounterRegistry::AddTxFlowOverflow();
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxNetTxFlowQueueFull);
@@ -842,6 +885,11 @@ namespace vmux {
             fx.quantum_due = true;
             active_tx_flows_.emplace_back(connection_id);
         }
+    }
+
+    size_t vmux_net::flow_tx_queued_bytes(uint32_t connection_id) const noexcept {
+        const auto it = tx_flows_.find(connection_id);
+        return (it == tx_flows_.end()) ? 0u : it->second.bytes;
     }
 
     void vmux_net::clear_flow_tx() noexcept {
@@ -3888,6 +3936,16 @@ namespace vmux {
                 // progress and throttles ingestion until the backlog clears.
                 const uint32_t cid = peek_connection_id(packet, packet_length);
                 bool throttle = tx_data_frames_ >= tx_queue_high_water_;
+                // Per-flow quota: past it, this flow's read pump is re-coupled to
+                // the drain instead of the flow being killed. The application
+                // stalls until the carriers take the backlog; the flow and the
+                // session both survive.
+                if (!throttle && tx_flow_max_bytes_ > 0 &&
+                    flow_tx_queued_bytes(cid) + (size_t)packet_length > tx_flow_max_bytes_) {
+                    throttle = true;
+                    ppp::telemetry::Count("mux.tx.flow.throttled", 1);
+                    ppp::app::mux::MuxRuntimeCounterRegistry::AddTxFlowThrottled();
+                }
                 if (throttle) {
                     enqueue_flow_tx(cid, tx_packet{ packet, packet_length, completion });
                 }

@@ -37,6 +37,7 @@ const std::vector<std::string>& ExpectedCounterKeys() {
         "mux.rx.syn_ok.refused",
         "mux.rx.syn_ok.refused.no_socket",
         "mux.tx.flow.overflow",
+        "mux.tx.flow.throttled",
         "mux.tx.ctrl.cap",
         "mux.tx.ctrl.cap.reject",
         "mux.ack.suppressed",

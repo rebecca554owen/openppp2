@@ -68,6 +68,7 @@ namespace ppp {
                 counters["mux.rx.syn_ok.refused"] = Json::UInt64(sample.mux_counters.rx_syn_ok_refused);
                 counters["mux.rx.syn_ok.refused.no_socket"] = Json::UInt64(sample.mux_counters.rx_syn_ok_refused_no_socket);
                 counters["mux.tx.flow.overflow"] = Json::UInt64(sample.mux_counters.tx_flow_overflow);
+                counters["mux.tx.flow.throttled"] = Json::UInt64(sample.mux_counters.tx_flow_throttled);
                 counters["mux.tx.ctrl.cap"] = Json::UInt64(sample.mux_counters.tx_ctrl_cap);
                 counters["mux.tx.ctrl.cap.reject"] = Json::UInt64(sample.mux_counters.tx_ctrl_cap_rejected);
                 counters["mux.ack.suppressed"] = Json::UInt64(sample.mux_counters.tx_ack_suppressed);

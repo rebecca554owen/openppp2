@@ -332,6 +332,62 @@ struct vmux_net_test_access {
         return ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot().rx_unknown_cmd;
     }
 
+    /**
+     * @brief Latches the config-derived bounds the way the session does.
+     * @details set_ordering_mode() is where the transmit quotas, the reorder
+     *          bounds and the watchdog timers are read from the configuration.
+     *          The test calls it before the session is established, exactly
+     *          like the real handshake does.
+     */
+    static void LatchConfigBounds(vmux_net& mux, vmux_net::receiver_ordering_mode mode) {
+        RunOnStrandVoid(mux, [&]() { mux.set_ordering_mode(mode); });
+    }
+
+    /** @brief The effective per-flow transmit quota. */
+    static std::size_t FlowTxQuota(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.tx_flow_max_bytes_; });
+    }
+
+    /** @brief The DoS backstop: the hard ceiling of the per-flow transmit queue. */
+    static std::size_t FlowTxHardQuota(vmux_net& mux) {
+        return RunOnStrand(mux, [&]() { return mux.tx_flow_hard_bytes_; });
+    }
+
+    /** @brief Turns the acceleration fast path on (the read pump then runs ahead of the drain). */
+    static void SetAcceleration(vmux_net& mux, bool on) {
+        RunOnStrandVoid(mux, [&]() { mux.base_.acceleration_ = on; });
+    }
+
+    /** @brief Bytes one flow has queued for transmission. */
+    static std::size_t FlowTxQueuedBytes(vmux_net& mux, std::uint32_t cid) {
+        return RunOnStrand(mux, [&]() { return mux.flow_tx_queued_bytes(cid); });
+    }
+
+    /**
+     * @brief Posts one data frame through the real transmit path.
+     * @details This is the path where the per-flow quota is turned into a
+     *          decision: with the acceleration fast path on, a frame whose
+     *          flow is over its quota keeps its completion instead of having it
+     *          fired early, which re-couples that flow's read pump to the
+     *          drain.
+     */
+    static bool PostDataFrame(vmux_net& mux, std::uint32_t cid, int payload_len, bool acceleration) {
+        return RunOnStrand(mux, [&]() {
+            const int frame_len = static_cast<int>(sizeof(vmux_net::vmux_hdr)) + payload_len;
+            auto buf = ppp::make_shared_alloc<Byte>(frame_len);
+            if (!buf) {
+                return false;
+            }
+            auto* h = reinterpret_cast<vmux_net::vmux_hdr*>(buf.get());
+            std::memset(h, 0, sizeof(vmux_net::vmux_hdr));
+            h->cmd = vmux_net::cmd_push;
+            h->connection_id = htonl(cid);
+            h->seq = htonl(1);
+            vmux_net::PostInternalAsynchronousCallback callback;
+            return mux.post_internal(buf, frame_len, acceleration, callback);
+        });
+    }
+
     static void EvictExpired(vmux_net& mux, std::uint64_t now) {
         RunOnStrandVoid(mux, [&]() { mux.flow_evict_expired(now); });
     }
@@ -1547,18 +1603,33 @@ void TestPerFlowTxQueueStopsAtItsCap() {
         "the per-flow TX queue must stop at its hard cap");
 }
 
-// The byte cap is a separate bound: a single frame bigger than the per-flow
-// budget must be refused outright instead of being queued.
+// The hard ceiling is a separate bound: a single frame bigger than it must
+// be refused outright instead of being queued. The soft quota below it is a
+// throttle -- a frame that is over the quota but inside the ceiling is
+// queued, and the flow is slowed down rather than torn down.
 void TestPerFlowTxQueueRefusesAnOversizedFrame() {
     auto mux = MakeMux();
     vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
 
-    constexpr std::uint32_t cid = 5151;
-    const std::size_t queued = vmux::vmux_net_test_access::EnqueueFlowTx(
-        *mux, cid, /*n*/ 1, /*payload*/ static_cast<int>(PPP_MUX_TX_FLOW_MAX_BYTES));
+    const std::size_t soft = vmux::vmux_net_test_access::FlowTxQuota(*mux);
+    const std::size_t hard = vmux::vmux_net_test_access::FlowTxHardQuota(*mux);
+    Require(hard > soft, "the hard ceiling must sit above the quota");
 
-    Require(queued == 0,
-        "a frame larger than the per-flow byte cap must be refused, not queued");
+    constexpr std::uint32_t cid = 5151;
+    const std::size_t refused = vmux::vmux_net_test_access::EnqueueFlowTx(
+        *mux, cid, /*n*/ 1, /*payload*/ static_cast<int>(hard));
+
+    Require(refused == 0,
+        "a frame larger than the per-flow hard ceiling must be refused, not queued");
+
+    // A frame that is over the soft quota but inside the ceiling is queued:
+    // the quota throttles the flow, it does not refuse the frame.
+    constexpr std::uint32_t cid2 = 5152;
+    const std::size_t queued = vmux::vmux_net_test_access::EnqueueFlowTx(
+        *mux, cid2, /*n*/ 1, /*payload*/ static_cast<int>(soft));
+
+    Require(queued == 1u,
+        "a frame inside the hard ceiling must be queued even past the soft quota");
 }
 
 // The per-flow quota kills only the flow that hit it: the session and every
@@ -1763,6 +1834,109 @@ void TestUnknownCommandDoesNotMoveTheCompatFrontier() {
         "an unknown command must not enter the reorder buffer");
 }
 
+// ---------------------------------------------------------------------------
+// The per-flow transmit quota
+//
+// The quota used to be a fixed 1 MiB, copied from upstream. That number is
+// smaller than the window the peer allows for the flow, so the queue -- not
+// the window -- became what limited the flow: one flow was capped at about
+// 93 Mbps on a path that does 900, and a carrier that stalled for a moment
+// killed the flow outright. The quota now follows the flow's own window, and
+// going over it throttles the flow instead of tearing it down.
+// ---------------------------------------------------------------------------
+
+void TestThePerFlowTransmitQuotaFollowsTheFlowWindow() {
+    auto mux = MakeMux();
+
+    // The default configuration gives every flow an 8 MiB window.
+    vmux::vmux_net_test_access::LatchConfigBounds(*mux, vmux::vmux_net::ordering_flow_v2);
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    const std::size_t quota = vmux::vmux_net_test_access::FlowTxQuota(*mux);
+    Require(quota == static_cast<std::size_t>(PPP_MUX_FLOW_REORDER_BYTES),
+        "the per-flow transmit quota must follow the flow's own window");
+    Require(quota > static_cast<std::size_t>(PPP_MUX_TX_FLOW_MAX_BYTES),
+        "the per-flow transmit quota must not be the old fixed one mebibyte");
+    Require(vmux::vmux_net_test_access::FlowTxHardQuota(*mux) == quota * 2u,
+        "the DoS backstop must sit at twice the quota");
+}
+
+void TestAConfiguredPerFlowQuotaOverridesTheWindow() {
+    auto mux = MakeMux();
+    mux->AppConfiguration->mux.tx.flow.max_bytes = 4 * 1024 * 1024;
+
+    vmux::vmux_net_test_access::LatchConfigBounds(*mux, vmux::vmux_net::ordering_flow_v2);
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    Require(vmux::vmux_net_test_access::FlowTxQuota(*mux) == 4u * 1024u * 1024u,
+        "a configured per-flow quota must override the window");
+}
+
+void TestAFlowOverItsQuotaIsThrottledAndNotKilled() {
+    auto mux = MakeMux();
+    // One mebibyte is the tightest quota the configuration can ask for, and
+    // twice it is the DoS backstop.
+    mux->AppConfiguration->mux.tx.flow.max_bytes = 1024 * 1024;
+    vmux::vmux_net_test_access::LatchConfigBounds(*mux, vmux::vmux_net::ordering_flow_v2);
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    Require(vmux::vmux_net_test_access::FlowTxQuota(*mux) == 1024u * 1024u,
+        "the quota must be the configured one");
+
+    // A carrier to send on: the acceleration fast path only runs when there
+    // is one.
+    vmux::vmux_net_test_access::AttachLink(*mux, vmux::vmux_net_test_access::MakeDeadLink(true));
+    vmux::vmux_net_test_access::SetAcceleration(*mux, true);
+
+    const auto before = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+
+    // Fill the flow past its quota. Nothing drains it here, so the bytes
+    // stay queued -- which is the state a stalled carrier produces.
+    constexpr std::uint32_t kCid = 4242;
+    constexpr int kChunk = 128 * 1024;
+    for (int i = 0; i < 10; ++i) {
+        vmux::vmux_net_test_access::EmplaceDataFrame(*mux, kCid, kChunk);
+    }
+    Require(vmux::vmux_net_test_access::FlowTxQueuedBytes(*mux, kCid) > 1024u * 1024u,
+        "the flow must be over its quota");
+
+    // Now the real transmit path runs with the flow over its quota. The
+    // return value is the send result, not the enqueue result: the carrier
+    // here is a dead one, so the send fails and that is expected.
+    vmux::vmux_net_test_access::PostDataFrame(*mux, kCid, 1024, true);
+
+    const auto after = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(after.tx_flow_throttled > before.tx_flow_throttled,
+        "a flow over its quota must be throttled");
+    Require(after.tx_flow_overflow == before.tx_flow_overflow,
+        "a flow over its quota must not be counted as an overflow");
+    Require(after.rx_flow_reset == before.rx_flow_reset,
+        "a flow over its quota must not be reset");
+}
+
+void TestAFlowPastTheHardCeilingIsStillFailed() {
+    auto mux = MakeMux();
+    mux->AppConfiguration->mux.tx.flow.max_bytes = 1024 * 1024;
+    vmux::vmux_net_test_access::LatchConfigBounds(*mux, vmux::vmux_net::ordering_flow_v2);
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+
+    const auto before = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+
+    // Past twice the quota the flow is not draining at all and would sit on
+    // the session's transmit memory by itself: that flow is failed, and
+    // only that flow.
+    constexpr std::uint32_t kCid = 4343;
+    constexpr int kChunk = 128 * 1024;
+    for (int i = 0; i < 24; ++i) {
+        vmux::vmux_net_test_access::EmplaceDataFrame(*mux, kCid, kChunk);
+    }
+
+    const auto after = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(after.tx_flow_overflow > before.tx_flow_overflow,
+        "a flow past the hard ceiling must be counted as an overflow");
+    Require(after.rx_flow_reset > before.rx_flow_reset,
+        "a flow past the hard ceiling must be failed");
+}
+
 int main() {
     try {
         TestReceiverRefusesUnknownFlow();
@@ -1809,6 +1983,10 @@ int main() {
         TestAckCoalescingNeverSuppressesAForcedAck();
         TestUnknownCommandIsSkippedAndCounted();
         TestUnknownCommandDoesNotMoveTheCompatFrontier();
+        TestThePerFlowTransmitQuotaFollowsTheFlowWindow();
+        TestAConfiguredPerFlowQuotaOverridesTheWindow();
+        TestAFlowOverItsQuotaIsThrottledAndNotKilled();
+        TestAFlowPastTheHardCeilingIsStillFailed();
         std::cout << "vmux_receive_semantics_test: ok" << std::endl;
         return 0;
     }

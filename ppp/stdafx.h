@@ -400,8 +400,10 @@ static constexpr int                                                        PPP_
 static constexpr int                                                        PPP_MUX_CLOSED_FLOW_LIFETIME_MS = 30000;    /* ms a finished flow is remembered, so a retransmitted FIN can be acknowledged again */
 static constexpr int                                                        PPP_MUX_FLOW_AGGREGATE_BYTES    = 16 << 20; /* 16 MiB aggregate reorder memory across all flow contexts */
 static constexpr int                                                        PPP_MUX_TX_QUEUE_HIGH_WATER     = 4096;     /* data tx_queue_ depth at which the acceleration read-pump is throttled (D11 backpressure) */
-static constexpr int                                                        PPP_MUX_TX_FLOW_MAX_FRAMES      = 256;      /* per-flow TX queue frame cap (DoS bound, prevents single flow monopolizing session) */
-static constexpr int                                                        PPP_MUX_TX_FLOW_MAX_BYTES       = 1 << 20;  /* 1 MiB per-flow TX queue byte cap */
+static constexpr int                                                        PPP_MUX_TX_FLOW_MAX_FRAMES      = 256;      /* floor for the per-flow TX queue frame cap (the effective cap follows the flow's own window) */
+static constexpr int                                                        PPP_MUX_TX_FLOW_MAX_BYTES       = 1 << 20;  /* floor for the per-flow TX queue byte cap */
+static constexpr int                                                        PPP_MUX_TX_FLOW_MAX_CEILING     = 64 << 20; /* absolute ceiling for the per-flow TX queue byte cap (a quarter of the session's D11 budget) */
+static constexpr int                                                        PPP_MUX_TX_FLOW_HARD_FACTOR     = 2;       /* the DoS backstop sits at this multiple of the effective per-flow quota */
 static constexpr int                                                        PPP_MUX_TX_BACKLOG_STALL_TIMEOUT = 8000;    /* ms the data tx queue may stay backlogged before the session is rebuilt (D11 watchdog) */
 static constexpr int                                                        PPP_MUX_TURBO_FACTOR_MAX        = 3;        /* turbo dynamic pool: max multiplier of the --tun-mux base (pool_hard_max = base * this) */
 static constexpr int                                                        PPP_MUX_TURBO_CONTROL_COOLDOWN  = 3000;     /* ms minimum interval between turbo pool grow/shrink steps (hysteresis vs jitter) */

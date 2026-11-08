@@ -304,6 +304,7 @@ namespace ppp {
             config.mux.tx.queue.max = PPP_MUX_TX_QUEUE_HIGH_WATER;
             config.mux.tx.queue.stall = PPP_MUX_TX_BACKLOG_STALL_TIMEOUT;
             config.mux.tx.ctrl.budget_frames = PPP_MUX_TX_CTRL_BUDGET_FRAMES;
+            config.mux.tx.flow.max_bytes = 0; // 0 = follow the flow's own protocol window
             config.mux.debug.key = "";
             config.mux.debug.set_mode = "";
             config.mux.reliability.enabled = true;
@@ -837,6 +838,12 @@ namespace ppp {
 
             if (config.mux.tx.ctrl.budget_frames <= 0) {
                 config.mux.tx.ctrl.budget_frames = PPP_MUX_TX_CTRL_BUDGET_FRAMES;
+            }
+
+            // A negative per-flow quota is a mistake; zero is the documented
+            // "follow the flow's own window" and stays zero.
+            if (config.mux.tx.flow.max_bytes < 0) {
+                config.mux.tx.flow.max_bytes = 0;
             }
 
             if (config.mux.reliability.rtx.bytes <= 0) {
@@ -1921,6 +1928,7 @@ namespace ppp {
             config.mux.tx.queue.max = JsonAuxiliary::AsValue<int>(json["mux"]["tx"]["queue"]["max"]);
             config.mux.tx.queue.stall = JsonAuxiliary::AsValue<int>(json["mux"]["tx"]["queue"]["stall"]);
             config.mux.tx.ctrl.budget_frames = JsonAuxiliary::AsValue<int>(json["mux"]["tx"]["ctrl"]["budget_frames"]);
+            config.mux.tx.flow.max_bytes = JsonAuxiliary::AsValue<int>(json["mux"]["tx"]["flow"]["max_bytes"]);
             AssignBoolIfPresent(config.mux.reliability.enabled, json["mux"]["reliability"]["enabled"]);
             config.mux.reliability.rtx.bytes = JsonAuxiliary::AsValue<int>(json["mux"]["reliability"]["rtx"]["bytes"]);
             config.mux.reliability.rtx.flow_bytes = JsonAuxiliary::AsValue<int>(json["mux"]["reliability"]["rtx"]["flow_bytes"]);
