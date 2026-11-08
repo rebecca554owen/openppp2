@@ -28,8 +28,9 @@ namespace ppp {
                         const ContextPtr&                                       context,
                         const ppp::threading::Executors::StrandPtr&             strand,
                         const Int128&                                           id,
-                        const std::shared_ptr<boost::asio::ip::tcp::socket>&    socket) noexcept
-                        : VirtualEthernetTcpipConnection(configuration, context, strand, id, socket)
+                        const std::shared_ptr<boost::asio::ip::tcp::socket>&    socket,
+                        const ITransmissionStatisticsPtr&                        statistics = NULLPTR) noexcept
+                        : VirtualEthernetTcpipConnection(configuration, context, strand, id, socket, statistics)
                         , connection_(connection) {
 
                     }
