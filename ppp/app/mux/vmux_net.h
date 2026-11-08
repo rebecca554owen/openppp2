@@ -88,6 +88,7 @@ namespace vmux {
     private:
         friend class                                                                vmux_skt;
         friend struct                                                               vmux_net_test_access;
+        friend struct                                                               vmux_fuzz_test_access; ///< The fuzz target reaches the private dispatch path on purpose.
 
         template <typename _Tp>
         struct packet_less {

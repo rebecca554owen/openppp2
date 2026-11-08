@@ -1,0 +1,51 @@
+name: Test · Fuzz
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: test-fuzz-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  vmux-fuzz:
+    name: VMUX fuzz targets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang llvm libboost-all-dev libssl-dev
+
+      - name: Build the fuzz targets
+        run: |
+          cmake -S . -B build/fuzz -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DENABLE_ASAN=ON \
+            -DENABLE_VMUX_FUZZ_TEST=ON
+          cmake --build build/fuzz --target fuzz_vmux_ack fuzz_vmux_frame
+
+      - name: Run the fuzz targets
+        run: bash scripts/run-vmux-fuzz.sh
+
+      - name: Upload the corpus and any crash
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vmux-fuzz-corpus
+          path: |
+            tests/fuzz/corpus
+            build/fuzz/crash
+          if-no-files-found: ignore
+          retention-days: 7
