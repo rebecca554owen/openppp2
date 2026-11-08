@@ -3921,6 +3921,28 @@ namespace vmux {
             // fall through to the normal path when no free turbo link is available.
         }
 
+        // The per-flow transmit quota is a throttle, not a kill, and it is
+        // checked on EVERY path that queues data, not only on the acceleration
+        // fast path. The fast path used to own the check, which meant that the
+        // moment every carrier was busy (tx_links_ empty, which is exactly what
+        // a congested path produces) the frame took the fallback below and the
+        // quota was never consulted: the queue grew straight to the hard
+        // ceiling and the flow was failed. Production saw exactly that:
+        // mux.tx.flow.throttled stayed at 0 while mux.tx.flow.overflow and
+        // mux.rx.flow.reset moved in lockstep.
+        const uint32_t cid = peek_connection_id(packet, packet_length);
+        bool throttle = tx_data_frames_ >= tx_queue_high_water_;
+        // Per-flow quota: past it, this flow's read pump is re-coupled to
+        // the drain instead of the flow being killed. The application
+        // stalls until the carriers take the backlog; the flow and the
+        // session both survive.
+        if (!throttle && tx_flow_max_bytes_ > 0 &&
+            flow_tx_queued_bytes(cid) + (size_t)packet_length > tx_flow_max_bytes_) {
+            throttle = true;
+            ppp::telemetry::Count("mux.tx.flow.throttled", 1);
+            ppp::app::mux::MuxRuntimeCounterRegistry::AddTxFlowThrottled();
+        }
+
         if (acceleration && base_.acceleration_) {
             vmux_linklayer_list::iterator linklayer_tail = tx_links_.begin();
             vmux_linklayer_list::iterator linklayer_endl = tx_links_.end();
@@ -3934,18 +3956,6 @@ namespace vmux {
                 // to attaching the completion to the frame so it fires only when the
                 // frame is actually sent — this re-couples the read-pump to drain
                 // progress and throttles ingestion until the backlog clears.
-                const uint32_t cid = peek_connection_id(packet, packet_length);
-                bool throttle = tx_data_frames_ >= tx_queue_high_water_;
-                // Per-flow quota: past it, this flow's read pump is re-coupled to
-                // the drain instead of the flow being killed. The application
-                // stalls until the carriers take the backlog; the flow and the
-                // session both survive.
-                if (!throttle && tx_flow_max_bytes_ > 0 &&
-                    flow_tx_queued_bytes(cid) + (size_t)packet_length > tx_flow_max_bytes_) {
-                    throttle = true;
-                    ppp::telemetry::Count("mux.tx.flow.throttled", 1);
-                    ppp::app::mux::MuxRuntimeCounterRegistry::AddTxFlowThrottled();
-                }
                 if (throttle) {
                     enqueue_flow_tx(cid, tx_packet{ packet, packet_length, completion });
                 }
@@ -3972,10 +3982,10 @@ namespace vmux {
             }
         }
 
-        {
-            const uint32_t cid = peek_connection_id(packet, packet_length);
-            enqueue_flow_tx(cid, tx_packet{ packet, packet_length, completion });
-        }
+        // Every carrier is busy (or the session does not accelerate): the
+        // frame waits in the queue. The quota above still applies: a flow over
+        // it is throttled, not failed.
+        enqueue_flow_tx(cid, tx_packet{ packet, packet_length, completion });
         return process_tx_all_packets();
     }
 

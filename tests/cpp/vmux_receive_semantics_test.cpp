@@ -1913,6 +1913,55 @@ void TestAFlowOverItsQuotaIsThrottledAndNotKilled() {
         "a flow over its quota must not be reset");
 }
 
+/**
+ * @brief A flow over its quota is throttled even when every carrier is busy.
+ * @details The quota check used to live inside the acceleration fast path,
+ *          which only runs when a carrier is free to send on. The moment every
+ *          carrier was busy the frame took the fallback path, where the quota
+ *          was never consulted: the queue grew to the hard ceiling and the
+ *          flow was failed. Production showed it as mux.tx.flow.throttled
+ *          stuck at 0 while mux.tx.flow.overflow and mux.rx.flow.reset moved
+ *          in lockstep. This test pins the fallback path: no carrier is
+ *          attached, so the frame cannot be sent on one, and the flow is
+ *          already over its quota.
+ */
+void TestAFlowOverItsQuotaIsThrottledWithNoFreeCarrier() {
+    auto mux = MakeMux();
+    mux->AppConfiguration->mux.tx.flow.max_bytes = 1024 * 1024;
+    vmux::vmux_net_test_access::LatchConfigBounds(*mux, vmux::vmux_net::ordering_flow_v2);
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
+    Require(vmux::vmux_net_test_access::FlowTxQuota(*mux) == 1024u * 1024u,
+        "the quota must be the configured one");
+
+    // No carrier is attached at all: tx_links_ stays empty, which is the
+    // state a fully busy path produces.
+    vmux::vmux_net_test_access::SetAcceleration(*mux, true);
+
+    const auto before = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+
+    // Fill the flow past its quota. Nothing drains it here, so the bytes
+    // stay queued.
+    constexpr std::uint32_t kCid = 4141;
+    constexpr int kChunk = 128 * 1024;
+    for (int i = 0; i < 10; ++i) {
+        vmux::vmux_net_test_access::EmplaceDataFrame(*mux, kCid, kChunk);
+    }
+    Require(vmux::vmux_net_test_access::FlowTxQueuedBytes(*mux, kCid) > 1024u * 1024u,
+        "the flow must be over its quota");
+
+    // The transmit path runs with the flow over its quota and no carrier to
+    // send on. The quota has to be honoured here too.
+    vmux::vmux_net_test_access::PostDataFrame(*mux, kCid, 1024, true);
+
+    const auto after = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
+    Require(after.tx_flow_throttled > before.tx_flow_throttled,
+        "a flow over its quota must be throttled even with no free carrier");
+    Require(after.tx_flow_overflow == before.tx_flow_overflow,
+        "a flow over its quota must not be counted as an overflow");
+    Require(after.rx_flow_reset == before.rx_flow_reset,
+        "a flow over its quota must not be reset");
+}
+
 void TestAFlowPastTheHardCeilingIsStillFailed() {
     auto mux = MakeMux();
     mux->AppConfiguration->mux.tx.flow.max_bytes = 1024 * 1024;
@@ -2026,6 +2075,7 @@ int main() {
         TestThePerFlowTransmitQuotaFollowsTheFlowWindow();
         TestAConfiguredPerFlowQuotaOverridesTheWindow();
         TestAFlowOverItsQuotaIsThrottledAndNotKilled();
+        TestAFlowOverItsQuotaIsThrottledWithNoFreeCarrier();
         TestAFlowPastTheHardCeilingIsStillFailed();
         std::cout << "vmux_receive_semantics_test: ok" << std::endl;
         return 0;
