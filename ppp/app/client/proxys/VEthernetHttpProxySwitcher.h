@@ -54,6 +54,18 @@ namespace ppp {
 
                 protected:
                     /**
+                     * @brief Returns the response for a client that arrives before the
+                     *        tunnel session is established.
+                     *
+                     * @details The HTTP proxy answers with 503 Service Unavailable so
+                     *          that a client which connected during a session rebuild
+                     *          gets a status it can retry, rather than a connection
+                     *          reset that it can only fail on.
+                     *
+                     * @return A 503 response line set, ready to be written.
+                     */
+                    virtual const char*                                               MyUnavailableResponse() noexcept override;
+                    /**
                      * @brief Resolves the bind address and bind port for the local HTTP acceptor.
                      *
                      * @details Reads `configuration->http_proxy.bind` for the address string and

@@ -11,10 +11,10 @@
 
 namespace ppp::configurations { class AppConfiguration; }
 namespace ppp::diagnostics::datapath_perf { class Scope; }
-namespace ppp::app::runtime { class XtcpDirectQueueTelemetry; }
 #include <ppp/net/Firewall.h>
 #include <ppp/transmissions/ITransmission.h>
-#include <ppp/app/protocol/XtcpDirectIo.h>
+#include <ppp/transmissions/ITransmissionStatistics.h>
+#include <ppp/app/runtime/XtcpFirstLegHooks.h>
 #include <ppp/app/protocol/DirectReadWaiterState.h>
 #include <ppp/app/protocol/VirtualEthernetLogger.h>
 #include <ppp/app/protocol/VirtualEthernetLinklayer.h>
@@ -46,6 +46,8 @@ namespace ppp {
                 typedef ppp::coroutines::YieldContext                           YieldContext;
                 typedef ppp::transmissions::ITransmission                       ITransmission;
                 typedef std::shared_ptr<ITransmission>                          ITransmissionPtr;
+                typedef ppp::transmissions::ITransmissionStatistics              ITransmissionStatistics;
+                typedef std::shared_ptr<ITransmissionStatistics>                 ITransmissionStatisticsPtr;
                 typedef ppp::app::protocol::VirtualEthernetLogger               VirtualEthernetLogger;
                 typedef std::shared_ptr<VirtualEthernetLogger>                  VirtualEthernetLoggerPtr;
                 typedef ppp::function<bool(uint32_t, uint32_t, uint32_t)>       AcceptMuxAsynchronousCallback;
@@ -59,6 +61,17 @@ namespace ppp {
                     const std::shared_ptr<Byte>&)>                              DirectReadHandler;
                 typedef ppp::function<void(XtcpDirectCloseReason)> DirectCloseHandler;
                 typedef ppp::function<void()>                                  DirectWritableHandler;
+                /**
+                 * @brief Optional hook rewriting client->peer bytes before they reach the
+                 *        transmission. The HTTP proxy uses it to normalise request targets
+                 *        on a reused connection (RFC 7230 5.3.2). Unset = verbatim path.
+                 * @param data Bytes just read from the client socket.
+                 * @param size Number of bytes.
+                 * @param output Receives the bytes to forward; leave empty to buffer a
+                 *               partially received protocol unit and keep reading.
+                 * @return None.
+                 */
+                typedef ppp::function<void(const void*, int, ppp::string&)>     ClientDataTransform;
 
 #if defined(_LINUX)
             public:
@@ -87,7 +100,8 @@ namespace ppp {
                     const ContextPtr&                                           context,
                     const StrandPtr&                                            strand,
                     const Int128&                                               id,
-                    const std::shared_ptr<boost::asio::ip::tcp::socket>&        socket) noexcept;
+                    const std::shared_ptr<boost::asio::ip::tcp::socket>&        socket,
+                    const ITransmissionStatisticsPtr&                           statistics = NULLPTR) noexcept;
                 /**
                  * @brief Releases connection resources.
                  * @return N/A.
@@ -206,6 +220,13 @@ namespace ppp {
                 void                                                            SetDirectQueueTelemetry(
                     const std::shared_ptr<ppp::app::runtime::XtcpDirectQueueTelemetry>& telemetry) noexcept;
                 void                                                            CloseDirectSend() noexcept;
+                /**
+                 * @brief Installs the optional client->peer byte rewriting hook.
+                 * @param transform Callback invoked for every client read; unset disables.
+                 * @return None.
+                 * @note Must be set before the socket->transmission pump starts.
+                 */
+                void                                                            SetClientDataTransform(const ClientDataTransform& transform) noexcept { client_data_transform_ = transform; }
 
 #if defined(_IPHONE) || defined(IPHONE)
                 /**
@@ -338,7 +359,9 @@ namespace ppp {
                 StrandPtr                                                       strand_;        ///< Serialized executor guaranteeing single-threaded callback ordering.
                 Int128                                                          id_        = 0; ///< Logical connection identifier assigned at construction time.
                 std::shared_ptr<boost::asio::ip::tcp::socket>                   socket_;        ///< Local TCP socket bridged to the virtual Ethernet transmission.
+                ITransmissionStatisticsPtr                                      statistics_;    ///< Optional traffic statistics tracker.
                 ITransmissionPtr                                                transmission_; ///< Virtual Ethernet transmission channel used for protocol framing.
+                ClientDataTransform                                             client_data_transform_; ///< Optional client->peer byte rewriting hook (HTTP proxy request rewrite).
                 static constexpr size_t                                         kDirectQueueMaxPackets = 4096;
                 static constexpr size_t                                         kDirectQueueLowPackets = kDirectQueueMaxPackets / 2;
                 static constexpr size_t                                         kDirectQueueMaxBytes = 32 * 1024 * 1024;

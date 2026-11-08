@@ -16,6 +16,7 @@ namespace ppp {
 
             namespace proxys {
                 class VEthernetHttpProxySwitcher;
+                class HttpProxyRequestRewriter;
 
                 /**
                  * @brief Handles one HTTP proxy client session.
@@ -147,6 +148,15 @@ namespace ppp {
                      * @note Destination endpoint is derived from protocolRoot.
                      */
                     bool                                                                ConnectBridgeToPeer(const std::shared_ptr<ProtocolRoot>& protocolRoot, YieldContext& y) noexcept;
+                    /**
+                     * @brief Installs the streaming request-target normaliser on the active
+                     *        bridge so every later request on a reused connection is rewritten.
+                     * @param protocolRoot First request metadata used to seed the state machine.
+                     * @param body_bytes_forwarded Body bytes already forwarded with that request.
+                     * @return None.
+                     * @note Only the transmission tunnel and rinetd bridges expose the hook.
+                     */
+                    void                                                                InstallRequestRewriter(const std::shared_ptr<ProtocolRoot>& protocolRoot, int body_bytes_forwarded) noexcept;
 
                 protected:
                     /**
@@ -156,6 +166,9 @@ namespace ppp {
                      * @note Sends HTTP error responses for malformed requests.
                      */
                     virtual bool                                                        Handshake(YieldContext& y) noexcept override;
+
+                private:
+                    std::shared_ptr<HttpProxyRequestRewriter>                           request_rewriter_; ///< Streaming request-target normaliser for reused connections.
                 };
             }
         }

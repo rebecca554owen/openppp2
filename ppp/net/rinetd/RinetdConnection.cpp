@@ -22,14 +22,15 @@ namespace ppp {
             /**
              * @brief Initializes relay state and optional platform QoS helpers.
              */
-            RinetdConnection::RinetdConnection(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& local_socket) noexcept
+            RinetdConnection::RinetdConnection(const std::shared_ptr<ppp::configurations::AppConfiguration>& configuration, const std::shared_ptr<boost::asio::io_context>& context, const ppp::threading::Executors::StrandPtr& strand, const std::shared_ptr<boost::asio::ip::tcp::socket>& local_socket, const std::shared_ptr<ppp::transmissions::ITransmissionStatistics>& statistics) noexcept
                 : disposed_(false)
                 , connected_(false)
                 , timeout_(0)
                 , context_(context)
                 , strand_(strand)
                 , local_socket_(local_socket)
-                , configuration_(configuration) {
+                , configuration_(configuration)
+                , statistics_(statistics) {
 #if defined(_WIN32)
                 if (ppp::net::Socket::IsDefaultFlashTypeOfService()) {
                     qoss_[0] = ppp::net::QoSS::New(local_socket->native_handle());
@@ -230,7 +231,7 @@ namespace ppp {
              */
             bool RinetdConnection::ForwardXToY(boost::asio::ip::tcp::socket* socket, boost::asio::ip::tcp::socket* to, Byte* buffer) noexcept {
                 if (disposed_) {
-                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SessionDisposed);
+                    ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::SocketDisconnected);
                     return false;
                 }
 
@@ -240,9 +241,13 @@ namespace ppp {
                     return false;
                 }
 
+                // Determine traffic direction for statistics:
+                //   local -> remote = outgoing (TX), remote -> local = incoming (RX)
+                bool is_transmit = (socket == local_socket_.get());
+
                 std::shared_ptr<RinetdConnection> self = shared_from_this();
                 socket->async_receive(boost::asio::buffer(buffer, PPP_BUFFER_SIZE),
-                    [self, this, socket, to, buffer](const boost::system::error_code& ec, uint32_t sz) noexcept {
+                    [self, this, socket, to, buffer, is_transmit](const boost::system::error_code& ec, uint32_t sz) noexcept {
                         int bytes_transferred = std::max<int>(-1, ec ? -1 : static_cast<int>(sz));
                         if (bytes_transferred < 1) {
                             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::TcpReceiveFailed);
@@ -250,8 +255,53 @@ namespace ppp {
                             return false;
                         }
 
-                        boost::asio::async_write(*to, boost::asio::buffer(buffer, bytes_transferred),
-                            [self, this, socket, to, buffer](const boost::system::error_code& ec, uint32_t sz) noexcept {
+                        // Update traffic statistics
+                        if (NULLPTR != statistics_) {
+                            if (is_transmit) {
+                                statistics_->AddOutgoingTraffic(bytes_transferred);
+                            }
+                            else {
+                                statistics_->AddIncomingTraffic(bytes_transferred);
+                            }
+                        }
+
+                        // Optional local->remote rewriting hook (HTTP proxy request-target
+                        // normalisation on a reused connection). Unset keeps the verbatim path.
+                        std::shared_ptr<Byte> outgoing(buffer, [](Byte*) noexcept {});
+                        int outgoing_size = bytes_transferred;
+                        ClientDataTransform transform = is_transmit ? client_data_transform_ : ClientDataTransform();
+                        if (transform) {
+                            ppp::string rewritten;
+                            transform(buffer, bytes_transferred, rewritten);
+
+                            int rewritten_size = static_cast<int>(rewritten.size());
+                            if (rewritten_size < 1) {
+                                // The hook buffered a partial protocol unit; keep reading.
+                                bool ok = ForwardXToY(socket, to, buffer);
+                                if (ok) {
+                                    Update();
+                                }
+                                else {
+                                    Dispose();
+                                }
+                                return true;
+                            }
+
+                            auto allocator = configuration_ ? configuration_->GetBufferAllocator() : NULLPTR;
+                            std::shared_ptr<Byte> out = ppp::threading::BufferswapAllocator::MakeByteArray(allocator, rewritten_size);
+                            if (NULLPTR == out) {
+                                ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                                Dispose();
+                                return false;
+                            }
+
+                            ::memcpy(out.get(), rewritten.data(), rewritten_size);
+                            outgoing = out;
+                            outgoing_size = rewritten_size;
+                        }
+
+                        boost::asio::async_write(*to, boost::asio::buffer(outgoing.get(), outgoing_size),
+                            [self, this, socket, to, buffer, outgoing](const boost::system::error_code& ec, uint32_t sz) noexcept {
                                 bool ok = ec == boost::system::errc::success;
                                 if (ok) {
                                     ok = ForwardXToY(socket, to, buffer);

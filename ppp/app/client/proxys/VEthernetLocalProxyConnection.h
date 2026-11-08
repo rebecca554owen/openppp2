@@ -39,6 +39,9 @@ namespace ppp {
                  */
                 class VEthernetLocalProxyConnection : public std::enable_shared_from_this<VEthernetLocalProxyConnection> {
                 public:
+                    /** @brief Client->peer byte rewriting hook signature. */
+                    typedef ppp::function<void(const void*, int, ppp::string&)>  ClientDataTransform;
+
                     typedef ppp::net::rinetd::RinetdConnection                          RinetdConnection;
                     typedef ppp::configurations::AppConfiguration                       AppConfiguration;
                     typedef std::shared_ptr<AppConfiguration>                           AppConfigurationPtr;
@@ -141,6 +144,13 @@ namespace ppp {
                      * @return true if write succeeds on the active channel.
                      */
                     bool                                                                SendBufferToPeer(YieldContext& y, const void* messages, int messages_size) noexcept;
+                    /**
+                     * @brief Installs a client->peer byte rewriting hook on the active bridge.
+                     * @param transform Callback invoked for every client read; empty clears it.
+                     * @return None.
+                     * @note Exposed by the transmission tunnel and rinetd bridges.
+                     */
+                    void                                                                SetClientPeerDataTransform(const ClientDataTransform& transform) noexcept;
 
                 private:
                     std::atomic_bool                                                    disposed_{false};
