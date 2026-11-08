@@ -163,6 +163,14 @@ namespace vmux {
                 // size, or the byte quota would be unreachable.
                 const size_t frame_quota = quota / (size_t)(64 * 1024) + 1u;
                 tx_flow_max_frames_ = std::max((size_t)PPP_MUX_TX_FLOW_MAX_FRAMES, frame_quota);
+                // The frame backstop mirrors the byte one: twice the frame quota.
+                // Using the soft frame quota here would fail the flow long
+                // before the byte quota is reached, because the frames on this
+                // path are large (the sender reads up to 64 KiB per frame), so
+                // 257 frames are already about 15 MiB. The byte ceiling is the
+                // one the quota is expressed in; the frame ceiling is only
+                // the backstop for a flow made of tiny frames.
+                tx_flow_hard_frames_ = tx_flow_max_frames_ * (size_t)PPP_MUX_TX_FLOW_HARD_FACTOR;
             }
             // flow turbo: only meaningful under flow mode; harmless to latch always.
             turbo_ = AppConfiguration->mux.turbo && (mode_ == mux_mode_flow);
@@ -859,7 +867,7 @@ namespace vmux {
         // transmit memory by itself; past the ceiling only THIS flow is
         // failed -- the session and every other flow keep running (the
         // invariant the audit report records as P1-3).
-        if (fx.queue.size() >= tx_flow_max_frames_ ||
+        if (fx.queue.size() >= tx_flow_hard_frames_ ||
             fx.bytes + nbytes > tx_flow_hard_bytes_) {
             ppp::telemetry::Count("mux.tx.flow.overflow", 1);
             ppp::app::mux::MuxRuntimeCounterRegistry::AddTxFlowOverflow();

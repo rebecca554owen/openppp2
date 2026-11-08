@@ -1596,10 +1596,19 @@ void TestPerFlowTxQueueStopsAtItsCap() {
     vmux::vmux_net_test_access::ConfigureFlowV2(*mux, /*cap*/ 64 * 1024, /*timeout*/ 1000);
 
     constexpr std::uint32_t cid = 5150;
+    // The frame backstop is twice the frame quota, mirroring the byte
+    // ceiling. Using the soft frame quota here failed the flow long before
+    // the byte quota was reached, because the frames on this path are large
+    // (the sender reads up to 64 KiB per frame): 257 frames are already
+    // about 15 MiB, so the byte quota of 16 MiB could never be reached and
+    // the backpressure never engaged.
+    //
+    // Ask for more frames than the backstop allows, so the queue really
+    // stops at it.
     const std::size_t queued =
-        vmux::vmux_net_test_access::EnqueueFlowTx(*mux, cid, 300, /*payload*/ 64);
+        vmux::vmux_net_test_access::EnqueueFlowTx(*mux, cid, 1000, /*payload*/ 64);
 
-    Require(queued == static_cast<std::size_t>(PPP_MUX_TX_FLOW_MAX_FRAMES),
+    Require(queued == static_cast<std::size_t>(PPP_MUX_TX_FLOW_MAX_FRAMES) * 2u,
         "the per-flow TX queue must stop at its hard cap");
 }
 
@@ -1645,7 +1654,13 @@ void TestPerFlowTxOverflowFailsOnlyThatFlow() {
     auto calm = vmux::vmux_net_test_access::InstallQueueOnlySkt(mux, calm_cid);
 
     // The hot flow fills its own quota; the calm flow sends a single frame.
-    vmux::vmux_net_test_access::EnqueueFlowTx(*mux, hot_cid, 300, /*payload*/ 64);
+    // The queue is bounded by two ceilings -- the byte one and the frame one --
+    // and either of them may be the one that is reached, so the hot flow is
+    // given enough frames to pass both.
+    const std::size_t hard_bytes = vmux::vmux_net_test_access::FlowTxHardQuota(*mux);
+    const int frames_to_fill =
+        static_cast<int>(hard_bytes / 64) + static_cast<int>(PPP_MUX_TX_FLOW_MAX_FRAMES) + 16;
+    vmux::vmux_net_test_access::EnqueueFlowTx(*mux, hot_cid, frames_to_fill, /*payload*/ 64);
     vmux::vmux_net_test_access::EnqueueFlowTx(*mux, calm_cid, 1, /*payload*/ 64);
 
     // Drain the close that fail_flow() posted for the hot flow.
