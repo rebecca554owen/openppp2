@@ -28,6 +28,41 @@
 > 基线：`4fd139d` / `v2.1.6-6-g4fd139d` / clang 19.1.7 / Debian 13 trixie
 > 审计范围：vmux_skt → vmux_net → IMuxTransport / ITransmission → SSEA 边界
 
+> **fork 侧复核（2026-11-04）**：本报告是上游 2026-08-02 的历史审计，封板基线是上游 `main`。fork 在 `57f0ffa5`（`vmux_net.cpp` 整文件重写）中偏离过其中若干条，已逐条复核并就地记录：
+> - **P0-1**：形态回退（lambda 捕获列表里多了一个裸 `this`）。已修复，见该条目。
+> - **P1-3 / P1-6**：per-flow TX 配额、控制队列硬上限与 ACK 合并被删。已按条目规格重新落地，见该条目。
+> - **P1-1 / P2-11**：per-link SRTT/RTTVAR 未随 fork 带回。经复核确认为**有意**的选择 —— fork 走的是「用 PTO 单独判丢失」路线，per-link RTT 在该路线无立身之地 —— 属设计决策，**维持现状**，恢复条件见 P1-1 条目末尾。
+> - **P2-8**：条目描述的是上游行为（未知 cmd 杀会话），**fork 实际不杀会话**（越界 cmd 只让载波退出，会话存活）。这条偏离此前没有记录。**第一阶段已落地（2026-11-06）**：未知命令只跳过、只计数（`mux.rx.unknown_cmd`），会话与载波都存活；**第二阶段评估结论是维持现状、不改成杀会话**（理由见该条目）。
+> - **P2-9**：唯一主动标注「未闭环」的条目，已在上游原条目里更正。
+>
+>
+> **fork 与上游的实际差异量级（2026-11-08 复核）**：用 `git diff upstream/main dev -- ppp/app/mux/` 看，
+> `vmux_net.cpp` 是 9218 行、`vmux_skt.cpp` 是 2225 行，很容易得出「fork 把 mux 改得面目全非」的结论。
+> **这个数字有一半是行尾造成的假象**：上游这两个文件的行尾是 CRLF/CR/LF 混排（`vmux_net.cpp` 4043 行带 CR，
+> `vmux_skt.cpp` 1042 行带 CR），fork 侧是干净 LF。忽略空白后的**真实语义差异**是：
+> `vmux_net.cpp` **1766 行**（+1577 / −382）、`vmux_skt.cpp` **193 行**。
+>
+> 逐个核对符号存在性之后的语义差异，比 diff 摘要更可信（同名符号常常只是搬家）：
+>
+> - **fork 独有、上游没有对应物**：`closed_flow` 家族（27 处：`closed_flow_record` / `remember_closed_flow` /
+>   `acknowledge_closed_flow` / `refuse_flow` / `reack_delivered`）、`SessionEpoch`、`MuxBacklogWatchdog`、
+>   `is_known_cmd`、`post_internal(..., bool* recoverable)`。
+> - **上游有、fork 真的没有**（只有 5 个，且都是「搬家」或「主动不做」）：`min_rtt_ms_` / `has_rtt_sample_`
+>   （上游的 per-link 最小 RTT，只写不读）→ 随 per-link 判定一起**主动不做**；`rtx_flow_bytes_` →
+>   搬进重写过的 `MuxRetransmitBuffer::bytes_by_cid_`；`tx_backlog_since_` → 换成 `MuxBacklogWatchdog`；
+>   `visit_count` → DRR 已重写；`oldest_buffered_tick_` → 换成 per-flow 的 `gap_opened_tick_`。
+>
+> ⇒ **fork 不是「少了上游功能」，而是同一批边界换了一套（多数更严）实现。** 真实成本不是功能缺口，
+> 而是**同步成本**：上游那两个文件行尾混排，每次同步都是全文冲突。
+>
+> **上游实线的真实缺口不是「没搬过来」，而是「搬过来没接线」**：上游把 10 个 vmux 测试全部接进了构建，
+> fork 一个都没接，文件却都在仓库里躺着（5154 行）。其中 3 个在 fork 的接口下**直接能编译**。
+> **2026-11-08 已处理**：9 个接线并跑起来（3 个零成本 + 6 个按 fork 接口移植），
+> 剩下的 `vmux_wave3_per_link_rtt_test` 测的是上面那条「主动不做」的 per-link 设计，移入
+> `tests/cpp/upstream-reference/` 并附说明；该目录的 README 同时列出了其余 14 个仍未接线的继承测试文件。
+>
+> 其余条目的复核结论见各条目末尾的「2026-11-04 fork 复核与修复」段落。
+
 ---
 
 ## 一、审计基线
@@ -126,8 +161,9 @@
 | **代码位置** | `ppp/app/mux/vmux_net.cpp:3847-3861` |
 | **最终严重级别** | **P0** |
 | **关闭日期** | 2026-08-03 |
-| **修复 commit** | Wave 1（工作树未 commit） |
-| **回归测试** | `vmux_wave0_rtx_release_test` — teardown 竞态场景 |
+| **修复 commit** | Wave 1（工作树未 commit）；fork 侧 2026-11-04 恢复上游形态 |
+| **状态** | ✅ **2026-11-04 已闭环** —— `57f0ffa5` 造成的形态回退已修复，并补上契约测试 |
+| **回归测试** | ⚠️ `vmux_wave0_rtx_release_test` **不覆盖该路径** —— 它只测 drain 状态原语；2026-11-04 新增 `mux_connect_yield_lifetime_contract_test`（源码契约断言）钉住捕获形态 |
 | **验证方式** | ASan/UBSan 全绿；代码审查确认 lambda 现在捕获 `shared_from_this()` |
 | **协议变更** | 无 |
 | **兼容性影响** | 无 |
@@ -160,6 +196,16 @@ bool posted = vmux_post_exec(context_, strand_,
 - ✅ 强引用不会与 executor/timer 形成引用环（connect 回调完成后 self 释放）
 - ✅ 与代码库中其他 post 站点的惯用法一致
 
+**2026-11-04 fork 复核与修复**：
+
+`57f0ffa5`（`vmux_net.cpp` 整文件重写）把这条修复的**形态**改了回去 —— lambda 的捕获列表变成 `[self, this, sk, ...]`，调用也改回裸 `connect(...)`，上游那段解释注释被一并删除。
+
+**实质上仍然是安全的**：`self` 已被捕获，`shared_ptr` 会在 lambda 跑完之前把对象钉住，裸 `this` 并没有真正被用到。但上面「验证清单」里「lambda 中不再捕获裸 `this`」一条不再成立，报告与代码对不上，而且形态随时可能被再次改没。
+
+已恢复上游形态：捕获列表去掉 `this`，调用改成 `self->connect(...)`，并补回上游的解释注释（`finalize()` 不 drain `strand_`，裸 `this` 会在最后一个 `shared_ptr` 释放后悬空）。
+
+**回归**：`tests/cpp/mux_connect_yield_lifetime_contract_test.cpp` —— 源码契约断言，钉住四件事：lambda 前必须拿到 `shared_from_this()`、捕获列表里没有裸 `this`、成员函数经 `self->` 调用、解释注释还在。负向验证：把捕获列表改回 `[self, this, ...]` 并改回裸 `connect(...)` 后，该用例报 `the posted lambda must not capture a bare this (P0-1)`。
+
 ---
 
 ## 四、已降级发现（原 P0-T2 / P0-T3）
@@ -188,6 +234,8 @@ bool posted = vmux_post_exec(context_, strand_,
 ## 五、P1 级发现
 
 ### P1-1：SRTT 为 per-session 而非 per-link，异构多链路下必然失真
+
+> **fork 侧结论（2026-11-06）**：见本条目末尾的复核段 —— **维持现状**，恢复条件已写明。
 
 | 项目 | 内容 |
 |------|------|
@@ -225,6 +273,64 @@ bool has_rtt_sample_ = false; // True after first RTT sample.
 
 session-level `srtt_ms_` 保留为单链路/无 sample 时的回退。
 
+**2026-11-06 fork 侧复核（**待决**）**：
+
+本仓库没有 per-link 路径状态，只有 session 级 `srtt_ms_`。这**不是**漏掉的功能，而是与 fork 的丢失判定路线配套的选择：fork 走的是「用 PTO 单独判丢失」，per-link RTT 在该路线里没有立身之地 —— RTT 只影响 PTO 的取值，而 PTO 只决定「等多久算超时」。
+
+**收益前提在实际拓扑上不成立**：这条修复的价值来自「异构链路」—— 不同链路 RTT 差得远时，session 级均值会让快链路等太久、慢链路等不够。核对实际拓扑：同一会话的 mux 连接（`--tun-mux=12`）**全部走同一地址族到同一个服务端**，是**同路径同族**，不是异构链路。session 级 SRTT 对同质链路是准确的。
+
+**恢复它的代价不低**：per-link RTT 需要 `MuxRtxEntry` 记 `orig_link_id`/`last_link_id` 才能把 RTT sample 归因到正确的链路 —— 而 ACK 是累积的、且走**另一条**链路回来，按上游的做法只能用「原始发送链路」近似归属。这是把一个「同质路径下不需要」的问题引入热路径。
+
+**上游的这份设计其实只做了一半（2026-11-06 逐行核对 `upstream/main`）**：
+
+| 环节 | 上游现状 |
+|---|---|
+| per-link 测量 | ✅ `vmux_linklayer` 有 `srtt_ms_`/`rttvar_ms_`/`min_rtt_ms_`/`has_rtt_sample_`，`packet_input_ack` 里按 `orig_link_id` 做 EWMA 更新 |
+| 链路归属 | ✅ `MuxRtxEntry` 有 `orig_link_id`（首次发送）/ `last_link_id`（最近重发） |
+| **per-link PTO 判定** | ❌ **`current_pto(linklayer)` 定义了但没有任何调用者** —— 唯一的调用点是 `rtx_.CollectExpired(now, current_pto(), ...)`，用的是 **session 级** PTO |
+| 过期判定 | ❌ `CollectExpired(now, base_pto, ...)` 只有**一个** base_pto 作用于全部条目 ⇒ 丢失判定仍然是会话级 |
+| `min_rtt_ms_` | ❌ 只写不读 |
+| 归因正确性 | ✅ **归因是精确的**：上游 `Ack()` 同样只在 `attempts == 0`（从未重传）时取样本，被重传过的帧**不出样本也不出归属** ⇒ 该帧只走首发它的那条载波，重传延迟不会混进原链路。（2026-11-08 更正：此前记为「会把重传延迟算进原链路」，与代码不符） |
+
+⇒ 上游的 P1-1「已闭环」其实只闭环了**测量**，**判定**始终是会话级。要在 fork 里真做 per-link 判定，比上游的工作量**更大**（上游那份 per-link PTO 是死代码，fork 若要真用，就得把「按条目算各自的超时」接进 `CollectExpired`）。
+
+⇒ **建议维持现状**，并把恢复条件写清楚，出现下列任一情况再议：
+
+1. 现网的 mux 载体变成**异构**（混 IPv4/IPv6、混不同出口、或指向不同服务端）；
+2. 现网统计出现**同一会话内各链路 RTT 明显分层**的证据（需要先有 per-link RTT 才测得到 ⇒ 退一步的先决条件是加一个只读的 per-link RTT **观测**计数器，不改判定）；
+3. 出现「快链路上的流被慢链路的 PTO 拖累」这类可复现的现场故障。
+
+在 (1) 发生之前，per-link RTT 属于**为不存在的场景付复杂度**。
+
+**若 (1) 真的发生，工作量估算**（基于 fork 自己的代码，不是上游那份半成品）：
+
+| 步骤 | 改动量 | 说明 |
+|---|---|---|
+| per-link 状态 + `packet_input_ack` 归因 | ~40 行，小 | 四个字段 + EWMA 更新 |
+| `MuxRtxEntry` 加 `orig/last_link_id`，`Track`/`Ack`/重传三处带 link_id | ~80 行，中 | fork 的 `MuxRetransmitBuffer` 是**重写过的**（有 per-cid 字节账），不是上游那份，改动要按 fork 的接口来 |
+| **按条目算各自的超时**：`CollectExpired` 签名要能拿到每条的 link_id 与各自的 PTO，`expired` 列表要带 (key, link_id)，`reliability_tick` 按条目解析链路 | ~80–120 行，中 | 上游没做这一步（它的 per-link PTO 是死代码），所以这一步是**净新增** |
+| 回归测试 | ~100 行 | 归因正确性要自己论证：上游按「首次发送链路」归因，但只在 `attempts == 0` 时取样本 ⇒ 归因精确（2026-11-08 更正） |
+
+合计 **~300–400 行、跨 4–5 个文件**，且带一个「归因对不对」的隐性风险。
+
+⇒ 更划算的顺序是**先只加观测**：per-link RTT 测量 + 每条链路的 RTT 分布进 `--stats-json`，**不动判定路径**（~60–80 行）。先回答「链路到底异构不异构」这个前提问题，再决定要不要付上面那 300–400 行。
+
+#### per-link RTT 观测：评估过后，已撤回
+
+这条修复的价值前提是「异构链路」。为回答前提问题，曾临时加入 per-link RTT **观测**
+（每条载波各自维护平滑 RTT、最小 RTT 与样本数，离散度以 5 个键进 `--stats-json`：`mux.rtt.link.count` /
+`min_srtt_ms` / `max_srtt_ms` / `spread_ms` / `heterogeneous`，异构判据 `max >= min × 2`；
+**判定路径一律不读**）。观测窗口内的载波 RTT 分布**未呈现异构特征**：`heterogeneous` 始终为假，
+载波之间的 RTT 离散度远小于该阈值。
+
+前提既已答完，机制**整体撤回**（不只是删 5 个发布键 —— 只删键会留下「热路径上维护一份没人看的状态」，
+比全留和半留都差）。`Ack()` 回到 fork 原生 4 参签名，判定路径仍是会话级 SRTT。
+
+⇒ 恢复条件 (1)（载体异构）**不成立**、(2)（各链路 RTT 分层）**实测不成立**、(3)（快链路被慢链路拖累）无线上证据。
+
+⚠️ **撤回的代价，必须记账**：恢复条件 (2) 依赖这个观测**才测得到** ⇒ 机制撤回后，条件 (2) **再次不可判定**。
+若将来真要评估 (2)，**第一步是先把观测重新加回来**。
+
 ### P1-2：无 per-flow RTX 限制
 
 | 项目 | 内容 |
@@ -252,16 +358,68 @@ session-level `srtt_ms_` 保留为单链路/无 sample 时的回退。
 | **影响模式** | 所有 DRR 模式 |
 | **根因** | `enqueue_flow_tx()` 无条件接受，无 per-flow 队列上限 |
 | **最终严重级别** | **P1** |
-| **关闭日期** | 2026-08-03 |
-| **修复 commit** | Wave 2（工作树未 commit） |
-| **回归测试** | `vmux_wave2_flow_isolation_test` — 慢消费者不影响其他 flow |
+| **状态** | ✅ **已闭环** —— 每流 TX 队列有独立的字节与帧数上限，越过时只关闭该流，会话与其余流照常 |
+| **回归测试** | `vmux_receive_semantics_test` 的用例跑的是生产代码（`vmux_net.cpp`）；⚠️ `vmux_wave2_flow_isolation_test` **存在，但测的是模拟** —— 它用同一套常量与数据结构复刻 per-flow TX 配额与控制队列的逻辑，**不触碰 `vmux_net` 的生产路径**（文件头已写明「vmux_net 无法在独立测试套件里实例化」） |
 | **验证方式** | ASan/UBSan 全绿 |
 | **协议变更** | 无 |
 | **兼容性影响** | 无 |
 
-**修复方案**（Wave 2）：
+#### 当前实现
 
-新增 `PPP_MUX_TX_FLOW_MAX_FRAMES`（256）和 `PPP_MUX_TX_FLOW_MAX_BYTES`（1 MiB）。`enqueue_flow_tx()` 中检查 per-flow 帧数和字节数，超限时 `fail_flow()` 仅关闭该 flow。
+**每流 TX 队列有两级上限，都只作用于这一条流**：
+
+| 上限 | 取值 | 越界时的行为 |
+|---|---|---|
+| 软限（字节） | 有效配额 | **背压**：该帧的 completion 挂到帧上随发送完成才触发，读泵与排空重新耦合，应用侧自然停读；流与会话都存活 |
+| 硬限（字节） | 2 × 有效配额 | `fail_flow()`，**只关闭这一条流**；会话与其余流照常运行 |
+| 硬限（帧数） | 至少是字节硬限能容纳的帧数 | 同上 |
+
+**有效配额**（`vmux_net.cpp` 的 `set_ordering_mode()`）按以下顺序确定，并夹在
+[1 MiB, 64 MiB]（`PPP_MUX_TX_FLOW_MAX_BYTES` / `..._MAX_CEILING`）内：
+
+1. 配置项 `mux.tx.flow.max_bytes`（**0 = 自动**）；
+2. 自动时取 `mux.flow.reorder.bytes` —— 该流协议允许的乱序窗口，也就是这条流被允许有多少在途；
+3. 夹到 [1 MiB, 64 MiB]。
+
+帧数配额随字节配额同步放大（`max(256, quota / 64 KiB + 1)`），否则大帧场景下字节配额永远够不着。
+
+**两处容易出错的地方，现在由代码本身保证**：
+
+- **软限必须在所有入队路径上判定。** 判定放在加速快路径与「载波全忙」兜底路径的分支之前，两条路径共用。
+  只在快路径上判定的话，所有载波都忙的那一刻——恰恰是路径拥塞时——配额从未被咨询，
+  队列直接涨到硬上限后杀流。
+- **帧数硬限不得早于字节硬限生效。** 帧数配额是按「最大帧长」推出来的，只对大帧流才是紧约束；
+  小帧流需要多得多的帧才能到达字节配额，若帧数上限先到，它会在字节软限还远没到时被误杀。
+  因此帧数硬限至少是字节硬限所能容纳的帧数（按 `PPP_MUX_TX_FLOW_MIN_FRAME_BYTES` 计）。
+
+**与上游 Wave 2 的差异**：上游在 `fail_flow()` 里还会清理该 flow 的 TX 队列残留帧，避免失败流继续占 DRR 发送预算。
+本仓库**没有**照搬这一步：清理残留帧会让已经发出的数据在序号空间里留下洞，而洞只能等 gap timeout 重建整个会话 ——
+代价远大于多发几帧。当前实现的边界是「配额封顶 + 关掉该流」，被拒流最多再占用一份配额的队列额度，随后自然排空。
+
+**错误码与计数器**：`VmuxNetTxFlowQueueFull`；`mux.tx.flow.overflow`（越过硬限）、
+`mux.tx.flow.throttled`（被软限挡下，**背压生效的信号**）。`fail_flow()` 本身会顺带记一次
+`mux.rx.flow.reset`（它是 RX 侧计数器），两个计数器一起看才能分清「TX 配额杀流」与「RX 间隙重置」。
+
+**排查方法**：`mux.tx.flow.throttled` 为 0 而 `mux.tx.flow.overflow` 在涨 ⇒ **背压一次都没触发**，
+流是被硬限杀的，而不是被软限挡住的 ⇒ 顺着「计数器形状」查比顺着吞吐数字查快得多。
+
+**回归**：`tests/cpp/vmux_receive_semantics_test.cpp`（主工程 `ENABLE_VMUX_RECEIVE_SEMANTICS_TEST` 目标构建，
+`tests/cpp` 树不编译 `vmux_net.cpp`）：
+
+| 用例 | 钉住的行为 |
+|---|---|
+| `TestThePerFlowTransmitQuotaFollowsTheFlowWindow` | 有效配额跟随该流的窗口 |
+| `TestAConfiguredPerFlowQuotaOverridesTheWindow` | 配置项覆盖窗口 |
+| `TestAFlowOverItsQuotaIsThrottledAndNotKilled` | 超软限是背压，不是杀流 |
+| `TestAFlowOverItsQuotaIsThrottledWithNoFreeCarrier` | 没有空闲载波时同样背压 |
+| `TestAFlowPastTheHardCeilingIsStillFailed` | 越过硬限才关流 |
+| `TestPerFlowTxSmallFramesAreNotKilledByTheFrameBackstop` | 小帧流不被帧数上限误杀 |
+| `TestPerFlowTxQueueRefusesAnOversizedFrame` | 越过硬限的帧直接拒收 |
+| `TestPerFlowTxOverflowFailsOnlyThatFlow` | 超限只关这一条流 |
+
+负向验证：去掉配额判据 ⇒ `the per-flow TX queue must stop at its hard cap`；
+去掉 `fail_flow()` ⇒ `the flow that hit its quota must be closed`；
+去掉帧数兜底下限 ⇒ `a flow of small frames must not be killed by the frame backstop`。
 
 ### P1-4：慢消费者隔离失败 — D11 杀整个会话
 
@@ -314,8 +472,9 @@ P1-2 + P1-3 + P1-4 一起修复：per-flow TX/RTX 配额确保慢消费者在达
 | **根因** | `tx_ctrl_queue_` 无条件入队，无大小检查 |
 | **最终严重级别** | **P1** |
 | **关闭日期** | 2026-08-03 |
-| **修复 commit** | Wave 5（工作树未 commit） |
-| **回归测试** | `vmux_wave5_control_plane_test` — 控制队列硬上限 + ACK 合并 |
+| **修复 commit** | Wave 5（工作树未 commit）；fork 侧 2026-11-04 重新落地 |
+| **状态** | ✅ **已闭环（2026-11-04）** —— 硬上限与 ACK 合并均已落地 |
+| **回归测试** | ⚠️ `vmux_wave5_control_plane_test` **存在，但只覆盖组件** —— 它测 `MuxAckTracker` 的累计合并与 ACK 编解码，**不覆盖 ACK 合并的时间窗**，也不触碰 `vmux_net` 的生产路径；2026-11-04 新增 `vmux_receive_semantics_test` 六个用例（丢最旧反馈帧、关键帧不丢、拒绝不拆会话、拒绝回执可丢、窗口内合并、强制应答不抑制） |
 | **验证方式** | ASan/UBSan 全绿 |
 | **协议变更** | 无 |
 | **兼容性影响** | 无 |
@@ -325,6 +484,31 @@ P1-2 + P1-3 + P1-4 一起修复：per-flow TX/RTX 配额确保慢消费者在达
 新增 `PPP_MUX_TX_CTRL_MAX_FRAMES`（256）硬上限。队列满时优先丢弃最旧的非关键帧（ACK/keepalive），SYN/FIN/mode 绝不丢弃。只有当队列全是关键帧时才拒绝新帧。
 
 同时新增 ACK 合并机制：`ack_last_sent_tick_` 记录上次 ACK 发送时间，若距上次发送不足 `ack_delay_ms_ / 2`（5ms），抑制冗余 ACK 发送。
+
+**2026-11-04 fork 复核与修复**：
+
+`57f0ffa5` 把 Wave 5 的硬上限删掉了 —— `tx_ctrl_queue_` 回到无条件入队。本仓库独有的 `refuse_flow()` 会为每一个「对端有、我没有」的流回一条 `cmd_syn_ok`，所以一条伪造流量的洪泛就能把控制队列撑到无界。
+
+已按本条目的规格重新落地（`PPP_MUX_TX_CTRL_MAX_FRAMES = 256`），并针对本仓库的两处特性做了上游没有的判断：
+
+**判断一：拒绝回执（`cmd_syn_ok` 带非 `'A'` 状态字节）算可丢弃帧。**
+
+上游的可丢弃集合只有 ACK / keepalive。但本仓库的 `refuse_flow()` 每次都发一条 `cmd_syn_ok`，这些回执若不可丢，就会把控制队列占满，让后面真正的 ACK、SYN 全部被拒 —— 一个洪泛就能让整条会话失去确认能力。而「拒绝」本身是尽力而为的通知：丢掉它，对端只是继续按原预算重传（这正是引入 `refuse_flow()` 之前的行为），不会有数据丢失，也不会留下序号洞。因此本实现把**拒绝回执**归入可丢弃集合，**接受回执**（`'A'`）仍然属于关键帧、绝不丢弃。
+
+**判断二：被拒绝的新帧不得升级成「拆掉整个会话」。**
+
+上游的 `post()` 在 `post_internal()` 失败时一律 `close_exec()`。把硬上限加上之后，这条路径会变成新的拒绝服务：控制队列满 → 新帧被拒 → `post()` 失败 → 整个会话被拆，对端只要发几百个包就能做到。本实现给 `post_internal()` 增加了一个「可恢复失败」出口：控制队列触顶属于背压，`post()` 收到这种失败时**不**拆会话，只把该帧拒掉并结清它的 completion；其余失败（未建立、已释放、越界、分配失败）仍然致命，行为不变。
+
+被丢弃的帧会立即以 `false` 结清 completion（上游那处漏了，writer 会一直挂到会话结束）。新增错误码 `VmuxNetTxControlQueueFull`，新增计数器 `mux.tx.ctrl.cap`（触顶并让位）与 `mux.tx.ctrl.cap.reject`（全是关键帧、只能拒新帧）。
+
+**ACK 合并（2026-11-04 一并落地）**：上游用 `ack_last_sent_tick_` 在 `ack_delay_ms_ / 2`（5ms）内抑制冗余 ACK，本仓库原先没有这个字段。已按上游形态补上，并按本仓库的 ACK 实现调整了两点：
+
+- 本仓库的 `maybe_send_ack()` 一次可能发**多帧**（待确认的序号空间超过一帧容量时分帧发送）。抑制判据放在整批发送之前，所以一批帧要么全发、要么全不发，不会出现「发了一半就被抑制」的中间态。
+- 抑制窗口只在**这一批全部送达**后才开启。若有帧发送失败（`unsent > 0`），窗口保持关闭：那些序号空间还欠着对端一个答复，不能排在抑制窗口后面等。
+
+对端不受影响：可靠性定时器每个 tick 都会再冲一次待发的 ACK，抑制窗口只有 5ms，远小于定时器的 10ms 周期；强制应答（回答重传）永远不抑制。新增计数器 `mux.ack.suppressed`。
+
+**回归**：`tests/cpp/vmux_receive_semantics_test.cpp`（主工程 `ENABLE_VMUX_RECEIVE_SEMANTICS_TEST` 目标构建）：`TestControlQueueCapDropsTheOldestFeedbackFrame`、`TestControlQueueCapNeverDropsACriticalFrame`、`TestControlQueueCapRejectionKeepsTheSessionAlive`、`TestControlQueueCapDropsARefusalButNotAnAcceptance`、`TestAckCoalescingMergesAFrameInsideTheWindow`、`TestAckCoalescingNeverSuppressesAForcedAck`。负向验证：把 `post()` 恢复成「失败即 `close_exec()`」后，用例报 `a refused control frame must not tear the session down`；把拒绝回执改回不可丢弃后，用例报 `a refusal must make room under the cap`；把 ACK 合并的抑制判据去掉后，用例报 `an acknowledgement inside the coalescing window must be suppressed`。
 
 ---
 
@@ -414,8 +598,39 @@ P1-2 + P1-3 + P1-4 一起修复：per-flow TX/RTX 配额确保慢消费者在达
 | **最终严重级别** | **P2**（设计选择，保留现状） |
 | **关闭日期** | 2026-08-03 |
 | **修复** | 不修改。SSEA 提供完整性认证，解密后的未知 cmd 可能是对端版本不兼容，杀会话可防止状态不一致。建议未来在协议真相源明确 unknown core cmd（关闭会话）vs unknown ignorable extension cmd（跳过） |
+| **fork 侧实际行为** | ⚠️ **与本条目描述不一致（2026-11-06 复核）** —— 本条目描述的是上游行为（未知 cmd ⇒ `ProtocolPacketActionInvalid` + `return false` ⇒ `close_exec()` 杀会话）。**本仓库并不杀会话**：
+- 越界 cmd（`cmd <= cmd_none` 或 `cmd >= cmd_max`）在载波读循环里被拦下，记 `ProtocolPacketActionInvalid` 后 `break`，**只结束该载波的读循环，会话存活**；
+- `packet_input()` 的 `else` 分支（记 `mux.rx.unknown_cmd` 后 `return true`）**不可达** —— 命令枚举是连续的，9 个在范围内的命令全部有分支覆盖。
+
+⇒ 本条目对 fork 的实际约束已不是「杀不杀会话」，而是「**未知 cmd 是否应当只让载波退出而不让会话退出**」。这是**未记录的行为偏离**，需要一次明确决策（见下方复核结论）。
 | **协议变更** | 无 |
 | **兼容性影响** | 无 |
+
+**2026-11-06 复核结论**：fork 的实际行为（未知 cmd 只让载波退出、会话存活）与上游（杀会话）**不同**，且这条偏离此前**没有任何记录**。两种行为的取舍：
+
+- **会话存活**（fork 现状）：对端升级到带新扩展命令的版本时，老端不会因为不认识新命令就把整条会话拆掉。代价是「状态不一致」的风险 —— 若那个未知命令本来会改变接收端的协议状态，忽略它会让两端的状态悄悄分叉。
+- **杀会话**（上游）：状态永远一致，代价是老端对新版对端完全不可用。
+
+由于 SSEA 提供完整性认证，未知命令**只可能**来自对端版本不兼容或对端 bug，**不是**网络噪声 ⇒ 上游「杀会话」的出发点在本仓库依然成立。但当前实现处在两者之间：越界 cmd 会让**载波**的读循环 `break`（该载波退出、可能被重建），会话却不退出 —— 既没有保住状态一致性，也没有做到「安静跳过未知扩展」。
+
+⇒ 建议的落法（**待决**）：把「未知 cmd」分成两类 —— 协议真相源里登记过的核心命令 ⇒ 杀会话；协议真相源里没有、但落在可忽略区间的扩展命令 ⇒ 跳过并计数。当前枚举是连续的、没有预留扩展区间，所以第一版可以先做「**只跳过、但必须计数**」，把未知命令从「悄悄断载波」变成「可观测事件」，再决定要不要杀会话。
+
+**第一阶段已落地（2026-11-06）**：未知命令现在**只跳过、只计数，会话与载波都存活**。
+
+- 判定：`vmux_net::is_known_cmd()` —— 由四个既有分类器（session/connection/reliability control + per-flow data）合成，**不会与分发逻辑漂移**：新增命令归入任一分类器就自动算已知，不存在「第二处枚举要同步改」的坑。
+- 三个跳过点都计数 `mux.rx.unknown_cmd`（新计数器，进 `--stats-json`）：载波读循环（原来是 `break`，**一条怪帧就断掉整条链路**）、flow_v2 接收路径、compat 接收路径。
+- **未知命令不会被当作「已交付」**：它不推进交付前沿、不进重排缓冲、不触发 ACK。对端保留副本并重传，不会因为我们「假装收下了」而丢数据。
+- 分发层的 `else` 兜底分支同样计数并跳过（当前不可达，但保留为防御）。
+
+**第二阶段评估（2026-11-06）—— 结论：维持「跳过 + 计数」，不要改成杀会话。**
+
+理由不是「兼容性更重要」这种泛泛之谈，而是三条具体的：
+
+1. **失败模式的方向不对**。跳过 ⇒ 失败面是「某个功能不通」；杀会话 ⇒ 失败面是「整个会话不通」。
+2. **杀会话会造成重连风暴**。本仓库的客户端会自动重连：对端每发一次未知命令就被杀一次 ⇒ 重连 ⇒ 再被杀 ⇒ 握手流量反复。一个本来只影响单个功能的版本不符，会被放大成**活锁**。跳过没有这个问题。
+3. **状态不一致的风险在本仓库的具体协议里不成立到「数据损坏」的程度**。承载状态与数据的命令（SYN / SYN-OK / PUSH / FIN）都是**已知**命令，会被正常处理；未知命令只可能是**将来新增**的命令，而新增命令时必然会同时定下「老端遇到它怎么办」。那时再按需改成杀会话，是一次有协议的改动，而不是今天先埋一个不确定的策略。
+
+⇒ 因此把 `mux.rx.unknown_cmd` 当作**绊线**：它在现网长期为 0，就说明没有版本不符或对端 bug；一旦非零，就带着数据去查（是哪一端、什么版本、什么频率）。若将来确需终止会话，判据应是「同一对端连续 N 次未知命令」而不是「一次」，以避开上面的重连风暴。
 
 ### P2-9：socket idle-timeout 泄漏 RTX 条目
 
@@ -423,10 +638,19 @@ P1-2 + P1-3 + P1-4 一起修复：per-flow TX/RTX 配额确保慢消费者在达
 |------|------|
 | **最终严重级别** | **P2** |
 | **关闭日期** | 2026-08-03 |
-| **修复** | Wave 1: `release_connection()` 中调用 `release_flow_reliability_state(connection_id)` 释放 RTX/ACK/FEC 状态。同时新增 TX 队列清理 |
-| **回归测试** | `vmux_wave0_rtx_release_test` — RTX 条目在 flow 关闭后释放 |
+| **状态** | ⚠️ **未闭环** —— 原修复在 `57f0ffa5`（`vmux_net.cpp` 整文件重写）中丢失，未恢复 |
+| **原修复** | Wave 1: `release_connection()` 中调用 `release_flow_reliability_state(connection_id)` 释放 RTX/ACK/FEC 状态。同时新增 TX 队列清理 |
+| **回归测试** | ⚠️ `vmux_wave0_rtx_release_test` **不覆盖该路径** —— 它只测 `MuxRetransmitBuffer::EraseCid` 原语，从不触碰 `vmux_net` 的关闭路径 |
 | **协议变更** | 无 |
 | **兼容性影响** | 无 |
+
+**2026-11-03 复核**：`release_connection()` 至今**不**主动释放 RTX/FEC 状态，本地 socket 关闭后该 cid 的重传条目会留到对端 ACK、拒绝或预算耗尽。**不打算按原样恢复**：
+
+- 当前实现**故意**保留该 cid 已发送但未确认的帧（见 `release_connection()` 内注释）——丢帧会在对端的序号空间留下洞，洞只能等 gap timeout 重建整个会话，比多几次重传更糟。
+- v2.2.17 的显式拒绝（对端回 `'N'`）已把「对端没有这条流」这一支的保留时间从**无界**压到**一次 RTT**。
+- 现网证据：v2.2.17 上线后 `rtx.exhausted` 与 `flow.reset` 均为 0。
+
+若将来要恢复主动释放，必须先解决与「不丢已发送帧」的冲突（例如只在对端已确认无该流上下文时才提前释放）。
 
 ### P2-10：缓存 tick 10ms 量化误差
 
