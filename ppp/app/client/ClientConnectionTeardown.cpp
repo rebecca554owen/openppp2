@@ -2,7 +2,6 @@
 #include <ppp/app/client/AssignedAddressManager.h>
 #include <ppp/app/client/ClientNetworkInterfaceResolver.h>
 #include <ppp/app/client/VEthernetNetworkSwitcher.h>
-#include <ppp/app/client/xtcp/XtcpRuntime.h>
 #include <ppp/app/client/route/RouteCoordinator.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/app/client/dns/DnsInterceptor.h>
@@ -55,9 +54,6 @@ namespace ppp {
                     owner_->TickEvent = NULLPTR;
                     if (const std::shared_ptr<ppp::tap::ITap> tap = owner_->GetTap(); tap) {
                         tap->SetPacketInput(NULLPTR);
-                    }
-                    if (auto runtime = std::move(owner_->xtcp_runtime_); runtime) {
-                        runtime->Stop();
                     }
                     if (auto http_proxy = std::move(owner_->http_proxy_); http_proxy) {
                         http_proxy->Dispose();

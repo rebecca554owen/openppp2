@@ -65,15 +65,12 @@ namespace ppp
 
         /**
          * @brief Detaches the underlying thread when possible.
-         * @note  Serialized against `Join()` through `_lifecycle`; a concurrent
-         *        `join()`/`detach()` on the same `std::thread` object is undefined
-         *        behaviour. When a join is in progress this call is a no-op.
          */
         bool Thread::Detach() noexcept
         {
             SynchronizedObjectScope scope(_lifecycle);
             auto& t = _thread;
-            if (_joining || !t.joinable())
+            if (!t.joinable())
             {
                 return false;
             }
@@ -119,40 +116,26 @@ namespace ppp
 
         /**
          * @brief Joins the underlying thread when joinable.
-         * @note  The blocking `join()` runs without holding `_lifecycle`: the worker
-         *        thread's own `Detach()` needs that mutex to finish, so holding it
-         *        across the join would deadlock. `_joining` is set under the lock to
-         *        make `Detach()` back off, keeping `join()`/`detach()` serialized.
          */
         bool Thread::Join() noexcept
         {
+            SynchronizedObjectScope scope(_lifecycle);
+            auto& t = _thread;
+            if (!t.joinable())
             {
-                SynchronizedObjectScope scope(_lifecycle);
-                if (!_thread.joinable())
-                {
-                    return false;
-                }
-
-                _joining = true;
+                return false;
             }
 
-            bool ok = false;
             try
             {
-                _thread.join();
-                ok = true;
+                t.join();
+                return true;
             }
             catch (const std::exception&)
             {
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeThreadJoinFailed);
+                return false;
             }
-
-            {
-                SynchronizedObjectScope scope(_lifecycle);
-                _joining = false;
-            }
-
-            return ok;
         }
 
         /**

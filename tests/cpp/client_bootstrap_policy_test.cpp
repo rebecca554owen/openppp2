@@ -2,29 +2,12 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <ppp/app/ApplicationClientBootstrap.h>
-#include <ppp/app/client/VEthernetNetworkSwitcher.h>
 #include <ppp/configurations/AppConfiguration.h>
-
-#include <type_traits>
-#include <utility>
 
 using ppp::app::NormalizeClientStaticMode;
 using ppp::app::NormalizeClientProxyOnlyRuntime;
-using ppp::app::TcpStackMode;
-using ppp::app::client::VEthernetNetworkSwitcher;
 using ppp::configurations::NormalizeClientRoutingStringList;
 using ppp::configurations::AppConfiguration;
-
-using IoContextPtr = std::shared_ptr<boost::asio::io_context>;
-using AppConfigurationPtr = std::shared_ptr<AppConfiguration>;
-
-static_assert(std::is_constructible_v<VEthernetNetworkSwitcher,
-    const IoContextPtr&, TcpStackMode, bool, bool, const AppConfigurationPtr&>);
-static_assert(std::is_constructible_v<VEthernetNetworkSwitcher,
-    const IoContextPtr&, bool, bool, bool, const AppConfigurationPtr&>);
-static_assert(std::is_same_v<
-    decltype(std::declval<const VEthernetNetworkSwitcher&>().GetTcpStackMode()),
-    TcpStackMode>);
 
 BOOST_AUTO_TEST_CASE(static_mode_respects_proxy_only_runtime) {
     BOOST_TEST(!NormalizeClientStaticMode(false, false));

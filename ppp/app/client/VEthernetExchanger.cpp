@@ -31,7 +31,6 @@
 #include <ppp/transmissions/ITransmission.h>
 #include <ppp/diagnostics/Error.h>
 #include <ppp/diagnostics/Telemetry.h>
-#include <ppp/diagnostics/DatapathPerfJson.h>
 #include <ppp/p2p/P2PCapabilityGate.h>
 #include <ppp/p2p/P2PControlDatagram.h>
 #include <ppp/p2p/P2PRelayOfferCoordinator.h>
@@ -2401,7 +2400,7 @@ namespace ppp {
                     }
                     {
                         vmux::vmux_net::mux_mode mux_mode = vmux::vmux_net::parse_mode(configuration->GetEffectiveMuxMode());
-                        mux = make_shared_object<vmux::vmux_net>(vmux_context, vmux_strand, max_connections, false, (switcher_->mux_acceleration_ & PPP_MUX_ACCELERATION_LOCAL) != 0, mux_mode);
+                        mux = make_shared_object<vmux::vmux_net>(vmux_context, vmux_strand, max_connections, false, (switcher_->mux_acceleration_ & PPP_MUX_ACCELERATION_LOCAL) != 0, mux_mode, switcher_->GetStatistics());
                         if (NULLPTR == mux) {
                             break;
                         }
@@ -2587,9 +2586,10 @@ namespace ppp {
                             }
 
                             std::shared_ptr<boost::asio::ip::tcp::socket> default_socket;
+                            std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics = switcher_->GetStatistics();
                             std::shared_ptr<VirtualEthernetTcpipConnection> connection =
                                 make_shared_object<VirtualEthernetTcpipConnection>(
-                                    mux->AppConfiguration, context, strand, GetId(), default_socket);
+                                    mux->AppConfiguration, context, strand, GetId(), default_socket, statistics);
                             if (NULLPTR == connection) {
                                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
                                 break;
@@ -2670,9 +2670,10 @@ namespace ppp {
                             }
 
                             std::shared_ptr<boost::asio::ip::tcp::socket> default_socket;
+                            std::shared_ptr<ppp::transmissions::ITransmissionStatistics> statistics = switcher_->GetStatistics();
                             std::shared_ptr<VirtualEthernetTcpipConnection> connection =
                                 make_shared_object<VirtualEthernetTcpipConnection>(
-                                    mux->AppConfiguration, context, strand, GetId(), default_socket);
+                                    mux->AppConfiguration, context, strand, GetId(), default_socket, statistics);
                             if (NULLPTR == connection) {
                                 break;
                             }
@@ -2908,11 +2909,7 @@ namespace ppp {
                     }
                 }
 
-                const bool output = switcher_->Output(packet, packet_length);
-                if (output) {
-                    ppp::diagnostics::datapath_perf::RecordNatToTun(packet_length);
-                }
-                return output;
+                return switcher_->Output(packet, packet_length);
             }
 
             /** @brief Handles mux negotiation callback and starts vmux linking. */
@@ -4084,9 +4081,8 @@ namespace ppp {
             /** @brief Dispatches FRP UDP payload callback to mapped client port. */
             bool VEthernetExchanger::OnFrpSendTo(const ITransmissionPtr& transmission, bool in, int remote_port, const boost::asio::ip::udp::endpoint& sourceEP, const std::shared_ptr<Byte>& owner, Byte* packet, int packet_length, YieldContext& y) noexcept {
 #if defined(_ANDROID)
-                auto self = shared_from_this();
                 Post(
-                    [self, this, owner, packet, packet_length, sourceEP, in, remote_port]() noexcept {
+                    [this, owner, packet, packet_length, sourceEP, in, remote_port]() noexcept {
                         VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, false, remote_port);
                         if (NULLPTR != mapping_port) {
                             mapping_port->Client_OnFrpSendTo(packet, packet_length, sourceEP);
@@ -4104,9 +4100,8 @@ namespace ppp {
             /** @brief Dispatches FRP TCP connect callback to mapped client port. */
             bool VEthernetExchanger::OnFrpConnect(const ITransmissionPtr& transmission, int connection_id, bool in, int remote_port, YieldContext& y) noexcept {
 #if defined(_ANDROID)
-                auto self = shared_from_this();
                 Post(
-                    [self, this, in, remote_port, connection_id]() noexcept {
+                    [this, in, remote_port, connection_id]() noexcept {
                         VirtualEthernetMappingPortPtr mapping_port = GetMappingPort(in, true, remote_port);
                         if (NULLPTR != mapping_port) {
                             mapping_port->Client_OnFrpConnect(connection_id);
