@@ -539,6 +539,59 @@ namespace ppp {
         }
 
         /**
+         * @brief Warns that an explicit AEAD cipher is configured for a path that
+         *        cannot authenticate anything.
+         *
+         * The legacy data path is equal-length: EVP::Encrypt stops at
+         * EVP_CipherUpdate and never calls EVP_CipherFinal, so the AEAD tag is
+         * never produced and the frame carries the ciphertext only. The cipher
+         * therefore provides encryption without authentication, while keeping
+         * the failure mode of an AEAD cipher. EVP::resetCipher rewinds the
+         * context to the same derived IV before every packet, so a GCM nonce
+         * repeats per packet under the same key, which leaks the GHASH
+         * subkey and permits forgery.
+         *
+         * The IV is derived deterministically from the password (EVP_BytesToKey
+         * with EVP_md5, then an MD5 mix), so it is stable for the lifetime of a
+         * session and identical for every session that uses the same key.
+         *
+         * The warning does not block the startup: a deployment that wants an
+         * AEAD cipher has to change the configuration, and the message names
+         * the exact change. Transport-auth authenticates the session handshake
+         * but does not change this data path, so it is not offered as a fix
+         * here.
+         *
+         * @param field Configuration field name ("protocol" / "transport").
+         * @param method Cipher algorithm name.
+         */
+        static void WarnExplicitAeadOnLegacyPath(const ppp::string& field, const ppp::string& method) noexcept {
+            if (method.empty()) {
+                return;
+            }
+
+            if (!ppp::cryptography::EVP::IsAeadCipher(method)) {
+                return;   // not an AEAD cipher
+            }
+
+            if (ppp::ToLower(method).compare(0, 5, "simd-") == 0) {
+                return;   // a simd- name selects the unauthenticated variant on purpose
+            }
+
+            ppp::telemetry::Warn("config",
+                "key.%s is an explicit AEAD cipher (%s), but the AEAD contract does not hold on "
+                "the legacy data path: the frame is equal-length and EVP::Encrypt stops at "
+                "EVP_CipherUpdate, so the tag is never produced and the frame carries no "
+                "authentication at all, and EVP::resetCipher rewinds to the same derived IV "
+                "before every packet, so the nonce repeats per packet under the same key. "
+                "An AEAD name therefore buys nothing here while it does carry the AEAD "
+                "requirement that a nonce is never reused. Either name a cipher that does "
+                "not make that promise (e.g. aes-256-cfb or simd-aes-*-cfb) and leave the "
+                "authentication to transport-auth, which authenticates the session "
+                "handshake and does not change this data path.",
+                field.data(), method.data(), field.data());
+        }
+
+        /**
          * @brief Trims selected string fields from configuration groups.
          * @param config Configuration object.
          * @param level Selection level for field groups.
@@ -1143,6 +1196,12 @@ namespace ppp {
                  */
                 WarnLegacyCipherAlgorithm(config.key.protocol);
                 WarnLegacyCipherAlgorithm(config.key.transport);
+
+                /* An explicit AEAD cipher on the legacy data path cannot
+                 * authenticate anything and repeats its nonce per packet, so
+                 * the operator has to be told which field is affected. */
+                WarnExplicitAeadOnLegacyPath("protocol", config.key.protocol);
+                WarnExplicitAeadOnLegacyPath("transport", config.key.transport);
 
                 /* EVP::initKey currently derives keys via EVP_BytesToKey(..., EVP_md5(), ...).
                  * This informational warning documents the legacy KDF debt without changing behavior. */

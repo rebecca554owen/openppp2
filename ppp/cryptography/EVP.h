@@ -77,6 +77,27 @@ namespace ppp {
              * @return True when supported.
              */
             static bool                                         Support(const ppp::string& method) noexcept;
+            /**
+             * @brief True when the cipher name selects an authenticated cipher.
+             * @details An AEAD cipher (GCM / CCM / ChaCha20-Poly1305) only
+             *          protects a frame when its tag travels with it. The
+             *          legacy data path is equal-length and never emits the
+             *          tag, so an explicit AEAD name there is a configuration
+             *          that has to be reported.
+             * @param method Cipher algorithm name.
+             * @return True when the name names an AEAD cipher.
+             */
+            static bool                                         IsAeadCipher(const ppp::string& method) noexcept {
+                if (method.empty()) {
+                    return false;
+                }
+
+                const ppp::string method_lower = ppp::ToLower(method);
+                return method_lower.find("gcm") != ppp::string::npos ||
+                    method_lower.find("ccm") != ppp::string::npos ||
+                    method_lower.find("chacha") != ppp::string::npos ||
+                    method_lower.find("poly1305") != ppp::string::npos;
+            }
             /** @brief Global switch: transparently run aes-*-cfb via AES-NI when the CPU supports it (default on). */
             static void                                         SetSimdAuto(bool enabled) noexcept;
             /** @brief Whether this instance is using the AES-NI hardware path. */

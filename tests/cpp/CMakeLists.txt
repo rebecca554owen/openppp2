@@ -705,6 +705,16 @@ target_compile_definitions(mux_flow_refusal_contract_test PRIVATE
 # An explicit AEAD cipher on the legacy equal-length data path cannot
 # authenticate anything and repeats its nonce per packet, so the name has to be
 # recognisable for the configuration to be reported.
+openppp2_add_cpp_test(explicit_aead_cipher_test SOURCES
+    explicit_aead_cipher_test.cpp)
+target_link_libraries(explicit_aead_cipher_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(explicit_aead_advisory_contract_test SOURCES
+    explicit_aead_advisory_contract_test.cpp)
+target_compile_definitions(explicit_aead_advisory_contract_test PRIVATE
+    OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
+# The route-list fetch has to frame its body exactly: a truncated body would be
+# applied as if it were a complete route list, and that changes the routing
+# policy of the client.
 openppp2_add_cpp_test(mux_fin_dsn_contract_test SOURCES
     mux_fin_dsn_contract_test.cpp)
 target_compile_definitions(mux_fin_dsn_contract_test PRIVATE
@@ -1102,6 +1112,13 @@ openppp2_add_cpp_test(icmp_path_mtu_test SOURCES
     "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
 # A warning that changes the effective runtime must survive a disabled telemetry
 # backend; the contract is the level numbering plus a safe default-path call.
+openppp2_add_cpp_test(telemetry_warn_visibility_test SOURCES
+    telemetry_warn_visibility_test.cpp
+    support/telemetry_warn_visibility_stubs.cpp
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
+    "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp")
+target_link_libraries(telemetry_warn_visibility_test PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 # The client's downstream UDP fast path must emit the same bytes as the frame-object path.
 openppp2_add_cpp_test(udp_frame_ipv4_packet_test SOURCES
     udp_frame_ipv4_packet_test.cpp
