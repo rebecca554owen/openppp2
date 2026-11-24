@@ -13,6 +13,7 @@
 #include "TapGsoMergeabilityAnalyzer.h"
 #include "TapVnetCodec.h"
 #include <ppp/diagnostics/Error.h>
+#include <ppp/net/AsioCompat.h>
 #include <ppp/diagnostics/Telemetry.h>
 
 #if defined(_ANDROID)
@@ -2299,7 +2300,7 @@ namespace ppp {
             gso_timer_armed_ = false;
             ++gso_timer_generation_;
             boost::system::error_code ec;
-            gso_hold_timer_.cancel(ec);
+            ppp::asio_compat::CancelTimer(gso_hold_timer_, ec);
         }
 
         void TapLinux::OnInput(PacketInputEventArgs& e) noexcept {
@@ -2798,7 +2799,7 @@ namespace ppp {
             lane.timer_armed = false;
             ++lane.timer_generation;
             boost::system::error_code ec;
-            lane.hold_timer.cancel(ec);
+            ppp::asio_compat::CancelTimer(lane.hold_timer, ec);
         }
 
         void TapLinux::DisableGsoOutputLanes(TunGsoCoalescer::FlushReason reason, bool close) noexcept {

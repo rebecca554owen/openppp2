@@ -1,5 +1,6 @@
 #include <ppp/stdafx.h>
 #include <ppp/app/client/xtcp/XtcpRuntime.h>
+#include <ppp/net/AsioCompat.h>
 
 #include <thread>
 #include <future>
@@ -660,19 +661,7 @@ boost::asio::ip::address_v4 ToAddress(std::uint32_t network_address) noexcept {
     return boost::asio::ip::address_v4(IPv4AddressBytes(network_address));
 }
 
-template <class Timer>
-void CancelTimer(Timer& timer, boost::system::error_code& ec) noexcept {
-#if defined(_WIN32)
-    try {
-        timer.cancel();
-    }
-    catch (...) {
-    }
-    ec.clear();
-#else
-    timer.cancel(ec);
-#endif
-}
+using ppp::asio_compat::CancelTimer;
 } // namespace
 
 class XtcpRuntime::Impl final :

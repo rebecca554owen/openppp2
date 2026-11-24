@@ -5,6 +5,7 @@ on:
     paths: ['docs/**', 'tools/docs_site.py', 'tools/docs_theme/**', 'tools/check_docs.py', 'tests/tooling/test_docs_site.py', 'zensical.toml', 'requirements-docs.txt', '.github/workflows/docs.yml']
   push:
     branches: [main]
+    tags: ['v*']
     paths: ['docs/**', 'tools/docs_site.py', 'tools/docs_theme/**', 'tools/check_docs.py', 'tests/tooling/test_docs_site.py', 'zensical.toml', 'requirements-docs.txt', '.github/workflows/docs.yml']
   workflow_dispatch:
 
@@ -19,7 +20,7 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'

@@ -125,12 +125,65 @@ class CIWorkflowContractTests(unittest.TestCase):
             "test.yml",
             '[[ \"$run_sha\" != \"$RELEASE_SHA\" || \"$conclusion\" != \"success\" ]]',
             "if [[ ! -s \"release-assets/${name}\" ]]; then",
-            "Expected exactly ${#required_package_assets[@]} package assets",
+            "Expected exactly ${expected_assets} package assets",
             "lifecycle-acceptance-summary",
             "tools/verify_network_lifecycle_summary.py",
-            "Lifecycle acceptance summary is missing or empty",
+            "The lifecycle acceptance summary is not published yet",
         ):
             self.assertIn(required, workflow)
+
+        # The unit test workflow is a gate even though it produces none of
+        # the release assets: a release that ships a failing test ships a
+        # defect the suite already knows about.  Its lifecycle summary is
+        # still optional evidence, verified when it is there.
+        gate = workflow.split("required_workflows=(", 1)[1].split(")", 1)[0]
+        self.assertIn("test.yml", gate)
+
+        # The deployment artifacts and the quality gates stay a hard
+        # requirement: both ends of the deployment are Linux.
+        for required in (
+            "build-linux-amd64.yml",
+            "build-linux-cross.yml",
+            "build-go-guardian.yml",
+            "docs.yml",
+            "test-linux-coverage.yml",
+        ):
+            self.assertIn(required, gate)
+
+        # The platforms that are not deployed on publish what is ready.  Their
+        # runner pools are often saturated, and a job that waits for one long
+        # enough is cancelled before it runs a single step, so they must not
+        # hold the publication.
+        optional = workflow.split("optional_workflows=(", 1)[1].split(")", 1)[0]
+        for platform in (
+            "build-android.yml",
+            "build-macos.yml",
+            "build-windows-x64.yml",
+            "build-windows-arm64.yml",
+        ):
+            self.assertIn(platform, optional)
+        self.assertIn(
+            "::warning::No successful $workflow run at ${RELEASE_SHA}; skipping its assets",
+            workflow,
+        )
+        self.assertIn("optional_platform_wait_minutes", workflow)
+
+        # The summary is optional evidence, not a gate: one that does not
+        # verify warns and lets the publication continue.
+        self.assertIn("::warning::The lifecycle acceptance summary", workflow)
+
+    def test_ios_job_does_not_hold_the_release(self) -> None:
+        # iOS is not a deployment target.  The job still runs when a macOS
+        # runner is free, but a starved runner pool must not keep the unit
+        # test workflow -- and with it the release -- from being green.
+        workflow = self.read("test.yml")
+        lines = workflow.split("\n")
+        start = next(
+            index for index, line in enumerate(lines)
+            if line.startswith("  ios-simulator:")
+        )
+        job = "\n".join(lines[start:start + 12])
+        self.assertIn("continue-on-error: true", job)
 
     def test_windows_x64_build_reports_missing_artifacts(self) -> None:
         workflow = self.read("build-windows-x64.yml")

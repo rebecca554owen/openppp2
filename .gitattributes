@@ -1,2 +1,34 @@
 * text=auto eol=lf
 ppp/app/server/VirtualEthernetDatagramPort.cpp whitespace=cr-at-eol
+# Upstream commits these two telemetry files with CRLF; keep CR at EOL out of
+# the trailing-whitespace report so a real defect is not lost in the noise.
+ppp/diagnostics/Telemetry.cpp whitespace=cr-at-eol
+ppp/diagnostics/Telemetry.h whitespace=cr-at-eol
+# Upstream commits these with CRLF as well (the HTTP proxy rewrite hook and the
+# rinetd relay touch them); same reason as the telemetry files above.
+ppp/app/client/proxys/VEthernetHttpProxyConnection.cpp whitespace=cr-at-eol
+ppp/app/mux/vmux_skt.cpp whitespace=cr-at-eol
+ppp/app/mux/vmux_skt.h whitespace=cr-at-eol
+ppp/app/protocol/VirtualEthernetTcpipConnection.h whitespace=cr-at-eol
+ppp/net/rinetd/RinetdConnection.cpp whitespace=cr-at-eol
+ppp/net/rinetd/RinetdConnection.h whitespace=cr-at-eol
+# Same for the files the memory-safety port touches.
+darwin/ppp/tap/TapDarwin.cpp whitespace=cr-at-eol
+darwin/ppp/tap/TapDarwin.h whitespace=cr-at-eol
+ppp/coroutines/YieldContext.cpp whitespace=cr-at-eol
+ppp/coroutines/YieldContext.h whitespace=cr-at-eol
+ppp/io/MemoryStream.h whitespace=cr-at-eol
+ppp/transmissions/ITcpipTransmission.cpp whitespace=cr-at-eol
+# The mux scheduler and the tcpip transmission are CRLF upstream as well.
+ppp/app/mux/vmux_net.cpp whitespace=cr-at-eol
+# These two workflows ship with mixed line endings upstream; keep them as
+# they are so the diff stays a single line instead of the whole file.
+.github/workflows/build-macos.yml -text
+.github/workflows/test-linux-coverage.yml -text
+# The root build file and the route-list fetcher are CRLF upstream as well.
+CMakeLists.txt whitespace=cr-at-eol
+common/chnroutes2/chnroutes2.cpp whitespace=cr-at-eol
+# appsettings.json keeps its historical CRLF layout to keep diffs minimal
+appsettings.json -text
+# Upstream commits this file with CRLF; keep it so fork diffs stay minimal.
+ppp/app/client/proxys/VEthernetHttpProxyConnection.cpp -text

@@ -219,7 +219,7 @@ namespace ppp {
             /**
              * @brief Executor-posted invoker that finalizes timer lifetime.
              */
-            struct DisposeInvoker final {
+            struct DisposeInvoker {
                 std::shared_ptr<Timer> self;
                 void operator()() const noexcept {
                     self->Finalize();

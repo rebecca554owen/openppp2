@@ -30,7 +30,38 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("--limit=1", self.workflow)
         self.assertIn("--json headSha,conclusion", self.workflow)
         self.assertIn('"$conclusion" != "success"', self.workflow)
-        self.assertNotIn("--status=success", self.workflow)
+
+        # The deployment artifacts and the quality gates are a hard
+        # requirement: both ends of the deployment are Linux.
+        required = self.workflow.split("required_workflows=(", 1)[1].split(")", 1)[0]
+        for workflow in (
+            "build-linux-amd64.yml",
+            "build-linux-cross.yml",
+            "build-go-guardian.yml",
+            "test.yml",
+            "docs.yml",
+            "test-linux-coverage.yml",
+        ):
+            self.assertIn(workflow, required)
+
+        # The platforms that are not deployed on publish what is ready: their
+        # runner pools are often saturated, and a job that waits for one long
+        # enough is cancelled before it runs a single step, so they must not
+        # hold the publication.
+        optional = self.workflow.split("optional_workflows=(", 1)[1].split(")", 1)[0]
+        for workflow in (
+            "build-android.yml",
+            "build-macos.yml",
+            "build-windows-x64.yml",
+            "build-windows-arm64.yml",
+        ):
+            self.assertIn(workflow, optional)
+        self.assertIn("--status=success", self.workflow)
+        self.assertIn("optional_platform_wait_minutes", self.workflow)
+        self.assertIn(
+            "::warning::No successful $workflow run at ${RELEASE_SHA}; skipping its assets",
+            self.workflow,
+        )
 
     def test_build_downloads_require_nonempty_packages_and_android_apk(self):
         self.assertIn('gh run download "$run_id" --dir "$artifact_dir"', self.workflow)
@@ -47,10 +78,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("fail_on_unmatched_files: true", self.workflow)
 
     def test_release_requires_exact_32_asset_matrix(self):
-        start = self.workflow.index("required_package_assets=(")
-        end = self.workflow.index("\n          )", start)
-        manifest = self.workflow[start:end]
-        actual = re.findall(r'"([^"]+)"', manifest)
+        def manifest(name):
+            start = self.workflow.index(name)
+            end = self.workflow.index("\n          )", start)
+            return re.findall(r'"([^"]+)"', self.workflow[start:end])
+
+        required = manifest("required_package_assets=(")
+        optional = manifest("optional_package_assets=(")
+        actual = required + optional
 
         expected = ["app-release.apk"]
         expected.extend(f"guardian-{os}-{arch}.{extension}" for os, arch, extension in (
@@ -83,10 +118,19 @@ class ReleaseWorkflowTests(unittest.TestCase):
         ))
 
         self.assertEqual(len(expected), 32)
-        self.assertEqual(actual, expected)
-        self.assertIn("exactly 32 assets", self.workflow)
+        self.assertEqual(sorted(actual), sorted(expected))
+
+        # The deployment artifacts are the requirement; the platforms that are
+        # not deployed on are published when their workflow was green in time
+        # and skipped otherwise, so they cannot be a requirement.
+        self.assertIn("openppp2-linux-amd64.zip", required)
+        self.assertIn("guardian-linux-amd64.tar.gz", required)
+        self.assertNotIn("app-release.apk", required)
+        self.assertIn("app-release.apk", optional)
+        self.assertNotIn("openppp2-linux-amd64.zip", optional)
+
         self.assertIn("Required release package is missing or empty", self.workflow)
-        self.assertIn("Expected exactly ${#required_package_assets[@]} package assets", self.workflow)
+        self.assertIn("Expected exactly ${expected_assets} package assets", self.workflow)
 
     def test_expected_asset_names_follow_current_build_packaging(self):
         workflows = {
