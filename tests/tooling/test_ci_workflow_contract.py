@@ -128,9 +128,18 @@ class CIWorkflowContractTests(unittest.TestCase):
             "Expected exactly ${#required_package_assets[@]} package assets",
             "lifecycle-acceptance-summary",
             "tools/verify_network_lifecycle_summary.py",
-            "Lifecycle acceptance summary is missing or empty",
+            "The lifecycle acceptance summary is not published yet",
         ):
             self.assertIn(required, workflow)
+
+        # The unit test workflow produces none of the release assets, so it
+        # is not a gate; its lifecycle summary is verified when it is there.
+        gate = workflow.split("required_workflows=(", 1)[1].split(")", 1)[0]
+        self.assertNotIn("test.yml", gate)
+
+        # The summary is optional evidence, not a gate: one that does not
+        # verify warns and lets the publication continue.
+        self.assertIn("::warning::The lifecycle acceptance summary", workflow)
 
     def test_windows_x64_build_reports_missing_artifacts(self) -> None:
         workflow = self.read("build-windows-x64.yml")

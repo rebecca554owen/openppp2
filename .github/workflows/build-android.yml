@@ -8,6 +8,7 @@ name: Build · Android
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main, codex/runtime-ui-lifecycle-integration]
   workflow_dispatch:
@@ -17,6 +18,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  BOOST_VERSION: "1.74"
+  OPENSSL_VERSION: "1.1.1i"
+  NDK_VERSION: "r20b"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -30,32 +34,59 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache NDK and dependencies
+      # One cache entry per dependency, so bumping one version leaves the others
+      # alone instead of refetching all of them. Keys are exact-match only on
+      # purpose: a restore-keys prefix hit restores the tree but still reports
+      # cache-hit=false, so the fetch step reruns on top of what was just
+      # restored.
+      - name: Cache NDK
         id: cache-ndk
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
-          path: ${{ runner.temp }}/ndk
-          key: android-ndk-r20b-boost174-openssl111i
+          path: ${{ runner.temp }}/ndk/abi
+          key: android-ndk${{ env.NDK_VERSION }}
+
+      - name: Cache Boost
+        id: cache-boost
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/ndk/boost
+          key: android-boost${{ env.BOOST_VERSION }}
+
+      - name: Cache OpenSSL
+        id: cache-openssl
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/ndk/openssl
+          key: android-openssl${{ env.OPENSSL_VERSION }}
 
       - name: Download NDK
         if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
           mkdir -p "${{ runner.temp }}/ndk" && cd "${{ runner.temp }}/ndk"
-          wget -q https://dl.google.com/android/repository/android-ndk-r20b-linux-x86_64.zip
-          unzip -q android-ndk-r20b-linux-x86_64.zip && rm android-ndk-r20b-linux-x86_64.zip
-          mv android-ndk-r20b abi
+          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux-x86_64.zip
+          unzip -q android-ndk-${NDK_VERSION}-linux-x86_64.zip && rm android-ndk-${NDK_VERSION}-linux-x86_64.zip
+          mv android-ndk-${NDK_VERSION} abi
 
       - name: Clone Boost for Android
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        if: steps.cache-boost.outputs.cache-hit != 'true'
         run: |
           mkdir -p "${{ runner.temp }}/ndk"
-          git clone --depth 1 https://github.com/liulilittle/boost-1.74-for-android-r20b-fpic.git "${{ runner.temp }}/ndk/boost"
+          git clone --depth 1 https://github.com/liulilittle/boost-${BOOST_VERSION}-for-android-${NDK_VERSION}-fpic.git "${{ runner.temp }}/ndk/boost"
 
       - name: Clone OpenSSL for Android
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        if: steps.cache-openssl.outputs.cache-hit != 'true'
         run: |
           mkdir -p "${{ runner.temp }}/ndk"
-          git clone --depth 1 https://github.com/liulilittle/openssl-1.1.1i-for-android-r20b.git "${{ runner.temp }}/ndk/openssl"
+          git clone --depth 1 https://github.com/liulilittle/openssl-${OPENSSL_VERSION}-for-android-${NDK_VERSION}.git "${{ runner.temp }}/ndk/openssl"
+
+      - name: Compute version label
+        id: ver
+        run: |
+          git fetch --tags --force 2>/dev/null || true
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "label=${TAG}-${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Build openppp2
         run: |
@@ -71,6 +102,7 @@ jobs:
             -DANDROID_ABI=${{ matrix.abi }} \
             -DANDROID_NATIVE_API_LEVEL=21 \
             -DANDROID_STL=c++_static \
+            -DPPP_APPLICATION_VERSION="${{ steps.ver.outputs.label }}" \
             -DTHIRD_PARTY_LIBRARY_DIR="$TP"
           make -j$(nproc)
 

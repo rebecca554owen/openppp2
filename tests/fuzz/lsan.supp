@@ -1,0 +1,4 @@
+# The libFuzzer RSS-limit watchdog is a thread that is never joined, so its
+# thread state is still allocated when the process exits. The leak belongs to
+# the tool, not to the target under test.
+leak:StartRssThread

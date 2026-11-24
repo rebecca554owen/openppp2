@@ -3,6 +3,12 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.5)
 # Define the solutions name.
 SET(NAME ppp)
 PROJECT(${NAME} VERSION 2.1.9.0 LANGUAGES C CXX)# CMAKE_CURRENT_SOURCE_DIR
+# Allow CI to inject a concrete version label (e.g. v2.2.0-<short sha>).
+# Overrides the hardcoded PPP_APPLICATION_VERSION default in ppp/stdafx.h.
+IF(DEFINED PPP_APPLICATION_VERSION)
+    ADD_DEFINITIONS(-DPPP_APPLICATION_VERSION="${PPP_APPLICATION_VERSION}")
+ENDIF()
+
 
 # C/CXX compiler configurations.
 IF(MSVC)
@@ -226,6 +232,13 @@ OPTION(ENABLE_P2P_RECOVERY_TESTS "Build isolated actual Exchanger recovery tests
 OPTION(ENABLE_P2P_V2_PRODUCTION "Enable authenticated P2P v2 production capability" ON)
 OPTION(ENABLE_VMUX_CHURN_TEST "Build the root-linked VMUX carrier churn test" OFF)
 OPTION(ENABLE_VMUX_RECEIVE_SEMANTICS_TEST "Build the root-linked VMUX receive-semantics test" OFF)
+OPTION(ENABLE_VMUX_FIN_DSN_TEST "Build the root-linked VMUX end-of-stream DSN test" OFF)
+# The VMUX fuzz targets (audit follow-up VMUX-FUZZ-001). They need the
+# libFuzzer runtime, so they only build with a clang that ships it: the Linux
+# CI image and the Homebrew LLVM on macOS. Apple's own clang has no libFuzzer
+# runtime and the link fails, so the option stays off by default. Build it
+# with -DENABLE_ASAN=ON as well, so the library itself is instrumented.
+OPTION(ENABLE_VMUX_FUZZ_TEST "Build the VMUX fuzz targets (needs a clang with libFuzzer)" OFF)
 OPTION(ENABLE_COVERAGE "Enable LLVM source coverage instrumentation" OFF)
 SET(ENABLE_XTCP_DEFAULT OFF)
 IF(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
@@ -728,6 +741,37 @@ IF(ENABLE_VMUX_RECEIVE_SEMANTICS_TEST)
     ADD_TEST(NAME vmux_receive_semantics_test COMMAND vmux_receive_semantics_test)
 ENDIF()
 
+IF(ENABLE_VMUX_FIN_DSN_TEST)
+    ENABLE_TESTING()
+    ADD_EXECUTABLE(vmux_fin_dsn_test
+        tests/cpp/vmux_fin_dsn_test.cpp)
+    TARGET_LINK_LIBRARIES(vmux_fin_dsn_test openppp2_lib)
+    IF(PLATFORM_SYSTEM_LINUX)
+        TARGET_LINK_OPTIONS(vmux_fin_dsn_test PRIVATE
+            "-Wl,--exclude-libs,ALL")
+    ENDIF()
+    ADD_TEST(NAME vmux_fin_dsn_test COMMAND vmux_fin_dsn_test)
+ENDIF()
+
+
+IF(ENABLE_VMUX_FUZZ_TEST)
+    ENABLE_TESTING()
+    ADD_EXECUTABLE(fuzz_vmux_ack
+        tests/fuzz/fuzz_vmux_ack.cpp)
+    ADD_EXECUTABLE(fuzz_vmux_frame
+        tests/fuzz/fuzz_vmux_frame.cpp)
+    FOREACH(PPP_FUZZ_TARGET fuzz_vmux_ack fuzz_vmux_frame)
+        TARGET_LINK_LIBRARIES(${PPP_FUZZ_TARGET} openppp2_lib)
+        TARGET_COMPILE_OPTIONS(${PPP_FUZZ_TARGET} PRIVATE
+            -fsanitize=fuzzer,address -fno-omit-frame-pointer -g)
+        TARGET_LINK_OPTIONS(${PPP_FUZZ_TARGET} PRIVATE
+            -fsanitize=fuzzer,address)
+        IF(PLATFORM_SYSTEM_LINUX)
+            TARGET_LINK_OPTIONS(${PPP_FUZZ_TARGET} PRIVATE
+                "-Wl,--exclude-libs,ALL")
+        ENDIF()
+    ENDFOREACH()
+ENDIF()
 IF(ENABLE_TESTS)
     ENABLE_TESTING()
     ADD_SUBDIRECTORY(tests)

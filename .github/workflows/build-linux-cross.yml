@@ -8,6 +8,7 @@ name: Build · Linux Cross
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main, codex/runtime-ui-lifecycle-integration]
   workflow_dispatch:
@@ -17,6 +18,12 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Recorded only: this workflow builds against the prebuilt third-party
+  # environment it clones, so the versions below are not fetched here.
+  BOOST_VERSION: "1.92.0"
+  OPENSSL_VERSION: "4.1.0"
+  JEMALLOC_VERSION: "5.4.0"
+  LIBUNWIND_VERSION: "1.8.1"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -58,12 +65,25 @@ jobs:
               zlib1g-dev:${{ matrix.debian_arch }} libzstd-dev:${{ matrix.debian_arch }}
           fi
 
+      # One cache entry per dependency, so bumping one version leaves the others
+      # alone instead of rebuilding them from source. Keys are exact-match only
+      # on purpose: a restore-keys prefix hit restores the tree but still reports
+      # cache-hit=false, so the build step reruns on top of what was just
+      # restored.
+      - name: Cache libunwind (source-built)
+        id: cache-libunwind
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/libunwind
+          key: linux-${{ matrix.third_dir }}-libunwind${{ env.LIBUNWIND_VERSION }}
+
       - name: Build libunwind for target
+        if: steps.cache-libunwind.outputs.cache-hit != 'true'
         run: |
           cd /tmp
-          wget -q https://github.com/libunwind/libunwind/releases/download/v1.8.1/libunwind-1.8.1.tar.gz
-          tar xf libunwind-1.8.1.tar.gz
-          cd libunwind-1.8.1
+          wget -q https://github.com/libunwind/libunwind/releases/download/v${LIBUNWIND_VERSION}/libunwind-${LIBUNWIND_VERSION}.tar.gz
+          tar xf libunwind-${LIBUNWIND_VERSION}.tar.gz
+          cd libunwind-${LIBUNWIND_VERSION}
           ./configure --host=${{ matrix.apt_pkg }} --prefix=${{ runner.temp }}/libunwind --disable-shared --enable-static
           make -j$(nproc)
           make install
@@ -94,6 +114,15 @@ jobs:
           install -m 644 zstd-1.5.5/lib/zstd.h zstd-1.5.5/lib/zstd_errors.h "$PREFIX/include/"
           echo "CROSS_COMPRESSION_PREFIX=$PREFIX" >> "$GITHUB_ENV"
 
+      - name: Compute version label
+        id: ver
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch --tags --force 2>/dev/null || true
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "label=${TAG}-${SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Build openppp2
         run: |
           TP="${{ runner.temp }}/3rd/${{ matrix.third_dir }}"
@@ -111,6 +140,7 @@ jobs:
             -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DCMAKE_EXE_LINKER_FLAGS="$LINK_FLAGS" \
             -DCMAKE_CXX_FLAGS="$CPP_FLAGS" \
+            -DPPP_APPLICATION_VERSION="${{ steps.ver.outputs.label }}" \
             -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
             -DENABLE_XTCP=ON
           make -j$(nproc)
