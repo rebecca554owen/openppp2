@@ -715,6 +715,13 @@ target_compile_definitions(explicit_aead_advisory_contract_test PRIVATE
 # The route-list fetch has to frame its body exactly: a truncated body would be
 # applied as if it were a complete route list, and that changes the routing
 # policy of the client.
+openppp2_add_cpp_test(chnroutes2_http_framing_test SOURCES
+    chnroutes2_http_framing_test.cpp)
+target_include_directories(chnroutes2_http_framing_test PRIVATE
+    "${OPENPPP2_ROOT}/common")
+# The end-of-stream frame must continue the DSN space of its flow: a FIN that
+# restarts the space is dropped as a stale DSN by the flow v2 receiver and the
+# peer never observes the end of the stream.
 openppp2_add_cpp_test(mux_fin_dsn_contract_test SOURCES
     mux_fin_dsn_contract_test.cpp)
 target_compile_definitions(mux_fin_dsn_contract_test PRIVATE

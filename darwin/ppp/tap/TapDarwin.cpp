@@ -595,6 +595,13 @@ namespace ppp
 
         }
 
+        TapDarwin::~TapDarwin() noexcept
+        {
+            // The native file descriptor is owned by the base ITap's
+            // stream_descriptor; ITap::Finalize() closes it when the base
+            // destructor runs.  This destructor must not close it as well.
+        }
+
         std::shared_ptr<TapDarwin> TapDarwin::Create(const std::shared_ptr<boost::asio::io_context>& context, const ppp::string& dev, uint32_t ip, uint32_t gw, uint32_t mask, bool promisc, bool hosted_network, const ppp::vector<uint32_t>& dns_addresses) noexcept
         {
             if (NULLPTR == context)

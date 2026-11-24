@@ -365,8 +365,13 @@ BOOST_AUTO_TEST_CASE(production_transport_descriptors_are_explicit) {
     auto wss = std::make_shared<transmissions::ISslWebsocketTransmission>(
         context, strand, ConnectedSocket(context, peers), configuration);
 
+    // A child carrier reports the same kind as the main one: the gate that
+    // selects the transport-auth initiator asks the carrier for its kind,
+    // and a child that reported none could never satisfy it.  The server
+    // answers every accepted connection with the responder, so the two ends
+    // have to agree about what the carrier is.
     BOOST_TEST(child->GetAuthenticatedCarrierKind() ==
-        transmissions::AuthenticatedCarrierKind::None);
+        transmissions::AuthenticatedCarrierKind::Tcp);
     BOOST_TEST(main->GetAuthenticatedCarrierKind() ==
         transmissions::AuthenticatedCarrierKind::Tcp);
     BOOST_TEST(server->GetAuthenticatedCarrierKind() ==
