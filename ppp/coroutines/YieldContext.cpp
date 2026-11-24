@@ -1,5 +1,8 @@
 #include <ppp/coroutines/YieldContext.h>
 #include <ppp/diagnostics/Error.h>
+
+#include <cstdio>
+#include <cstdlib>
 #if defined(PPP_COROUTINES_TSAN_ENABLED) && !defined(PPP_COROUTINE_BACKEND_COROCC)
 #include <sanitizer/tsan_interface.h>
 #endif
@@ -23,6 +26,32 @@ namespace ppp
         static constexpr int STATUS_RESUMING   = -1;
         /** @brief State: coroutine handler returned; the context is being reclaimed. */
         static constexpr int STATUS_COMPLETED  = 3;
+
+        /**
+         * @brief Diagnostic counters for lost-wakeup forensics (env: OPENPPP2_YIELD_DIAG=1).
+         *        All counters are process-global atomics; dumped by DumpYieldDiag().
+         */
+        struct YieldDiag {
+            std::atomic<uint64_t> arm{0};              /**< Arm() published a new anchor */
+            std::atomic<uint64_t> resume_latch{0};    /**< Resume() latched (coroutine still running) */
+            std::atomic<uint64_t> resume_jump{0};     /**< Resume() jumped back into the parked coroutine */
+            std::atomic<uint64_t> resume_stale{0};    /**< Resume() rejected the wakeup (finished / superseded anchor) */
+            std::atomic<uint64_t> suspend_consume{0}; /**< Suspend() consumed a latched wakeup at entry */
+            std::atomic<uint64_t> suspend_park{0};    /**< Suspend() jumped out (will park) */
+            std::atomic<uint64_t> suspend_reject{0};  /**< Suspend() rejected the anchor or the state */
+            std::atomic<uint64_t> switch_consume{0};  /**< Switch() consumed a latch racing the handoff */
+            std::atomic<uint64_t> switch_park{0};     /**< Switch() published STATUS_SUSPEND */
+            std::atomic<uint64_t> reenter{0};         /**< Switch() re-entered the coroutine after a latch consume */
+            std::atomic<uint64_t> anchor_cas_fail{0}; /**< Anchor::R() lost the CAS (duplicate / stale wakeup) */
+        };
+        static YieldDiag& Diag() noexcept {
+            static YieldDiag d;
+            return d;
+        }
+        static const bool diag_enabled_ = []() noexcept {
+            const char* v = std::getenv("OPENPPP2_YIELD_DIAG");
+            return v && v[0] == '1';
+        }();
 
         /**
          * @brief Constructs a coroutine context and allocates stack memory.
@@ -129,6 +158,8 @@ namespace ppp
                 cell->armed.store(value, std::memory_order_release);
             }
 
+            if (diag_enabled_) { Diag().arm.fetch_add(1, std::memory_order_relaxed); }
+
             return Anchor(cell, value);
         }
 
@@ -139,6 +170,7 @@ namespace ppp
             const std::shared_ptr<AnchorCell>& cell = y->cell_;
             if (!cell || anchor.cell_ != cell || 0 == anchor.value_)
             {
+                if (diag_enabled_) { Diag().suspend_reject.fetch_add(1, std::memory_order_relaxed); }
                 ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                 return false;
             }
@@ -148,6 +180,7 @@ namespace ppp
                 if (anchor.value_ != y->anchor_current_)
                 {
                     /** @brief Not the armed anchor (stale, reused or foreign): never park on it. */
+                    if (diag_enabled_) { Diag().suspend_reject.fetch_add(1, std::memory_order_relaxed); }
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                     return false;
                 }
@@ -160,11 +193,13 @@ namespace ppp
                      */
                     y->wakeup_pending_ = false;
                     y->anchor_current_ = 0;
+                    if (diag_enabled_) { Diag().suspend_consume.fetch_add(1, std::memory_order_relaxed); }
                     return true;
                 }
 
                 if (y->s_.load() != STATUS_RESUMED)
                 {
+                    if (diag_enabled_) { Diag().suspend_reject.fetch_add(1, std::memory_order_relaxed); }
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                     return false;
                 }
@@ -176,6 +211,7 @@ namespace ppp
 #if defined(PPP_COROUTINES_TSAN_ENABLED) && !defined(PPP_COROUTINE_BACKEND_COROCC)
             __tsan_switch_to_fiber(y->sanitizer_caller_fiber_, 0);
 #endif
+            if (diag_enabled_) { Diag().suspend_park.fetch_add(1, std::memory_order_relaxed); }
             y->caller_.exchange(
                 backend::Jump(
                     y->caller_.exchange(NULLPTR), y).fctx);
@@ -202,6 +238,7 @@ namespace ppp
                      * @brief The coroutine finished, or this anchor was abandoned and a newer
                      *        one armed after the CAS: the wakeup belongs to no suspension.
                      */
+                    if (diag_enabled_) { Diag().resume_stale.fetch_add(1, std::memory_order_relaxed); }
                     ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeStateTransitionInvalid);
                     return false;
                 }
@@ -222,6 +259,7 @@ namespace ppp
                      *        when the io_context is driven by more than one run() thread.
                      */
                     y->wakeup_pending_ = true;
+                    if (diag_enabled_) { Diag().resume_latch.fetch_add(1, std::memory_order_relaxed); }
                     return true;
                 }
                 else
@@ -236,6 +274,7 @@ namespace ppp
             y->sanitizer_caller_fiber_ = __tsan_get_current_fiber();
             __tsan_switch_to_fiber(y->sanitizer_fiber_, 0);
 #endif
+            if (diag_enabled_) { Diag().resume_jump.fetch_add(1, std::memory_order_relaxed); }
             return Switch(
                 backend::Jump(
                     y->callee_.exchange(NULLPTR), y), y);
@@ -312,10 +351,12 @@ namespace ppp
                 y->wakeup_pending_ = false;
                 y->anchor_current_ = 0;
                 y->s_.store(STATUS_RESUMING);
+                if (diag_enabled_) { Diag().switch_consume.fetch_add(1, std::memory_order_relaxed); }
                 return false;
             }
 
             y->s_.store(STATUS_SUSPEND);
+            if (diag_enabled_) { Diag().switch_park.fetch_add(1, std::memory_order_relaxed); }
             return true;
         }
 
@@ -347,6 +388,7 @@ namespace ppp
                 y->sanitizer_caller_fiber_ = __tsan_get_current_fiber();
                 __tsan_switch_to_fiber(y->sanitizer_fiber_, 0);
 #endif
+                if (diag_enabled_) { Diag().reenter.fetch_add(1, std::memory_order_relaxed); }
                 backend::Transfer r =
                     backend::Jump(
                         y->callee_.exchange(NULLPTR), y);
@@ -493,6 +535,31 @@ namespace ppp
         }
 
         /**
+         * @brief Dumps the lost-wakeup forensic counters to stderr.
+         * @note Diagnostic only; the counters are always valid and never influence the
+         *       state machine.  Enable them with OPENPPP2_YIELD_DIAG=1.
+         */
+        void YieldContext::DumpYieldDiag() noexcept
+        {
+            YieldDiag& d = Diag();
+            std::fprintf(stderr,
+                "[yield-diag] arm=%llu latch=%llu jump=%llu stale=%llu "
+                "susp_consume=%llu susp_park=%llu susp_reject=%llu "
+                "sw_consume=%llu sw_park=%llu reenter=%llu cas_fail=%llu\n",
+                (unsigned long long)d.arm.load(std::memory_order_relaxed),
+                (unsigned long long)d.resume_latch.load(std::memory_order_relaxed),
+                (unsigned long long)d.resume_jump.load(std::memory_order_relaxed),
+                (unsigned long long)d.resume_stale.load(std::memory_order_relaxed),
+                (unsigned long long)d.suspend_consume.load(std::memory_order_relaxed),
+                (unsigned long long)d.suspend_park.load(std::memory_order_relaxed),
+                (unsigned long long)d.suspend_reject.load(std::memory_order_relaxed),
+                (unsigned long long)d.switch_consume.load(std::memory_order_relaxed),
+                (unsigned long long)d.switch_park.load(std::memory_order_relaxed),
+                (unsigned long long)d.reenter.load(std::memory_order_relaxed),
+                (unsigned long long)d.anchor_cas_fail.load(std::memory_order_relaxed));
+        }
+
+        /**
          * @brief Consumes this anchor (CAS armed -> 0) and posts the resume.
          * @note Only the CAS winner posts; every duplicate, stale or post-completion wakeup
          *       fails the CAS on the shared cell and never dereferences the coroutine.
@@ -510,6 +577,7 @@ namespace ppp
             uint64_t expected = value_;
             if (!cell->armed.compare_exchange_strong(expected, 0, std::memory_order_acq_rel, std::memory_order_acquire))
             {
+                if (diag_enabled_) { Diag().anchor_cas_fail.fetch_add(1, std::memory_order_relaxed); }
                 return false;
             }
 
@@ -535,6 +603,41 @@ namespace ppp
             }
 
             return ok;
+        }
+
+        /**
+         * @brief Snapshots the coroutine state for hang forensics.
+         * @details The snapshot is taken through the shared anchor cell while holding
+         *           its mutex: the context destructor takes the same mutex before it
+         *           clears the cell, so the context is guaranteed to stay alive for
+         *           the duration of the read.
+         * @param status Receives the coroutine state flag, or -1 when the coroutine
+         *               has already been reclaimed.
+         * @param wakeup_pending Receives the number of latched wakeups, or -1 when the
+         *                        coroutine has already been reclaimed.
+         */
+        void YieldContext::Anchor::DebugState(int& status, int& wakeup_pending) const noexcept
+        {
+            const std::shared_ptr<AnchorCell> cell = cell_;
+            if (NULLPTR == cell)
+            {
+                status = -1;
+                wakeup_pending = -1;
+                return;
+            }
+
+            std::lock_guard<std::mutex> scope(cell->syncobj);
+            YieldContext* y = cell->y;
+            if (NULLPTR == y)
+            {
+                /** @brief The coroutine has been reclaimed; only the cell survived. */
+                status = -1;
+                wakeup_pending = -1;
+                return;
+            }
+
+            status = y->s_.load(std::memory_order_relaxed);
+            wakeup_pending = y->wakeup_pending_ ? 1 : 0;
         }
     }
 }

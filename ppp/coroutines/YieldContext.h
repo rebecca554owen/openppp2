@@ -176,6 +176,18 @@ namespace ppp
                  * @note  Safe from any thread and after the coroutine was reclaimed.
                  */
                 bool                                                            R() const noexcept;
+                /**
+                 * @brief Snapshots the coroutine state for hang forensics.
+                 * @param status Receives the coroutine state flag, or -1 when the
+                 *               coroutine has already been reclaimed.
+                 * @param wakeup_pending Receives the number of latched wakeups, or
+                 *                        -1 when the coroutine has already been
+                 *                        reclaimed.
+                 * @note  Diagnostic only.  The snapshot is taken through the shared
+                 *        anchor cell, so it stays safe after the coroutine was
+                 *        reclaimed and never touches freed memory.
+                 */
+                void                                                            DebugState(int& status, int& wakeup_pending) const noexcept;
                 /** @brief Monotonic anchor number; 0 for an empty anchor. */
                 uint64_t                                                        Value() const noexcept { return value_; }
                 /** @brief True when this anchor was produced by a successful `Arm()`. */
@@ -336,6 +348,13 @@ namespace ppp
              *        destroyed automatically when `spawn` returns.
              */
             static bool                                                         Spawn(ppp::threading::BufferswapAllocator* allocator, boost::asio::io_context& context, boost::asio::strand<boost::asio::io_context::executor_type>* strand, SpawnHander&& spawn, int stack_size) noexcept;
+
+            /**
+             * @brief Dumps lost-wakeup forensic counters to stderr (env OPENPPP2_YIELD_DIAG=1).
+             * @note  Diagnostic aid for the multi-runner hang; the counters are always
+             *        valid and never influence the state machine.
+             */
+            static void                                                         DumpYieldDiag() noexcept;
 
         private:
             /**

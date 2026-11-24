@@ -3,8 +3,11 @@
 
 #include <ppp/coroutines/YieldContext.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <mutex>
 #include <random>
@@ -62,6 +65,45 @@ struct AnchorSlot {
     }
 };
 
+/**
+ * @brief Prints the per-coroutine state and the global wakeup counters.
+ * @note The per-coroutine snapshot goes through the shared anchor cell, so it stays
+ *       valid even after the coroutine has been reclaimed.
+ */
+void DumpHangDiagnostics(AnchorSlot* slots, int count) {
+    for (int i = 0; i < count; ++i) {
+        int status = -1, pending = -1;
+        slots[i].Get().DebugState(status, pending);
+        std::fprintf(stderr, "[coroutine %d] status=%d wakeup_pending=%d\n", i, status, pending);
+    }
+    ppp::coroutines::YieldContext::DumpYieldDiag();
+    std::fflush(stderr);
+}
+
+/**
+ * @brief Optionally holds the process so an external sampler can capture live stacks.
+ * @note Enabled with OPENPPP2_YIELD_HANG_HOLD=1; disabled by default.
+ */
+void HoldForSampler(AnchorSlot* slots, int count) {
+    const char* hold = std::getenv("OPENPPP2_YIELD_HANG_HOLD");
+    if (NULLPTR == hold || hold[0] != '1') {
+        return;
+    }
+
+    std::fprintf(stderr, "[yield-hold] holding for sampler; polling coroutine states\n");
+    std::fflush(stderr);
+    for (int tick = 0; tick < 100; ++tick) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        for (int i = 0; i < count; ++i) {
+            int status = -1, pending = -1;
+            slots[i].Get().DebugState(status, pending);
+            std::fprintf(stderr, "[poll %d] c%d s=%d wp=%d\n", tick, i, status, pending);
+        }
+        ppp::coroutines::YieldContext::DumpYieldDiag();
+        std::fflush(stderr);
+    }
+}
+
 bool WaitFor(const std::function<bool()>& pred, std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
@@ -94,13 +136,15 @@ BOOST_AUTO_TEST_CASE(completion_before_suspend_multi_runner) {
     constexpr int kIterations = 300;
     std::atomic<int> done{0};
     std::atomic<int> failures{0};
+    std::array<AnchorSlot, kCoroutines> slots;
 
     for (int i = 0; i < kCoroutines; ++i) {
         const bool spawned = ppp::coroutines::YieldContext::Spawn(runner.context,
-            [&done, &failures, kIterations](ppp::coroutines::YieldContext& y) noexcept {
+            [&done, &failures, &slots, i, kIterations](ppp::coroutines::YieldContext& y) noexcept {
                 boost::asio::io_context& ctx = y.GetContext();
                 for (int k = 0; k < kIterations; ++k) {
                     const Anchor anchor = y.Arm();
+                    slots[i].Set(anchor);
                     boost::asio::post(ctx, [anchor]() noexcept { anchor.R(); });
                     if (!y.Suspend(anchor)) {
                         failures.fetch_add(1);
@@ -112,8 +156,14 @@ BOOST_AUTO_TEST_CASE(completion_before_suspend_multi_runner) {
         BOOST_REQUIRE(spawned);
     }
 
+    const bool completed = WaitFor([&] { return done.load() == kCoroutines; }, 60s);
+    if (!completed) {
+        DumpHangDiagnostics(slots.data(), kCoroutines);
+        HoldForSampler(slots.data(), kCoroutines);
+    }
+
     BOOST_REQUIRE_MESSAGE(
-        WaitFor([&] { return done.load() == kCoroutines; }, 60s),
+        completed,
         "coroutines hung: done=" << done.load() << "/" << kCoroutines
                                  << " failures=" << failures.load());
     BOOST_TEST(failures.load() == 0);
