@@ -108,6 +108,31 @@ BOOST_AUTO_TEST_CASE(stats_json_omits_optional_runtime_blocks_by_default) {
     BOOST_TEST(!root.isMember("tap_linux"));
     BOOST_TEST(!root.isMember("xtcp"));
     BOOST_TEST(!root.isMember("acceptance_boundary"));
+    BOOST_TEST(!root.isMember("mux_counters"));
+}
+
+BOOST_AUTO_TEST_CASE(stats_json_emits_mux_counters_with_telemetry_vocabulary) {
+    runtime::RuntimeStatsSample sample;
+    sample.has_mux_counters = true;
+    sample.mux_counters.tx_frames = 11;
+    sample.mux_counters.rx_frames = 22;
+    sample.mux_counters.tx_flow_after_fin = 33;
+    sample.mux_counters.rx_flow_unknown_cid = 44;
+
+    const std::string encoded = runtime::SerializeRuntimeStats(sample);
+    Json::Value root;
+    Json::Reader reader;
+    BOOST_REQUIRE(reader.parse(encoded.data(), encoded.data() + encoded.size(), root));
+    BOOST_REQUIRE(root.isMember("mux_counters"));
+    const Json::Value& mux = root["mux_counters"];
+    // Every key is the telemetry counter the value mirrors.
+    BOOST_TEST(mux["mux.link.send"].asUInt64() == 11u);
+    BOOST_TEST(mux["mux.link.recv"].asUInt64() == 22u);
+    BOOST_TEST(mux["mux.tx.flow.after_fin"].asUInt64() == 33u);
+    BOOST_TEST(mux["mux.rx.flow.unknown_cid"].asUInt64() == 44u);
+    BOOST_TEST(mux["mux.tx.flow.throttled"].asUInt64() == 0u);
+    // One key per MuxRuntimeCounters field (23).
+    BOOST_TEST(mux.getMemberNames().size() == 23u);
 }
 
 BOOST_AUTO_TEST_CASE(stats_json_emits_xtcp_block_when_present) {

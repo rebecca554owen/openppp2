@@ -644,6 +644,10 @@ openppp2_add_cpp_test(vmux_reliability_negotiation_test SOURCES
     vmux_reliability_negotiation_test.cpp)
 openppp2_add_cpp_test(vmux_ack_tracker_test SOURCES
     vmux_ack_tracker_test.cpp)
+# The D11 stall watchdog: a full send queue that is still draining is a slow
+# path, not a wedged one, so the session must not be rebuilt for it.
+openppp2_add_cpp_test(vmux_backlog_watchdog_test SOURCES
+    vmux_backlog_watchdog_test.cpp)
 openppp2_add_cpp_test(vmux_retransmit_buffer_test SOURCES
     vmux_retransmit_buffer_test.cpp)
 openppp2_add_cpp_test(vmux_fec_codec_test SOURCES
@@ -685,6 +689,43 @@ openppp2_add_cpp_test(vmux_qa001_ack_malicious_test SOURCES
 openppp2_add_cpp_test(mux_transport_adapter_test SOURCES
     mux_transport_adapter_test.cpp)
 target_link_libraries(mux_transport_adapter_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+# The mux contract tests pin the invariants that upstream expresses in
+# comments rather than in code: the connection id lifetime, the lock domains,
+# the strand affinity, the refusal of a dead flow, the carrier close order and
+# the posted lambda lifetime. They read the mux sources, so they need the
+# source root.
+openppp2_add_cpp_test(mux_invariants_contract_test SOURCES
+    mux_invariants_contract_test.cpp)
+target_compile_definitions(mux_invariants_contract_test PRIVATE
+    OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
+openppp2_add_cpp_test(mux_flow_refusal_contract_test SOURCES
+    mux_flow_refusal_contract_test.cpp)
+target_compile_definitions(mux_flow_refusal_contract_test PRIVATE
+    OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
+# An explicit AEAD cipher on the legacy equal-length data path cannot
+# authenticate anything and repeats its nonce per packet, so the name has to be
+# recognisable for the configuration to be reported.
+openppp2_add_cpp_test(mux_fin_dsn_contract_test SOURCES
+    mux_fin_dsn_contract_test.cpp)
+target_compile_definitions(mux_fin_dsn_contract_test PRIVATE
+    OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
+openppp2_add_cpp_test(mux_connect_yield_lifetime_contract_test SOURCES
+    mux_connect_yield_lifetime_contract_test.cpp)
+target_compile_definitions(mux_connect_yield_lifetime_contract_test PRIVATE
+    OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
+openppp2_add_cpp_test(mux_carrier_clean_close_test SOURCES
+    mux_carrier_clean_close_test.cpp)
+target_compile_definitions(mux_carrier_clean_close_test PRIVATE
+    OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
+# The mux runtime counters and the JSON keys of the stats file have to stay in
+# lockstep: a counter that updates on the hot path but never reaches the
+# stats file is invisible to the operator.
+openppp2_add_cpp_test(mux_runtime_counters_test SOURCES
+    mux_runtime_counters_test.cpp
+    "${OPENPPP2_ROOT}/common/json/src/json_reader.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_value.cpp"
+    "${OPENPPP2_ROOT}/common/json/src/json_writer.cpp")
+target_link_libraries(mux_runtime_counters_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(runtime_readiness_test SOURCES
     runtime_readiness_test.cpp)
 openppp2_add_cpp_test(runtime_lifecycle_test SOURCES
@@ -854,6 +895,8 @@ openppp2_add_cpp_test(dns_message_test SOURCES dns_message_test.cpp "${OPENPPP2_
 openppp2_add_cpp_test(dns_server_validation_test SOURCES dns_server_validation_test.cpp)
 openppp2_add_cpp_test(dns_wire_validation_test SOURCES dns_wire_validation_test.cpp)
 openppp2_add_cpp_test(base64_test SOURCES base64_test.cpp "${OPENPPP2_ROOT}/common/base64/base64.cpp")
+# The HTTP proxy must rewrite the request target of every request on a reused
+# connection, and must answer a client that arrives before the tunnel is up.
 openppp2_add_cpp_test(sysctl_validation_test SOURCES sysctl_validation_test.cpp)
 openppp2_add_cpp_test(dns_redirect_plan_test SOURCES
     dns_redirect_plan_test.cpp

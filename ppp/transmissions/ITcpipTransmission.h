@@ -62,6 +62,8 @@ namespace ppp {
             bool                                                                                ShutdownSend() noexcept override;
             /** @brief Reports a clean TCP peer FIN observed by ReadBytes. */
             bool                                                                                IsReceiveClosed() const noexcept override;
+            /** @brief Drains the unread receive queue so close() emits FIN instead of RST. */
+            bool                                                                                DrainReceive() noexcept override;
             /** @brief Keeps the carrier alive on a clean peer FIN (any role); see ITransmission. */
             bool                                                                                EnableReceiveHalfClose() noexcept override;
             /**

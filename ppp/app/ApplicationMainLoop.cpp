@@ -14,6 +14,7 @@
 #include <ppp/app/server/VirtualEthernetSwitcher.h>
 #include <ppp/app/server/VirtualEthernetManagedServer.h>
 #include <ppp/app/PppApplicationInternal.h>
+#include <ppp/app/mux/MuxRuntimeCounters.h>
 #include <ppp/app/runtime/RuntimeStatsJson.h>
 #include <ppp/app/tui/TuiRuntimeAdapter.h>
 #include <ppp/p2p/P2PProbeCoordinator.h>
@@ -800,6 +801,10 @@ bool PppApplication::OnTick(uint64_t now) noexcept {
         sample.link.error_count = link.error_count;
         sample.link.success_count = link.success_count;
         sample.runtime = runtime;
+        // The mux counters are read here, at sample time, so the stats file
+        // carries fresh values even when the mux state itself did not change.
+        sample.has_mux_counters = true;
+        sample.mux_counters = ppp::app::mux::MuxRuntimeCounterRegistry::GetSnapshot();
         if (NULLPTR != client) {
             const char* tcp_stack = ppp::app::GetTcpStackModeName(client->GetTcpStackMode());
             sample.requested_tcp_stack = tcp_stack;

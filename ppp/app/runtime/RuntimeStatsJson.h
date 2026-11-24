@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ppp/app/mux/MuxRuntimeCounters.h>
 #include <ppp/app/runtime/DatapathAcceptanceBoundary.h>
 #include <ppp/app/runtime/RuntimeSnapshotJson.h>
 #include <ppp/app/runtime/RuntimeXtcpStats.h>
@@ -37,6 +38,8 @@ namespace ppp {
                 RuntimeXtcpStats xtcp;
                 bool has_acceptance_boundary = false;
                 DatapathAcceptanceBoundaryRecord acceptance_boundary;
+                bool has_mux_counters = false;
+                ppp::app::mux::MuxRuntimeCounters mux_counters;
             };
 
             inline std::string SerializeRuntimeStats(
@@ -254,6 +257,37 @@ namespace ppp {
                     acceptance_boundary["xtcp_runtime_instance_id"] =
                         Json::UInt64(sample.acceptance_boundary.xtcp_runtime_instance_id);
                     root["acceptance_boundary"] = std::move(acceptance_boundary);
+                }
+
+                if (sample.has_mux_counters) {
+                    // The mux counters keep the telemetry vocabulary: every key is
+                    // the telemetry counter it mirrors, so the stats NDJSON and the
+                    // telemetry export can be read side by side.
+                    Json::Value mux_counters(Json::objectValue);
+                    mux_counters["mux.link.send"] = Json::UInt64(sample.mux_counters.tx_frames);
+                    mux_counters["mux.link.recv"] = Json::UInt64(sample.mux_counters.rx_frames);
+                    mux_counters["mux.rx.flow.unknown_cid"] = Json::UInt64(sample.mux_counters.rx_flow_unknown_cid);
+                    mux_counters["mux.rx.flow.refused"] = Json::UInt64(sample.mux_counters.rx_flow_refused);
+                    mux_counters["mux.rx.flow.reack"] = Json::UInt64(sample.mux_counters.rx_flow_reack);
+                    mux_counters["mux.rx.closed_flow.drop"] = Json::UInt64(sample.mux_counters.rx_closed_flow_drop);
+                    mux_counters["mux.rx.closed_flow.reack"] = Json::UInt64(sample.mux_counters.rx_closed_flow_reack);
+                    mux_counters["mux.rx.flow.reset"] = Json::UInt64(sample.mux_counters.rx_flow_reset);
+                    mux_counters["mux.rx.compat.gap_timeout"] = Json::UInt64(sample.mux_counters.rx_gap_timeout);
+                    mux_counters["mux.rx.flow.max_open"] = Json::UInt64(sample.mux_counters.rx_flow_max_open);
+                    mux_counters["mux.tx.flow.after_fin"] = Json::UInt64(sample.mux_counters.tx_flow_after_fin);
+                    mux_counters["mux.rtx.pto"] = Json::UInt64(sample.mux_counters.tx_rtx_pto);
+                    mux_counters["mux.rtx.exhausted"] = Json::UInt64(sample.mux_counters.tx_rtx_exhausted);
+                    mux_counters["mux.rtx.exhausted.connection"] = Json::UInt64(sample.mux_counters.tx_rtx_exhausted_connection);
+                    mux_counters["mux.rx.flow.refuse_post_failed"] = Json::UInt64(sample.mux_counters.rx_flow_refuse_post_failed);
+                    mux_counters["mux.rx.syn_ok.refused"] = Json::UInt64(sample.mux_counters.rx_syn_ok_refused);
+                    mux_counters["mux.rx.syn_ok.refused.no_socket"] = Json::UInt64(sample.mux_counters.rx_syn_ok_refused_no_socket);
+                    mux_counters["mux.tx.flow.overflow"] = Json::UInt64(sample.mux_counters.tx_flow_overflow);
+                    mux_counters["mux.tx.flow.throttled"] = Json::UInt64(sample.mux_counters.tx_flow_throttled);
+                    mux_counters["mux.tx.ctrl.cap"] = Json::UInt64(sample.mux_counters.tx_ctrl_cap);
+                    mux_counters["mux.tx.ctrl.cap.reject"] = Json::UInt64(sample.mux_counters.tx_ctrl_cap_rejected);
+                    mux_counters["mux.ack.suppressed"] = Json::UInt64(sample.mux_counters.tx_ack_suppressed);
+                    mux_counters["mux.rx.unknown_cmd"] = Json::UInt64(sample.mux_counters.rx_unknown_cmd);
+                    root["mux_counters"] = std::move(mux_counters);
                 }
 
                 Json::Reader reader;

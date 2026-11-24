@@ -1,5 +1,6 @@
 #include "vmux_skt.h"
 #include "vmux_net.h"
+#include <ppp/app/mux/MuxRuntimeCounters.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/diagnostics/DatapathPerfJson.h>
 #include <ppp/diagnostics/Error.h>
@@ -77,9 +78,16 @@ namespace vmux {
             event(this, false);
         }
 
-        mux_->release_connection(connection_id_, this);
         if (fin) {
-            mux_->post(vmux_net::cmd_fin, NULLPTR, 0, connection_id_);
+            // The FIN has to continue the DSN space of its flow, so the
+            // release and the FIN are done in one step: releasing first
+            // erased the per-flow send DSN counter and the FIN restarted the
+            // DSN at 1, which the flow v2 receiver drops as a stale DSN --
+            // the peer then never sees the end of the stream.
+            mux_->release_connection_and_post_fin(connection_id_, this);
+        }
+        else {
+            mux_->release_connection(connection_id_, this);
         }
 
         if (NULLPTR != tx_socket) {
@@ -555,6 +563,23 @@ namespace vmux {
         // Open barrier: do not post PUSH until local open completes (syn_ok / connected_).
         if (!status_.connected_) {
             ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendContextNotReady);
+            return false;
+        }
+
+        // The FIN of this flow already went out (the local read side reached
+        // EOF), so the peer already treats the flow as closed. A data frame
+        // posted now would carry a DSN beyond the FIN's, and the peer drops
+        // every such frame WITHOUT acknowledging it -- it never took the data.
+        // The sender would then retransmit it until its attempt budget runs
+        // out (30 s with the current grace) and reset a flow that is already
+        // dead, burning every carrier meanwhile.
+        //
+        // The local peer closed its write side, so there is nothing
+        // legitimate left to send: refuse the write.
+        if (status_.fin_) {
+            ppp::telemetry::Count("mux.tx.flow.after_fin", 1);
+            ppp::app::mux::MuxRuntimeCounterRegistry::AddTxFlowAfterFin();
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::VmuxSocketSendAfterFin);
             return false;
         }
 

@@ -184,6 +184,28 @@ namespace ppp {
             /** @brief Reports a clean peer close of the carrier receive direction. */
             virtual bool                                                                            IsReceiveClosed() const noexcept { return false; }
             /**
+             * @brief Drains the receive queue so the socket can be closed cleanly.
+             *
+             * A socket that still holds unread bytes at close() time makes the
+             * kernel emit RST instead of FIN.  The peer then reports the carrier
+             * as failed, discards the bytes it had not read yet and tears the
+             * whole session down -- even when the carrier was closing after a
+             * perfectly normal end of stream.
+             *
+             * Draining the unread bytes first lets close() emit FIN, so the peer
+             * observes a clean EOF.  Only the bytes this side received and no
+             * longer needs are dropped; the send direction is untouched, so the
+             * peer still receives every byte that was queued for it.
+             *
+             * @note shutdown(SHUT_RD) is NOT sufficient: it discards the
+             *       buffered bytes but leaves the connection in a state where
+             *       close() still emits RST.  The queue must be read empty.
+             *
+             * @return True when the receive queue was drained; false when the
+             *         transport cannot do this.
+             */
+            virtual bool                                                                            DrainReceive() noexcept { return false; }
+            /**
              * @brief Opts a per-flow carrier into receive half-close: a clean peer FIN
              *        marks IsReceiveClosed() instead of disposing, so the owner can keep
              *        sending (graceful TCP half-close relay).

@@ -12,6 +12,7 @@
 #include <ppp/app/mux/IMuxTransport.h>
 #include <ppp/app/mux/MuxLinkDrainState.h>
 #include <ppp/app/mux/MuxRuntimeState.h>
+#include <ppp/app/mux/MuxBacklogWatchdog.h>
 #include <ppp/app/mux/MuxAckTracker.h>
 #include <ppp/app/mux/MuxRetransmitBuffer.h>
 #include <ppp/app/mux/MuxFecCodec.h>
@@ -95,6 +96,7 @@ namespace vmux {
     private:
         friend class                                                                vmux_skt;
         friend struct                                                               vmux_net_test_access;
+        friend struct                                                               vmux_fuzz_test_access;
 
         template <typename _Tp>
         struct packet_less {
@@ -555,6 +557,21 @@ namespace vmux {
         vmux_skt_ptr                                                                get_connection(uint32_t connection_id) noexcept;
         /** @brief Remove and return connection when pointer identity matches. */
         vmux_skt_ptr                                                                release_connection(uint32_t connection_id, vmux_skt* refer_pointer) noexcept;
+        /**
+         * @brief Releases a connection and posts its end-of-stream frame.
+         * @details The FIN must carry the next DSN of the flow's send sequence
+         *          space: the flow v2 receiver delivers the frames of a flow
+         *          strictly in DSN order and silently drops a stale DSN as a
+         *          duplicate, so a FIN whose DSN restarted at 1 is discarded
+         *          and the peer never observes the end of the stream.
+         *          release_connection() erases the per-flow send DSN counter,
+         *          so the counter is carried across the release and dropped
+         *          once the FIN has been queued. The frames that were still
+         *          queued for the flow keep the DSNs they were given, so a
+         *          truncated stream shows up at the peer as a DSN gap instead
+         *          of a clean end of stream.
+         */
+        bool                                                                        release_connection_and_post_fin(uint32_t connection_id, vmux_skt* refer_pointer) noexcept;
 
         /** @brief Insert or process out-of-order inbound packet (zero-copy variant when owner is provided). */
         bool                                                                        packet_input_unorder(const vmux_linklayer_ptr& linklayer, vmux_hdr* h, int length, uint64_t now, const std::shared_ptr<Byte>& owner = NULLPTR) noexcept;
@@ -743,6 +760,8 @@ namespace vmux {
         void                                                                        on_link_exit(const vmux_linklayer_ptr& linklayer, const char* reason) noexcept;
         /** @brief Count handshake-complete non-retiring carriers (strand-affine). */
         size_t                                                                      count_live_carriers(const vmux_linklayer_ptr& except = NULLPTR) const noexcept;
+        /** @brief Drains the carrier's local receive queue before it is closed, so the close emits FIN and not RST. */
+        void                                                                        drain_carrier_receive(const IMuxTransportPtr& connection) noexcept;
         /** @brief True when the link still has room under the per-link byte high-water. */
         static bool                                                                 link_has_byte_credit(const vmux_linklayer_ptr& linklayer, int packet_length) noexcept;
         /** @brief Enqueue one data frame into the per-flow DRR queue (strand-affine). @return false when the per-flow cap rejected it (never silently dropped). */
@@ -836,6 +855,7 @@ namespace vmux {
 
             std::atomic<uint64_t>                                                   last_              {0}; ///< Monotonic tick of last received packet. Atomic: written by carrier handshake and vmux strand; read via get_last() from any thread.
             std::atomic<uint64_t>                                                   last_heartbeat_    {0}; ///< Monotonic tick of last heartbeat sent. Atomic: written by carrier handshake and vmux strand.
+        std::atomic<uint64_t>                                                   last_tx_drain_     {0}; ///< Monotonic tick of the last completed carrier write (data-plane progress). Atomic: written by the transmission completion; read by the D11 stall watchdog.
 
             std::atomic<uint64_t>                                                   heartbeat_timeout_ {0}; ///< Deadline tick beyond which session is considered dead. Atomic: written by carrier handshake and vmux strand.
         }                                                                           status_;
@@ -890,6 +910,7 @@ namespace vmux {
         vmux_linklayer_vector                                                       rx_paused_links_;   ///< Carriers paused by receive backpressure (strand-affine).
         vmux::unordered_set<uint32_t>                                               rx_pressure_flows_; ///< flow_v2: cids whose reorder buffer crossed the per-flow soft cap (strand-affine).
         uint64_t                                                                    tx_backlog_since_       = 0; ///< Tick the data tx queue first stayed at/over high-water (0 = not backlogged); drives the D11 stall watchdog.
+        ppp::app::mux::MuxBacklogWatchdog                                         tx_backlog_watchdog_; ///< D11 stall watchdog: a queue that is still draining is slow, not wedged.
         size_t                                                                      tx_queue_high_water_    = (size_t)PPP_MUX_TX_QUEUE_HIGH_WATER; ///< Aggregate data-frame high-water (tx_data_frames_) for D11 backpressure.
         uint64_t                                                                    tx_backlog_stall_ms_    = (uint64_t)PPP_MUX_TX_BACKLOG_STALL_TIMEOUT; ///< Backlog stall timeout in ms (from config; D11 watchdog).
         bool                                                                        turbo_                  = false; ///< flow-mode turbo enabled (from config; best-link-first first packet).

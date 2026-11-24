@@ -226,6 +226,12 @@ OPTION(ENABLE_P2P_RECOVERY_TESTS "Build isolated actual Exchanger recovery tests
 OPTION(ENABLE_P2P_V2_PRODUCTION "Enable authenticated P2P v2 production capability" ON)
 OPTION(ENABLE_VMUX_CHURN_TEST "Build the root-linked VMUX carrier churn test" OFF)
 OPTION(ENABLE_VMUX_RECEIVE_SEMANTICS_TEST "Build the root-linked VMUX receive-semantics test" OFF)
+OPTION(ENABLE_VMUX_FIN_DSN_TEST "Build the root-linked VMUX end-of-stream DSN test" OFF)
+# The VMUX fuzz targets (audit follow-up VMUX-FUZZ-001). They need the
+# libFuzzer runtime, so they only build with a clang that ships it: the Linux
+# CI image and the Homebrew LLVM on macOS. Apple's own clang has no libFuzzer
+# runtime and the link fails, so the option stays off by default. Build it
+# with -DENABLE_ASAN=ON as well, so the library itself is instrumented.
 OPTION(ENABLE_COVERAGE "Enable LLVM source coverage instrumentation" OFF)
 SET(ENABLE_XTCP_DEFAULT OFF)
 IF(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
@@ -727,6 +733,19 @@ IF(ENABLE_VMUX_RECEIVE_SEMANTICS_TEST)
     ENDIF()
     ADD_TEST(NAME vmux_receive_semantics_test COMMAND vmux_receive_semantics_test)
 ENDIF()
+
+IF(ENABLE_VMUX_FIN_DSN_TEST)
+    ENABLE_TESTING()
+    ADD_EXECUTABLE(vmux_fin_dsn_test
+        tests/cpp/vmux_fin_dsn_test.cpp)
+    TARGET_LINK_LIBRARIES(vmux_fin_dsn_test openppp2_lib)
+    IF(PLATFORM_SYSTEM_LINUX)
+        TARGET_LINK_OPTIONS(vmux_fin_dsn_test PRIVATE
+            "-Wl,--exclude-libs,ALL")
+    ENDIF()
+    ADD_TEST(NAME vmux_fin_dsn_test COMMAND vmux_fin_dsn_test)
+ENDIF()
+
 
 IF(ENABLE_TESTS)
     ENABLE_TESTING()
