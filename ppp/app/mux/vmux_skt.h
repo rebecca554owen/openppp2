@@ -75,6 +75,17 @@ namespace vmux {
          */
         bool                                            send_to_peer_yield(const void* packet, int packet_length, ppp::coroutines::YieldContext& y) noexcept;
 
+        /** @brief Client->peer byte rewriting hook signature. */
+        typedef ppp::function<void(const void*, int, ppp::string&)> ClientDataTransform;
+
+        /**
+         * @brief Installs the optional client->peer byte rewriting hook.
+         * @param transform Callback invoked for every local read; empty disables.
+         * @return None.
+         * @note Must be set before run() starts the local read loop.
+         */
+        void                                            set_client_data_transform(const ClientDataTransform& transform) noexcept { client_data_transform_ = transform; }
+
     private:
         /** @brief Final shutdown routine; idempotent and noexcept-safe. */
         void                                            finalize() noexcept;
@@ -167,6 +178,7 @@ namespace vmux {
 
         std::shared_ptr<boost::asio::ip::tcp::socket>   tx_socket_;         ///< Local TCP socket to which inbound data is forwarded.
         std::shared_ptr<Byte>                           tx_buffer_;         ///< Persistent receive buffer for the local socket read loop.
+        ClientDataTransform                             client_data_transform_; ///< Optional client->peer byte rewriting hook (HTTP proxy request rewrite).
         
         ContextPtr                                      tx_context_;        ///< ASIO execution context for the local socket operations.
         StrandPtr                                       tx_strand_;         ///< Optional strand serializing local socket callbacks.

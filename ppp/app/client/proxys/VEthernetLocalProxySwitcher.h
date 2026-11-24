@@ -82,6 +82,19 @@ namespace ppp {
                      * @param bind_port Input/output bind port.
                      * @return Address to use when creating the listener.
                      */
+                    /**
+                     * @brief Response sent to a client that arrives before the session
+                     *        is established.
+                     *
+                     * @details The base implementation returns nullptr, which closes the
+                     *          connection silently (the right behaviour for a protocol
+                     *          that cannot answer before it is greeted, such as SOCKS).
+                     *          The HTTP proxy overrides this with a 503 so that clients
+                     *          see a retryable status instead of a connection reset.
+                     *
+                     * @return Response text to send before closing, or nullptr for none.
+                     */
+                    virtual const char*                                               MyUnavailableResponse() noexcept;
                     virtual boost::asio::ip::address                                    MyLocalEndPoint(int& bind_port) noexcept = 0;
                     /**
                      * @brief Periodic maintenance callback used to age idle connections.

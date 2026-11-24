@@ -4,6 +4,7 @@
 #include <ppp/app/client/VEthernetNetworkTcpipConnection.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxyConnection.h>
+#include <ppp/app/client/proxys/HttpProxyRequestRewriter.h>
 #include <ppp/diagnostics/Error.h>
 
 #include <ppp/IDisposable.h>
@@ -284,6 +285,9 @@ namespace ppp {
                     int pushfd_array_size = protocol_array_size - headers_endoffset;
                     
                     bool handshaked = this->ProcessHandshaked(protocol_root, protocol_array_ptr.get() + headers_endoffset, pushfd_array_size, y);
+                    if (handshaked) {
+                        this->InstallRequestRewriter(protocol_root, pushfd_array_size);
+                    }
                     if (!handshaked && NULLPTR != protocol_root && !protocol_root->TunnelMode) {
                         ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::HttpProxyApplyFailed);
                         (void)SendHttpProxyErrorResponse(socket_, protocol_root->Protocol, protocol_root->Version, 502, "Bad Gateway", y);
@@ -378,6 +382,61 @@ namespace ppp {
                  * @return True when upstream connection is established.
                  * @note Returns false when protocolRoot is null.
                  */
+                /**
+                 * @brief Installs the request-target normaliser on the active bridge.
+                 * @param protocolRoot First request metadata used to seed the state machine.
+                 * @param body_bytes_forwarded Body bytes already forwarded with that request.
+                 * @return None.
+                 * @note Only the transmission tunnel and rinetd bridges expose the hook.
+                 */
+                void VEthernetHttpProxyConnection::InstallRequestRewriter(const std::shared_ptr<ProtocolRoot>& protocolRoot, int body_bytes_forwarded) noexcept {
+                    if (NULLPTR == protocolRoot || protocolRoot->TunnelMode) {
+                        return;
+                    }
+
+                    int content_length = -1;
+                    bool chunked = false;
+                    bool upgrade = false;
+                    for (ProtocolRoot::HeaderCollection::iterator tail = protocolRoot->Headers.begin(), endl = protocolRoot->Headers.end(); tail != endl; ++tail) {
+                        ppp::string name = tail->first;
+                        for (std::size_t i = 0, l = name.size(); i < l; ++i) {
+                            char c = name[i];
+                            if (c >= 'A' && c <= 'Z') {
+                                name[i] = static_cast<char>(c - 'A' + 'a');
+                            }
+                        }
+
+                        if (name == "content-length") {
+                            content_length = atoi(tail->second.data());
+                        }
+                        elif(name == "transfer-encoding") {
+                            if (tail->second.find("hunked") != ppp::string::npos) {
+                                chunked = true;
+                            }
+                        }
+                        elif(name == "connection" || name == "proxy-connection") {
+                            if (tail->second.find("pgrade") != ppp::string::npos) {
+                                upgrade = true;
+                            }
+                        }
+                    }
+
+                    std::shared_ptr<HttpProxyRequestRewriter> captured = make_shared_object<HttpProxyRequestRewriter>();
+                    if (NULLPTR == captured) {
+                        return;
+                    }
+
+                    captured->Seed(content_length, body_bytes_forwarded, chunked, upgrade);
+                    this->request_rewriter_ = captured;
+
+                    ClientDataTransform transform =
+                        [captured](const void* data, int size, ppp::string& out) noexcept {
+                            captured->Consume(data, size, out);
+                        };
+
+                    SetClientPeerDataTransform(transform);
+                }
+
                 bool VEthernetHttpProxyConnection::ConnectBridgeToPeer(const std::shared_ptr<ProtocolRoot>& protocolRoot, YieldContext& y) noexcept {
                     if (NULLPTR == protocolRoot) {
                         return ppp::diagnostics::SetLastError(ppp::diagnostics::ErrorCode::HttpRequestFailed);

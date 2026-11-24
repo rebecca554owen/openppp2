@@ -975,10 +975,53 @@ namespace vmux {
                                         close();
                                         return false;
                                     };
+                            // Optional client->peer rewriting hook (HTTP proxy request-target
+                            // normalisation on a reused connection). Unset keeps the verbatim path.
+                            std::shared_ptr<Byte> rewritten_frame;
+                            int push_size = static_cast<int>(bytes_transferred);
+                            ClientDataTransform transform = client_data_transform_;
+                            if (transform) {
+                                ppp::string rewritten;
+                                transform(frame.get() + sizeof(vmux_net::vmux_hdr), push_size, rewritten);
+
+                                int rewritten_size = static_cast<int>(rewritten.size());
+                                if (rewritten_size < 1) {
+                                    // The hook buffered a partial protocol unit; keep reading.
+                                    if (forward_to_rx_socket()) {
+                                        return true;
+                                    }
+                                    close();
+                                    return false;
+                                }
+
+                                // Size the destination to the actual rewritten length, not to
+                                // the vmux frame cap: the rewriter can emit more than it
+                                // consumed (an 8 KiB header line is relayed verbatim in
+                                // Passthrough), and a fixed max_buffers_size buffer would
+                                // then be memcpy'd past its end.
+                                rewritten_frame = mux_->make_byte_array(static_cast<int>(sizeof(vmux_net::vmux_hdr)) + rewritten_size);
+                                if (NULLPTR == rewritten_frame) {
+                                    close();
+                                    return false;
+                                }
+
+                                ::memcpy(rewritten_frame.get() + sizeof(vmux_net::vmux_hdr), rewritten.data(), rewritten_size);
+                                push_size = rewritten_size;
+                            }
                             // A read that filled less than half its buffer is copied into
                             // an exact-size frame: the retransmit window counts frame
                             // length, so keeping a mostly empty max-size buffer would let
                             // real memory exceed the window by up to 16x.
+                            if (NULLPTR != rewritten_frame) {
+                                // The rewritten bytes are already framed, so they go out
+                                // through the frame path with their own length.
+                                bool forwarding = mux_->post_frame(vmux_net::cmd_push, rewritten_frame, push_size,
+                                    connection_id_, status_.tx_acceleration_, on_posted);
+                                if (forwarding) {
+                                    return true;
+                                }
+                            }
+
                             const int payload = static_cast<int>(bytes_transferred);
                             const bool zero_copy = ppp::app::mux::MuxPushIsZeroCopy(payload, read_length, vmux_net::zero_copy_min_payload);
                             bool forwarding = zero_copy

@@ -897,6 +897,10 @@ openppp2_add_cpp_test(dns_wire_validation_test SOURCES dns_wire_validation_test.
 openppp2_add_cpp_test(base64_test SOURCES base64_test.cpp "${OPENPPP2_ROOT}/common/base64/base64.cpp")
 # The HTTP proxy must rewrite the request target of every request on a reused
 # connection, and must answer a client that arrives before the tunnel is up.
+openppp2_add_cpp_test(http_proxy_request_rewriter_test SOURCES http_proxy_request_rewriter_test.cpp)
+target_link_libraries(http_proxy_request_rewriter_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+openppp2_add_cpp_test(http_proxy_unavailable_response_test SOURCES http_proxy_unavailable_response_test.cpp)
+target_link_libraries(http_proxy_unavailable_response_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 openppp2_add_cpp_test(sysctl_validation_test SOURCES sysctl_validation_test.cpp)
 openppp2_add_cpp_test(dns_redirect_plan_test SOURCES
     dns_redirect_plan_test.cpp
@@ -1096,6 +1100,8 @@ openppp2_add_cpp_test(icmp_path_mtu_test SOURCES
     "${OPENPPP2_ROOT}/ppp/diagnostics/Error.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/ErrorHandler.cpp"
     "${OPENPPP2_ROOT}/ppp/diagnostics/Telemetry.cpp")
+# A warning that changes the effective runtime must survive a disabled telemetry
+# backend; the contract is the level numbering plus a safe default-path call.
 # The client's downstream UDP fast path must emit the same bytes as the frame-object path.
 openppp2_add_cpp_test(udp_frame_ipv4_packet_test SOURCES
     udp_frame_ipv4_packet_test.cpp

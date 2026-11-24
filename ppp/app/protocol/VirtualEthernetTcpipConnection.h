@@ -63,6 +63,17 @@ namespace ppp {
                     const std::shared_ptr<Byte>&)>                              DirectReadHandler;
                 typedef ppp::function<void(XtcpDirectCloseReason)> DirectCloseHandler;
                 typedef ppp::function<void()>                                  DirectWritableHandler;
+                /**
+                 * @brief Optional hook rewriting client->peer bytes before they reach the
+                 *        transmission. The HTTP proxy uses it to normalise request targets
+                 *        on a reused connection (RFC 7230 5.3.2). Unset = verbatim path.
+                 * @param data Bytes just read from the client socket.
+                 * @param size Number of bytes.
+                 * @param output Receives the bytes to forward; leave empty to buffer a
+                 *               partially received protocol unit and keep reading.
+                 * @return None.
+                 */
+                typedef ppp::function<void(const void*, int, ppp::string&)>     ClientDataTransform;
 
 #if defined(_LINUX)
             public:
@@ -221,6 +232,13 @@ namespace ppp {
                 void                                                            SetDirectQueueTelemetry(
                     const std::shared_ptr<ppp::app::runtime::XtcpDirectQueueTelemetry>& telemetry) noexcept;
                 void                                                            CloseDirectSend() noexcept;
+                /**
+                 * @brief Installs the optional client->peer byte rewriting hook.
+                 * @param transform Callback invoked for every client read; unset disables.
+                 * @return None.
+                 * @note Must be set before the socket->transmission pump starts.
+                 */
+                void                                                            SetClientDataTransform(const ClientDataTransform& transform) noexcept { client_data_transform_ = transform; }
 
 #if defined(_IPHONE) || defined(IPHONE)
                 /**
@@ -351,6 +369,7 @@ namespace ppp {
                 std::atomic<bool>                                               disposed_ = { false }; ///< True after `Finalize()` has been invoked; guards idempotent cleanup.
                 std::atomic<bool>                                               connected_ = { false }; ///< True once a successful handshake has been completed.
                 AppConfigurationPtr                                             configuration_; ///< Runtime configuration shared with the owning context.
+                ClientDataTransform                                             client_data_transform_; ///< Optional client->peer byte rewriting hook (HTTP proxy request rewrite).
                 ContextPtr                                                      context_;       ///< Asio IO context driving async operations for this connection.
                 StrandPtr                                                       strand_;        ///< Serialized executor guaranteeing single-threaded callback ordering.
                 Int128                                                          id_        = 0; ///< Logical connection identifier assigned at construction time.

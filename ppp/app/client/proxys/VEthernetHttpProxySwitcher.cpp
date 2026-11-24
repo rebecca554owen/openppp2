@@ -1,5 +1,6 @@
 #include <ppp/app/client/proxys/VEthernetHttpProxySwitcher.h>
 #include <ppp/app/client/proxys/VEthernetHttpProxyConnection.h>
+#include <ppp/app/client/proxys/HttpProxyUnavailableResponse.h>
 #include <ppp/app/client/VEthernetExchanger.h>
 #include <ppp/configurations/AppConfiguration.h>
 #include <ppp/net/Ipep.h>
@@ -52,6 +53,15 @@ namespace ppp {
                  * @return Local bind IP address.
                  * @note Reads values from current application configuration.
                  */
+                /**
+                 * @brief Returns the response for a client that arrives before the
+                 *        tunnel session is established.
+                 * @return A 503 response line set.
+                 */
+                const char* VEthernetHttpProxySwitcher::MyUnavailableResponse() noexcept {
+                    return HttpProxyUnavailableResponse();
+                }
+
                 boost::asio::ip::address VEthernetHttpProxySwitcher::MyLocalEndPoint(int& bind_port) noexcept {
                     std::shared_ptr<ppp::configurations::AppConfiguration>& configuration_ = GetConfiguration();
                     bind_port = configuration_->client.http_proxy.port;

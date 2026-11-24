@@ -67,6 +67,19 @@ namespace ppp {
                     virtual boost::asio::ip::address                        MyLocalEndPoint(int& bind_port) noexcept override;
 
                     /**
+                     * @brief Returns the response for a client that arrives before the
+                     *        tunnel session is established.
+                     *
+                     * @details The HTTP proxy answers with 503 Service Unavailable so
+                     *          that a client which connected during a session rebuild
+                     *          gets a status it can retry, rather than a connection
+                     *          reset that it can only fail on.
+                     *
+                     * @return A 503 response line set, ready to be written.
+                     */
+                    virtual const char*                                               MyUnavailableResponse() noexcept override;
+
+                    /**
                      * @brief Creates a new per-client HTTP proxy connection instance.
                      *
                      * @details Called by the base class accept loop for each successfully accepted
