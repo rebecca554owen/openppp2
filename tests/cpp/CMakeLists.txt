@@ -644,6 +644,12 @@ openppp2_add_cpp_test(vmux_reliability_negotiation_test SOURCES
     vmux_reliability_negotiation_test.cpp)
 openppp2_add_cpp_test(vmux_ack_tracker_test SOURCES
     vmux_ack_tracker_test.cpp)
+# Only the sequence spaces that gained data since the last ACK are encoded,
+# and as many ACK frames as needed are sent to cover them all.  Without that,
+# a session with more flows than the per-frame block cap reports the same
+# subset forever and the remaining flows are never acknowledged.
+openppp2_add_cpp_test(vmux_ack_pending_test SOURCES
+    vmux_ack_pending_test.cpp)
 # The D11 stall watchdog: a full send queue that is still draining is a slow
 # path, not a wedged one, so the session must not be rebuilt for it.
 openppp2_add_cpp_test(vmux_backlog_watchdog_test SOURCES

@@ -180,6 +180,44 @@ public:
     }
 
     /**
+     * The backoff window of one attempt: the probe timeout doubled per
+     * attempt, then clamped to @p pto_max.
+     */
+    static constexpr std::uint64_t BackoffWindow(std::uint64_t pto,
+        std::uint32_t attempts, std::uint64_t pto_max) noexcept {
+        // Saturating shift-left: pto << shift, clamped to UINT64_MAX.
+        const std::uint32_t shift = attempts > 5 ? 5 : attempts;
+        std::uint64_t window = pto;
+        for (std::uint32_t s = 0; s < shift; ++s) {
+            if (window > (UINT64_MAX >> 1)) {
+                window = UINT64_MAX;
+                break;
+            }
+            window <<= 1;
+        }
+        return window > pto_max ? pto_max : window;
+    }
+
+    /**
+     * Total time a sender needs to exhaust its budget: the sum of the backoff
+     * windows of all @p max_attempts attempts.
+     *
+     * A receiver must not declare a hole permanent before this window has
+     * passed: the sender keeps retrying with an exponential backoff, so a
+     * receiver that gives up earlier tears the direction down while the
+     * sender is still legitimately trying, which nullifies the reliability
+     * layer and turns a recoverable loss into a dead session.
+     */
+    static constexpr std::uint64_t TotalBackoffWindow(std::uint64_t pto,
+        std::uint32_t max_attempts, std::uint64_t pto_max) noexcept {
+        std::uint64_t total = 0;
+        for (std::uint32_t i = 0; i < max_attempts; ++i) {
+            total += BackoffWindow(pto, i, pto_max);
+        }
+        return total;
+    }
+
+    /**
      * Collect keys whose last (re)transmission is older than the per-entry
      * exponential-backoff PTO, oldest first, bounded by @p max_count.
      *
@@ -187,10 +225,22 @@ public:
      * shift-left (so it never overflows to zero), then clamped to @p pto_max.
      * This prevents the 8 retransmissions from firing in a flat 8*PTO burst
      * and instead follows the QUIC/RFC 6298 exponential backoff principle.
+     *
+     * A frame that already spent its attempt budget is not dead yet: it is
+     * kept alive until the fail deadline, but it is re-sent on a relaxed
+     * cadence so the peer keeps seeing the hole (and the carrier keeps getting
+     * a chance to drain) without the retransmissions themselves crowding out
+     * the bulk traffic.
+     *
+     * @param exhausted_after     Attempt budget a frame must have spent to get
+     *                            the relaxed cadence; 0 disables it.
+     * @param exhausted_backoff_ms Re-send spacing for such a frame.
      */
     void CollectExpired(std::uint64_t now, std::uint64_t base_pto,
         std::uint64_t pto_max, std::size_t max_count,
-        std::vector<std::uint64_t>& expired) const {
+        std::vector<std::uint64_t>& expired,
+        std::uint32_t exhausted_after = 0,
+        std::uint64_t exhausted_backoff_ms = 0) const {
         for (const auto& kv : entries_) {
             if (expired.size() >= max_count) {
                 break;
@@ -199,22 +249,49 @@ public:
             if (now < entry.last_sent_tick) {
                 continue;
             }
-            // Saturating shift-left: base_pto << shift, clamped to UINT64_MAX.
-            const std::uint32_t shift = entry.attempts > 5 ? 5 : entry.attempts;
-            std::uint64_t effective = base_pto;
-            for (std::uint32_t s = 0; s < shift; ++s) {
-                if (effective > (UINT64_MAX >> 1)) {
-                    effective = UINT64_MAX;
-                    break;
-                }
-                effective <<= 1;
-            }
-            if (effective > pto_max) {
-                effective = pto_max;
+            std::uint64_t effective = BackoffWindow(base_pto, entry.attempts, pto_max);
+            if (exhausted_after > 0 && entry.attempts >= exhausted_after &&
+                exhausted_backoff_ms > effective) {
+                effective = exhausted_backoff_ms;
             }
             if ((now - entry.last_sent_tick) >= effective) {
                 expired.push_back(kv.first);
             }
+        }
+    }
+
+    /**
+     * Collect keys whose retransmit attempt budget is spent AND that have
+     * been unacknowledged for at least @p min_age_ms.
+     *
+     * The age floor is what keeps a congested-but-alive carrier from being
+     * declared dead: the attempt budget is derived from the probe timeout,
+     * which on a fast path is a few hundred milliseconds, while the transport
+     * underneath may need tens of seconds of RTO backoff to deliver the
+     * frame. Failing the flow on the attempt count alone kills connections
+     * that the carrier was about to deliver.
+     */
+    void CollectExhausted(std::uint64_t now, std::uint32_t max_attempts,
+        std::uint64_t min_age_ms, std::vector<std::uint64_t>& exhausted) const {
+        if (max_attempts == 0) {
+            return;
+        }
+        for (const std::uint64_t key : order_) {
+            const auto it = entries_.find(key);
+            if (it == entries_.end()) {
+                continue;
+            }
+            const MuxRtxEntry& entry = it->second;
+            if (entry.attempts < max_attempts) {
+                continue;
+            }
+            if (now < entry.first_sent_tick) {
+                continue;
+            }
+            if ((now - entry.first_sent_tick) < min_age_ms) {
+                continue;
+            }
+            exhausted.push_back(key);
         }
     }
 
@@ -269,6 +346,24 @@ public:
                 ++it;
             }
         }
+    }
+
+    /**
+     * Drop one entry: the frame can never be acknowledged, and keeping it
+     * would hold the session's send budget hostage.
+     *
+     * @return true when an entry was removed.
+     */
+    bool Erase(std::uint64_t key) noexcept {
+        auto it = entries_.find(key);
+        if (it == entries_.end()) {
+            return false;
+        }
+        bytes_ -= static_cast<std::size_t>(it->second.length);
+        ReleaseCidBytes(KeyCid(key), static_cast<std::size_t>(it->second.length));
+        order_.erase(it->second.order);
+        entries_.erase(it);
+        return true;
     }
 
     void Clear() noexcept {

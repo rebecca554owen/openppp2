@@ -100,6 +100,23 @@ public:
     void Clear() noexcept { ranges_.clear(); }
     std::size_t size() const noexcept { return ranges_.size(); }
 
+    /**
+     * @brief Mark that this space gained a sequence since the last ACK.
+     * @details A tracker keeps its delivered set for the lifetime of the
+     *          sequence space, so a space that once received a frame is never
+     *          empty again.  An acknowledgement frame carries a bounded
+     *          number of spaces, so a session with more logical flows than
+     *          that bound would always report the same subset -- and the
+     *          remaining flows would never be acknowledged at all.  Their
+     *          frames would sit in the peer's retransmit buffer until it
+     *          declared them unrecoverable and reset the flow.
+     * @note Only spaces marked pending are encoded, and as many frames as
+     *       needed are sent to cover them all.
+     */
+    void MarkPending() noexcept { pending_ = true; }
+    bool pending() const noexcept { return pending_; }
+    void ClearPending() noexcept { pending_ = false; }
+
     /** Highest tracked sequence; 0 when empty. */
     std::uint32_t largest() const noexcept {
         return ranges_.empty() ? 0 : ranges_.back().end;
@@ -109,6 +126,7 @@ public:
 
 private:
     std::vector<MuxAckRange> ranges_;
+    bool                     pending_ = false; ///< Gained a sequence since the last ACK was sent.
 };
 
 /** One decoded ACK block: ranges for one sequence space (connection_id). */
