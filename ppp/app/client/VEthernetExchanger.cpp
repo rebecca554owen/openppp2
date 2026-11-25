@@ -1956,6 +1956,60 @@ namespace ppp {
                 }
 
                 bool noerror = transmission->HandshakeServer(y, GetId(), false);
+                if (noerror) {
+                    // The server runs the transport-auth responder on every
+                    // accepted connection, so a child carrier has to run the
+                    // initiator as well.  Otherwise the responder reads the
+                    // child's first mux frame as a transport-auth
+                    // advertisement, fails to decode it and drops the
+                    // connection, which leaves the mux without any link.
+                    const AppConfigurationPtr configuration = GetConfiguration();
+                    if (configuration && ShouldRunClientTransportAuth(
+                            transmission->GetAuthenticatedCarrierKind(),
+                            configuration->client.transport_auth.enabled,
+                            transmission->PeerSupportsTransportAuthV1(),
+                            transmission->PeerEnablesTransportAuthV1())) {
+                        static constexpr int HandshakePending = 0;
+                        static constexpr int HandshakeTimedOut = 1;
+                        static constexpr int HandshakeCompleted = 2;
+                        std::shared_ptr<std::atomic_int> handshake_state =
+                            make_shared_object<std::atomic_int>(HandshakePending);
+                        std::shared_ptr<boost::asio::steady_timer> handshake_timer =
+                            make_shared_object<boost::asio::steady_timer>(*strand);
+                        if (NULLPTR == handshake_state || NULLPTR == handshake_timer) {
+                            ppp::diagnostics::SetLastErrorCode(
+                                ppp::diagnostics::ErrorCode::MemoryAllocationFailed);
+                            noerror = false;
+                        }
+                        else {
+                            handshake_timer->expires_after(std::chrono::milliseconds(
+                                std::max<int64_t>(1, configuration->transport_auth.handshake_timeout_ms)));
+                            handshake_timer->async_wait(
+                                [transmission, handshake_state](
+                                    const boost::system::error_code& ec) noexcept {
+                                    int expected = HandshakePending;
+                                    if (ec == boost::system::errc::success &&
+                                        handshake_state->compare_exchange_strong(
+                                            expected, HandshakeTimedOut,
+                                            std::memory_order_acq_rel)) {
+                                        transmission->Dispose();
+                                    }
+                                });
+                            noerror = AuthenticatePlainTransport(transmission, y);
+                            int expected = HandshakePending;
+                            const bool handshake_timed_out =
+                                !handshake_state->compare_exchange_strong(
+                                    expected, HandshakeCompleted, std::memory_order_acq_rel) &&
+                                expected == HandshakeTimedOut;
+                            handshake_timer->cancel();
+                            if (handshake_timed_out) {
+                                noerror = false;
+                                ppp::diagnostics::SetLastErrorCode(
+                                    ppp::diagnostics::ErrorCode::SocketTimeout);
+                            }
+                        }
+                    }
+                }
                 if (noerror && (!active || active())) {
                     if (register_cancel) register_cancel({});
 #if defined(_IPHONE)
