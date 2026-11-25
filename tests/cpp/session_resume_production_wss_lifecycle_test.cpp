@@ -7,6 +7,7 @@
 #include <ppp/transmissions/IAuthenticatedCarrierBinding.h>
 #include <ppp/transmissions/IWebsocketTransmission.h>
 #include <ppp/net/asio/templates/WebSocket.h>
+#include <ppp/net/AsioCompat.h>
 
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -415,7 +416,7 @@ void CheckStalledUpgradeTimeout() {
             ok = server->HandshakeClient(y, mux) != 0;
             done = true;
             boost::system::error_code ignored;
-            watchdog.cancel(ignored);
+            ppp::asio_compat::CancelTimer(watchdog, ignored);
         }));
     const auto started = std::chrono::steady_clock::now();
     context->run();
