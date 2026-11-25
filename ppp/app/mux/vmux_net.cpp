@@ -1587,8 +1587,17 @@ namespace vmux {
         }
         else {
             // Stale/duplicate (already delivered): with reliability negotiated
-            // this is an expected retransmit duplicate — drop it silently.
+            // this is an expected retransmit duplicate. The peer retransmits
+            // precisely because it has NOT seen our acknowledgement for that
+            // frame -- the ACK was lost, or it was queued behind bulk data on
+            // a congested carrier and arrived too late. Answering the
+            // duplicate is what makes that recoverable: without it the peer
+            // keeps the frame in its retransmit buffer, retransmits it until
+            // its attempt budget runs out, and then resets the flow -- killing
+            // every unrelated transfer in flight.
             if (reliability_on_) {
+                ppp::telemetry::Count("mux.rx.compat.reack", 1);
+                reack_delivered(0, seq, now);
                 active(now);
                 linklayer_update(linklayer);
                 return true;
@@ -2232,7 +2241,15 @@ namespace vmux {
             return true;
         }
         else {
-            // Stale/duplicate (before flow_rx_next_): drop, not an error.
+            // Stale/duplicate (before flow_rx_next_): the frame was already
+            // delivered, so it is not an error. The peer is retransmitting it
+            // because our acknowledgement was lost or delayed; answer again
+            // so it can release its copy instead of burning its attempt
+            // budget and resetting the flow.
+            if (reliability_on_) {
+                ppp::telemetry::Count("mux.rx.flow.reack", 1);
+                reack_delivered(cid, seq, now);
+            }
             active(now);
             return true;
         }
@@ -2394,6 +2411,7 @@ namespace vmux {
             return; // Bound tracker growth from forged connection ids.
         }
         ack_trackers_[key_cid].Add(seq, (size_t)PPP_MUX_ACK_MAX_RANGES);
+        ack_trackers_[key_cid].MarkPending();
         if (ack_pending_count_ == 0) {
             ack_first_pending_tick_ = now;
         }
@@ -2402,69 +2420,142 @@ namespace vmux {
     }
 
     void vmux_net::maybe_send_ack(uint64_t now, bool force) noexcept {
-        if (!reliability_on_ || !base_.established_ || ack_pending_count_ == 0) {
+        if (!reliability_on_ || !base_.established_) {
+            return;
+        }
+        // A FORCED acknowledgement is sent even when nothing is pending. The
+        // pending counter only tracks frames we have just delivered; it says
+        // nothing about whether the peer still needs an answer. The peer
+        // retransmits a frame precisely because it has NOT seen our
+        // acknowledgement for it, and that answer must not wait for the
+        // delayed-ACK window: the peer is burning its attempt budget while
+        // we hold the answer back.
+        if (!force && ack_pending_count_ == 0) {
             return;
         }
         if (!force && ack_pending_count_ < 2 && (now - ack_first_pending_tick_) < ack_delay_ms_) {
             return;
         }
 
-        // ACK coalescing: if we just sent an ACK within the last half delay window,
-        // suppress this one to avoid redundant ACK bursts under high frame rates.
-        // The pending sequences are already accumulated in ack_trackers_ and will be
-        // included in the next emission, so no data is lost.
+        // ACK coalescing: an acknowledgement sent less than half a delay
+        // window ago already told the peer about everything that was pending
+        // then. Another one that soon only repeats it, so it is merged into
+        // the next acknowledgement instead of spending a control-queue slot
+        // and a carrier frame. The pending spaces stay pending and the
+        // reliability timer flushes them on its next tick, so nothing is lost.
+        //
+        // A FORCED acknowledgement is never suppressed: it answers a
+        // retransmission, and the peer is waiting for that answer.
         if (!force && ack_last_sent_tick_ > 0 &&
             (now - ack_last_sent_tick_) < std::max<uint64_t>(ack_delay_ms_ / 2, 1)) {
             return;
         }
 
-        ppp::app::mux::MuxAckBlock blocks[PPP_MUX_ACK_MAX_BLOCKS];
-        size_t block_count = 0;
-        for (const std::pair<const uint32_t, ppp::app::mux::MuxAckTracker>& kv : ack_trackers_) {
-            if (block_count >= (size_t)PPP_MUX_ACK_MAX_BLOCKS) {
-                break; // Remaining sequence spaces are carried by the next ACK.
-            }
-            if (kv.second.empty()) {
+        // Collect the sequence spaces that gained a sequence since the last
+        // acknowledgement was sent. Only those are encoded: a tracker keeps
+        // its delivered set for the lifetime of the space, so a session with
+        // more logical flows than the per-frame block cap would always report
+        // the same subset, and the remaining flows would never be
+        // acknowledged at all -- their frames would sit in the peer's
+        // retransmit buffer until it declared them unrecoverable.
+        //
+        // The state is COPIED, not referenced: posting a frame can add a
+        // sequence space, which rehashes the map and would invalidate a
+        // pointer into it.
+        struct pending_space {
+            uint32_t                         connection_id = 0;
+            uint32_t                         largest = 0;
+            std::vector<ppp::app::mux::MuxAckRange> ranges;
+        };
+        std::vector<pending_space> pending_spaces;
+        for (std::pair<const uint32_t, ppp::app::mux::MuxAckTracker>& kv : ack_trackers_) {
+            if (kv.second.empty() || !kv.second.pending()) {
                 continue;
             }
-
-            ppp::app::mux::MuxAckBlock& block = blocks[block_count++];
-            block.connection_id = kv.first;
-            block.largest = kv.second.largest();
-            block.ranges = kv.second.ranges();
+            pending_space space;
+            space.connection_id = kv.first;
+            space.largest = kv.second.largest();
+            space.ranges = kv.second.ranges();
+            pending_spaces.push_back(std::move(space));
         }
-        if (block_count == 0) {
+        if (pending_spaces.empty()) {
             ack_pending_count_ = 0;
             return;
         }
 
-        const size_t payload_cap = ppp::app::mux::MuxAckFrameMaxSize(
-            (size_t)PPP_MUX_ACK_MAX_BLOCKS, (size_t)PPP_MUX_ACK_MAX_RANGES);
-        std::shared_ptr<Byte> packet = make_byte_array((int)(sizeof(vmux_hdr) + payload_cap));
-        if (NULLPTR == packet) {
+        const size_t max_blocks = (size_t)PPP_MUX_ACK_MAX_BLOCKS;
+        const size_t max_ranges = (size_t)PPP_MUX_ACK_MAX_RANGES;
+        const size_t payload_cap = ppp::app::mux::MuxAckFrameMaxSize(max_blocks, max_ranges);
+
+        // More spaces than one frame can carry: send as many frames as it
+        // takes, so every space with new data is reported.
+        size_t unsent = 0;
+        for (size_t offset = 0; offset < pending_spaces.size(); offset += max_blocks) {
+            ppp::app::mux::MuxAckBlock blocks[PPP_MUX_ACK_MAX_BLOCKS];
+            size_t block_count = 0;
+            for (size_t i = offset; i < pending_spaces.size() && block_count < max_blocks; ++i) {
+                ppp::app::mux::MuxAckBlock& block = blocks[block_count++];
+                block.connection_id = pending_spaces[i].connection_id;
+                block.largest = pending_spaces[i].largest;
+                block.ranges = pending_spaces[i].ranges;
+            }
+
+            std::shared_ptr<Byte> packet = make_byte_array((int)(sizeof(vmux_hdr) + payload_cap));
+            if (NULLPTR == packet) {
+                return;
+            }
+
+            const size_t payload_len = ppp::app::mux::EncodeMuxAckFrame(
+                blocks, block_count, packet.get() + sizeof(vmux_hdr), payload_cap, max_ranges);
+            if (payload_len == 0) {
+                return;
+            }
+
+            vmux_hdr* h = (vmux_hdr*)packet.get();
+            h->cmd = cmd_ack;
+            h->connection_id = htonl(0);
+            // Best-effort: ACK frames are periodic and cumulative, so a queueing
+            // failure must not tear the session down (post() would close_exec).
+            PostInternalAsynchronousCallback null_ac;
+            // Stamp the attempt even on failure so a stuck queue cannot make every
+            // inbound frame rebuild and retry the full ACK.
+            ack_last_sent_tick_ = now;
+            if (post_internal(packet, (int)(sizeof(vmux_hdr) + payload_len), false, null_ac)) {
+                ppp::telemetry::Count("mux.ack.send", 1);
+                // The spaces carried by this frame are reported now; the next
+                // acknowledgement only needs the ones that gain a sequence
+                // after this point.
+                for (size_t i = offset; i < offset + block_count && i < pending_spaces.size(); ++i) {
+                    const auto it = ack_trackers_.find(pending_spaces[i].connection_id);
+                    if (it != ack_trackers_.end()) {
+                        it->second.ClearPending();
+                    }
+                }
+            }
+            else {
+                // The frame could not be queued: the spaces it carried still
+                // need an answer, so they stay pending.
+                unsent += block_count;
+            }
+        }
+        ack_pending_count_ = (uint32_t)unsent;
+    }
+
+    void vmux_net::reack_delivered(uint32_t connection_id, uint32_t seq, uint64_t now) noexcept {
+        if (!reliability_on_) {
             return;
         }
 
-        const size_t payload_len = ppp::app::mux::EncodeMuxAckFrame(
-            blocks, block_count, packet.get() + sizeof(vmux_hdr), payload_cap, (size_t)PPP_MUX_ACK_MAX_RANGES);
-        if (payload_len == 0) {
-            return;
-        }
-
-        vmux_hdr* h = (vmux_hdr*)packet.get();
-        h->cmd = cmd_ack;
-        h->connection_id = htonl(0);
-
-        // Best-effort: ACK frames are periodic and cumulative, so a queueing
-        // failure must not tear the session down (post() would close_exec).
-        PostInternalAsynchronousCallback null_ac;
-        // Stamp the attempt even on failure so a stuck queue cannot make every
-        // inbound frame rebuild and retry the full ACK.
-        ack_last_sent_tick_ = now;
-        if (post_internal(packet, (int)(sizeof(vmux_hdr) + payload_len), false, null_ac)) {
-            ack_pending_count_ = 0;
-            ppp::telemetry::Count("mux.ack.send", 1);
-        }
+        const uint32_t key_cid = (ordering_mode_ == ordering_compat) ? 0u : connection_id;
+        // The sequence is already part of the tracker's delivered set; adding
+        // it again is idempotent and keeps the cumulative frontier correct.
+        ack_trackers_[key_cid].Add(seq, (size_t)PPP_MUX_ACK_MAX_RANGES);
+        ack_trackers_[key_cid].MarkPending();
+        ppp::telemetry::Count("mux.ack.reack", 1);
+        // The peer is waiting for exactly this answer, so it must not wait for
+        // the delayed-ACK window.
+        ack_pending_count_++;
+        maybe_send_ack(now, true);
     }
 
     void vmux_net::packet_input_ack(Byte* buffer, int buffer_size, uint64_t now) noexcept {
@@ -2831,7 +2922,34 @@ namespace vmux {
     void vmux_net::release_flow_reliability_state(uint32_t connection_id) noexcept {
         if (ordering_mode_ == ordering_flow_v2) {
             rtx_.EraseCid(connection_id);
-            ack_trackers_.erase(connection_id);
+            // The tracker for this cid may still hold acknowledgements that
+            // were QUEUED but never flushed: the delayed-ACK window is short
+            // (10ms) and this runs in the very tick that delivered the frame.
+            // Erasing the tracker now throws those acknowledgements away -- the
+            // peer never learns that the frames were delivered, keeps
+            // retransmitting them until its attempt budget runs out, and then
+            // resets the flow. The lost ACK stream takes the whole transfer
+            // with it, because the peer's remaining frames are never
+            // acknowledged either.
+            //
+            // Flush first, erase second. The recorded DSNs were DELIVERED (flow
+            // v2 acknowledges on delivery, never on arrival), so telling the
+            // peer about them is correct even when the flow is being failed.
+            if (!ack_trackers_.empty()) {
+                maybe_send_ack(now_tick(), true);
+            }
+            // Erase the tracker only when its acknowledgement actually went
+            // out: a queued-but-unsent acknowledgement would be dropped
+            // together with the tracker and never retried, so the peer would
+            // keep retransmitting frames we already delivered. A tracker that
+            // is still pending stays in the map and the periodic
+            // acknowledgement carries it.
+            {
+                const auto it = ack_trackers_.find(connection_id);
+                if (it != ack_trackers_.end() && !it->second.pending()) {
+                    ack_trackers_.erase(it);
+                }
+            }
         }
         if (!fec_on_) {
             return;

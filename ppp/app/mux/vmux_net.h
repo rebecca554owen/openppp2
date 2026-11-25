@@ -621,6 +621,20 @@ namespace vmux {
         void                                                                        note_ack_pending(uint32_t connection_id, uint32_t seq, uint64_t now) noexcept;
         /** @brief Emit a cmd_ack frame when the delayed-ACK policy says so (strand-affine). */
         void                                                                        maybe_send_ack(uint64_t now, bool force) noexcept;
+        /**
+         * @brief Answer a frame the peer retransmitted because it never saw our ACK.
+         * @details A retransmission means the peer has NOT seen our acknowledgement
+         *          for that frame -- the ACK was lost, or it was queued behind bulk
+         *          data on a congested carrier and arrived too late.  Answering the
+         *          duplicate is what makes that recoverable: without it the peer
+         *          keeps the frame in its retransmit buffer, retransmits it until
+         *          its attempt budget runs out, and then resets the flow -- killing
+         *          every unrelated transfer in flight.
+         * @param connection_id Flow whose delivered frame was retransmitted.
+         * @param seq           Sequence of the retransmitted frame.
+         * @param now           Monotonic tick in milliseconds.
+         */
+        void                                                                        reack_delivered(uint32_t connection_id, uint32_t seq, uint64_t now) noexcept;
         /** @brief Process an inbound cmd_ack payload: release acked frames, drive fast retransmit. */
         void                                                                        packet_input_ack(Byte* buffer, int buffer_size, uint64_t now) noexcept;
         /** @brief Process an inbound cmd_fec payload: cache the group, attempt single-loss recovery. */
