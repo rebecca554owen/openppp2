@@ -572,6 +572,9 @@ namespace vmux {
 
             IMuxTransportPtr& connection = linklayer->connection;
             if (NULLPTR != connection) {
+                // Same reason as in on_link_exit(): drain the local receive queue
+                // before the socket closes so the peer sees FIN, not RST.
+                drain_carrier_receive(connection);
                 connection->Dispose();
             }
         }
@@ -632,6 +635,34 @@ namespace vmux {
             }
         }
         return live;
+    }
+
+    /**
+     * @brief Drains the carrier's local receive queue before it is closed.
+     *
+     * @details A socket that still holds unread bytes at close() time makes the
+     *          kernel emit RST instead of FIN.  The peer then reports the carrier
+     *          as failed, discards the bytes it had not read yet and tears the
+     *          whole mux session down -- even when the carrier was closing after a
+     *          perfectly normal end of stream.  Draining the unread bytes first
+     *          lets close() emit FIN, so the peer observes a clean EOF.
+     *
+     * @param connection Carrier transport to drain.
+     * @return None.
+     * @note Only bytes this side received and no longer needs are discarded; the
+     *       send direction is untouched.
+     */
+    void vmux_net::drain_carrier_receive(const IMuxTransportPtr& connection) noexcept {
+        if (NULLPTR == connection) {
+            return;
+        }
+        ITransmissionPtr transmission = connection->GetTransmission();
+        if (NULLPTR == transmission) {
+            return;
+        }
+        if (transmission->DrainReceive()) {
+            ppp::telemetry::Count("mux.link.drain_receive", 1);
+        }
     }
 
     bool vmux_net::link_has_byte_credit(const vmux_linklayer_ptr& linklayer, int packet_length) noexcept {
@@ -753,6 +784,11 @@ namespace vmux {
         remove_linklayer(linklayer);
         rx_forget_paused_link(linklayer);
         if (NULLPTR != linklayer && NULLPTR != linklayer->connection) {
+            // Drain the receive queue first: a carrier that closes with
+            // unread bytes queued makes the kernel emit RST, and the peer then
+            // treats a normal end of stream as a failure and tears the whole
+            // session down.
+            drain_carrier_receive(linklayer->connection);
             linklayer->connection->Dispose();
         }
 
@@ -3193,6 +3229,38 @@ namespace vmux {
         }
 
         return skt;
+    }
+
+    /**
+     * @brief Releases a connection and posts its end-of-stream frame.
+     * @details See the declaration for why the per-flow send DSN has to
+     *          survive the release of the flow.
+     */
+    bool vmux_net::release_connection_and_post_fin(uint32_t connection_id, vmux_skt* refer_pointer) noexcept {
+        // Carry the per-flow send DSN across the release: the FIN has to
+        // continue the DSN space of its flow, not restart it.
+        uint32_t saved_dsn = 0;
+        bool has_dsn = false;
+        auto dsn = tx_flow_seq_.find(connection_id);
+        if (dsn != tx_flow_seq_.end()) {
+            saved_dsn = dsn->second;
+            has_dsn = true;
+        }
+
+        release_connection(connection_id, refer_pointer);
+
+        if (has_dsn) {
+            tx_flow_seq_[connection_id] = saved_dsn;
+        }
+
+        const bool posted = post(cmd_fin, NULLPTR, 0, connection_id);
+
+        // The DSN of the FIN is baked into its header by now, and a write
+        // that follows the FIN is refused, so no further frame can join
+        // this flow: the counter is not needed any more.
+        tx_flow_seq_.erase(connection_id);
+
+        return posted;
     }
 
     /**

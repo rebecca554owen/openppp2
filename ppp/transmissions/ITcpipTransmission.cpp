@@ -15,6 +15,15 @@
 #include <ppp/coroutines/asio/asio.h>
 #include <ppp/coroutines/YieldContext.h>
 
+#include <cerrno>
+
+#if defined(_WIN32)
+#include <winsock2.h>
+#else
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 using ppp::net::Socket;
 using ppp::net::IPEndPoint;
 
@@ -172,6 +181,76 @@ namespace ppp {
             ppp::telemetry::Log(Level::kInfo, "tcpip", "shutdown send failed role=%s ec=%d msg=%s",
                 TcpTransmissionRoleName(role_), ec.value(), ec.message().c_str());
             return false;
+        }
+
+        bool ITcpipTransmission::DrainReceive() noexcept {
+            std::shared_ptr<boost::asio::ip::tcp::socket> socket = std::atomic_load(&socket_);
+            if (!socket || !socket->is_open()) {
+                return false;
+            }
+
+            // Read the kernel receive buffer empty WITHOUT touching the socket's
+            // stream state: the carrier's own read path owns the byte stream, and
+            // these bytes are the ones this side no longer needs.  Leaving them
+            // queued is what makes close() emit RST instead of FIN, and the peer
+            // then treats a normal end of stream as a failure and tears the whole
+            // mux session down.
+            //
+            // shutdown(SHUT_RD) is NOT a substitute: it discards the buffered
+            // bytes but leaves the connection in a state where close() still emits
+            // RST.  The queue has to be read empty.
+#if defined(_WIN32)
+            const SOCKET fd = socket->native_handle();
+            if (INVALID_SOCKET == fd) {
+                return false;
+            }
+#else
+            const int fd = static_cast<int>(socket->native_handle());
+            if (fd < 0) {
+                return false;
+            }
+#endif
+
+            char scratch[4096];
+            size_t drained = 0;
+            for (;;) {
+#if defined(_WIN32)
+                // Winsock has no MSG_DONTWAIT; ask how much is queued and read
+                // exactly that much, so the socket never blocks here.
+                u_long queued = 0;
+                if (0 != ::ioctlsocket(fd, FIONREAD, &queued)) {
+                    break;
+                }
+                if (0 == queued) {
+                    break;
+                }
+                const int want = static_cast<int>(queued < sizeof(scratch) ? queued : sizeof(scratch));
+                const int n = ::recv(fd, scratch, want, 0);
+#else
+                const ssize_t n = ::recv(fd, scratch, sizeof(scratch), MSG_DONTWAIT);
+#endif
+                if (n > 0) {
+                    drained += static_cast<size_t>(n);
+                    continue;
+                }
+                if (n == 0) {
+                    // Peer FIN observed while draining: the stream is finished.
+                    break;
+                }
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    break;  // Queue is empty.
+                }
+                if (errno == EINTR) {
+                    continue;
+                }
+                // The socket is gone (reset by the peer): nothing left to drain.
+                break;
+            }
+            if (drained > 0) {
+                ppp::telemetry::Count("tcpip.drain_receive.bytes", (int64_t)drained);
+            }
+            ppp::telemetry::Count("tcpip.drain_receive", 1);
+            return true;
         }
 
         bool ITcpipTransmission::IsReceiveClosed() const noexcept {

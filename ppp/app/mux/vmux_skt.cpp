@@ -77,9 +77,16 @@ namespace vmux {
             event(this, false);
         }
 
-        mux_->release_connection(connection_id_, this);
         if (fin) {
-            mux_->post(vmux_net::cmd_fin, NULLPTR, 0, connection_id_);
+            // The FIN has to continue the DSN space of its flow, so the
+            // release and the FIN are done in one step: releasing first
+            // erased the per-flow send DSN counter and the FIN restarted the
+            // DSN at 1, which the flow v2 receiver drops as a stale DSN --
+            // the peer then never sees the end of the stream.
+            mux_->release_connection_and_post_fin(connection_id_, this);
+        }
+        else {
+            mux_->release_connection(connection_id_, this);
         }
 
         if (NULLPTR != tx_socket) {

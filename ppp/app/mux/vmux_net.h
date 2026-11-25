@@ -555,6 +555,21 @@ namespace vmux {
         vmux_skt_ptr                                                                get_connection(uint32_t connection_id) noexcept;
         /** @brief Remove and return connection when pointer identity matches. */
         vmux_skt_ptr                                                                release_connection(uint32_t connection_id, vmux_skt* refer_pointer) noexcept;
+        /**
+         * @brief Releases a connection and posts its end-of-stream frame.
+         * @details The FIN must carry the next DSN of the flow's send sequence
+         *          space: the flow v2 receiver delivers the frames of a flow
+         *          strictly in DSN order and silently drops a stale DSN as a
+         *          duplicate, so a FIN whose DSN restarted at 1 is discarded
+         *          and the peer never observes the end of the stream.
+         *          release_connection() erases the per-flow send DSN counter,
+         *          so the counter is carried across the release and dropped
+         *          once the FIN has been queued. The frames that were still
+         *          queued for the flow keep the DSNs they were given, so a
+         *          truncated stream shows up at the peer as a DSN gap instead
+         *          of a clean end of stream.
+         */
+        bool                                                                        release_connection_and_post_fin(uint32_t connection_id, vmux_skt* refer_pointer) noexcept;
 
         /** @brief Insert or process out-of-order inbound packet (zero-copy variant when owner is provided). */
         bool                                                                        packet_input_unorder(const vmux_linklayer_ptr& linklayer, vmux_hdr* h, int length, uint64_t now, const std::shared_ptr<Byte>& owner = NULLPTR) noexcept;
@@ -743,6 +758,8 @@ namespace vmux {
         void                                                                        on_link_exit(const vmux_linklayer_ptr& linklayer, const char* reason) noexcept;
         /** @brief Count handshake-complete non-retiring carriers (strand-affine). */
         size_t                                                                      count_live_carriers(const vmux_linklayer_ptr& except = NULLPTR) const noexcept;
+        /** @brief Drains the carrier's local receive queue before it is closed, so the close emits FIN and not RST. */
+        void                                                                        drain_carrier_receive(const IMuxTransportPtr& connection) noexcept;
         /** @brief True when the link still has room under the per-link byte high-water. */
         static bool                                                                 link_has_byte_credit(const vmux_linklayer_ptr& linklayer, int packet_length) noexcept;
         /** @brief Enqueue one data frame into the per-flow DRR queue (strand-affine). @return false when the per-flow cap rejected it (never silently dropped). */
