@@ -32,7 +32,7 @@ jobs:
       matrix: ${{ fromJSON(github.event_name == 'pull_request' && '{"include":[{"abi":"arm64-v8a","ppp_abi":"aarch64"},{"abi":"x86_64","ppp_abi":"x64"}]}' || '{"include":[{"abi":"arm64-v8a","ppp_abi":"aarch64"},{"abi":"armeabi-v7a","ppp_abi":"armv7a"},{"abi":"x86","ppp_abi":"x86"},{"abi":"x86_64","ppp_abi":"x64"}]}') }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # One cache entry per dependency, so bumping one version leaves the others
       # alone instead of refetching all of them. Keys are exact-match only on
@@ -114,7 +114,7 @@ jobs:
           zip -r "$ARTIFACT" libopenppp2.so
           mv "$ARTIFACT" ../../
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.ARTIFACT }}
           path: bin/${{ env.ARTIFACT }}
@@ -129,10 +129,10 @@ jobs:
     needs: build
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download x86_64 native library
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: openppp2-android-x86_64.zip
           path: so-artifact
@@ -144,7 +144,7 @@ jobs:
             -d android/android/app/src/main/jniLibs/x86_64
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -204,7 +204,7 @@ jobs:
 
       - name: Upload emulator evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-p2p-protect-device-evidence
           path: |
@@ -220,10 +220,10 @@ jobs:
     needs: build
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download all .so artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: so-artifacts
           pattern: openppp2-android-*.zip
@@ -239,7 +239,7 @@ jobs:
           find android/android/app/src/main/jniLibs -type f
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -299,7 +299,7 @@ jobs:
 
       - name: Upload signed APK
         if: steps.signing.outputs.signed == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openppp2-android-signed-apk
           path: android/build/app/outputs/flutter-apk/app-release.apk
