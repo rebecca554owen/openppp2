@@ -189,8 +189,16 @@ int main() {
         //    paths, so a dead flow cannot keep burning the retransmit budget.
         const std::string release_body = FunctionBody(net, "vmux_net::release_connection(");
         Require(!release_body.empty(), "release_connection must exist");
-        Require(release_body.find("release_flow_reliability_state(connection_id)") != std::string::npos,
-                "release_connection must release the retained frames of the flow");
+        Require(release_body.find("release_flow_reliability_state(connection_id") != std::string::npos,
+                "release_connection must release the reliability state of the flow");
+
+        // The queued frames of the flow are NOT dropped: their sequence numbers
+        // were spent when they were queued, so dropping them leaves a hole in
+        // the peer's sequence space and the peer's gap timeout resets the flow.
+        Require(release_body.find("keep_frames") != std::string::npos,
+                "release_connection must keep the queued frames of the flow");
+        Require(release_body.find("tx_flows_.erase") == std::string::npos,
+                "release_connection must not drop the queued frames of the flow");
 
         const std::string fail_body = FunctionBody(net, "vmux_net::fail_flow(");
         Require(!fail_body.empty(), "fail_flow must exist");

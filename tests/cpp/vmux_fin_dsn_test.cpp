@@ -158,6 +158,31 @@ struct vmux_net_test_access {
         });
     }
 
+    /** Every frame that is queued for the flow, in queue order. */
+    static std::vector<std::vector<std::uint8_t>> QueuedFrames(vmux_net& mux, std::uint32_t connection_id) {
+        return RunOnStrand(mux, [&]() {
+            std::vector<std::vector<std::uint8_t>> out;
+            auto it = mux.tx_flows_.find(connection_id);
+            if (it == mux.tx_flows_.end()) {
+                return out;
+            }
+            for (const auto& frame : it->second.queue) {
+                out.emplace_back(frame.buffer.get(), frame.buffer.get() + frame.length);
+            }
+            return out;
+        });
+    }
+
+    /** The end-of-stream frame of the flow, if it is queued. */
+    static std::vector<std::uint8_t> FindQueuedFin(vmux_net& mux, std::uint32_t connection_id) {
+        for (const auto& frame : QueuedFrames(mux, connection_id)) {
+            if (FrameIsFin(frame)) {
+                return frame;
+            }
+        }
+        return std::vector<std::uint8_t>();
+    }
+
     /** Build a push frame the way the sender would put it on the wire. */
     static std::vector<std::uint8_t> MakePushFrame(std::uint32_t connection_id, std::uint32_t dsn, int payload_len) {
         std::vector<std::uint8_t> frame(sizeof(vmux_net::vmux_hdr) + static_cast<std::size_t>(payload_len));
@@ -289,12 +314,51 @@ void TestFinContinuesTheFlowDsn() {
 
     vmux::vmux_net_test_access::CloseFlow(*mux, skt);
 
-    const std::vector<std::uint8_t> fin = vmux::vmux_net_test_access::TakeQueuedFrame(*mux, cid);
+    // The close does not drop the frames that were still queued: their DSNs
+    // were spent when they were queued and the peer waits for exactly those
+    // numbers.  The end-of-stream frame follows them.
+    const auto queued = vmux::vmux_net_test_access::QueuedFrames(*mux, cid);
+    Require(queued.size() == 4,
+            "the close must keep the three queued data frames and add the end-of-stream frame");
+
+    const std::vector<std::uint8_t> fin = vmux::vmux_net_test_access::FindQueuedFin(*mux, cid);
     Require(!fin.empty(), "the close must queue the end-of-stream frame");
-    Require(vmux::vmux_net_test_access::FrameIsFin(fin),
-            "the queued frame must be the end-of-stream frame");
     Require(vmux::vmux_net_test_access::FrameDsn(fin) == 4,
             "the FIN must carry the next DSN of the flow (4), not restart at 1");
+}
+
+// The close of a flow must not drop the frames that are still queued for it.
+//
+// The frames spent their sequence numbers when they were queued, and the peer
+// waits for exactly those numbers.  Dropping them leaves a hole in the peer's
+// sequence space: the peer delivers in order, stops at the hole and resets
+// the flow when its gap timeout expires, so a bulk transfer ends early even
+// though the sender still had the data.
+void TestCloseKeepsTheQueuedFrames() {
+    auto mux = MakeMux();
+    vmux::vmux_net_test_access::ConfigureFlowV2(*mux);
+    constexpr std::uint32_t cid = 24;
+
+    auto skt = vmux::vmux_net_test_access::InstallSkt(mux, cid);
+    Require(vmux::vmux_net_test_access::PostPush(*mux, cid, 16), "first push");
+    Require(vmux::vmux_net_test_access::PostPush(*mux, cid, 16), "second push");
+
+    vmux::vmux_net_test_access::CloseFlow(*mux, skt);
+
+    const auto queued = vmux::vmux_net_test_access::QueuedFrames(*mux, cid);
+    Require(queued.size() == 3,
+            "the close must keep the two queued data frames and add the end-of-stream frame");
+
+    // The DSN space of the flow stays contiguous: the data frames carry 1 and
+    // 2 and the end-of-stream frame carries 3, so the peer sees no hole.
+    Require(vmux::vmux_net_test_access::FrameDsn(queued[0]) == 1,
+            "the first queued data frame keeps DSN 1");
+    Require(vmux::vmux_net_test_access::FrameDsn(queued[1]) == 2,
+            "the second queued data frame keeps DSN 2");
+    Require(vmux::vmux_net_test_access::FrameIsFin(queued[2]),
+            "the end-of-stream frame must follow the queued data frames");
+    Require(vmux::vmux_net_test_access::FrameDsn(queued[2]) == 3,
+            "the end-of-stream frame must continue the DSN space of the flow");
 }
 
 // The FIN of a flow that never carried data is the first frame of its space.
@@ -328,24 +392,27 @@ void TestPeerObservesTheEndOfStream() {
     Require(vmux::vmux_net_test_access::PostPush(*sender, cid, 16), "first push");
     Require(vmux::vmux_net_test_access::PostPush(*sender, cid, 16), "second push");
 
-    // The peer has received the two data frames and waits for the third DSN.
-    Require(vmux::vmux_net_test_access::InjectFrame(
-                *peer, vmux::vmux_net_test_access::MakePushFrame(cid, 1, 16), 1),
+    // The sender closes.  The frames that were still queued are kept, so the
+    // peer receives the whole flow without a hole in its DSN space.
+    vmux::vmux_net_test_access::CloseFlow(*sender, sender_skt);
+    const auto queued = vmux::vmux_net_test_access::QueuedFrames(*sender, cid);
+    Require(queued.size() == 3,
+            "the close must keep the queued data frames and add the end-of-stream frame");
+
+    Require(vmux::vmux_net_test_access::InjectFrame(*peer, queued[0], 1),
             "peer takes DSN 1");
-    Require(vmux::vmux_net_test_access::InjectFrame(
-                *peer, vmux::vmux_net_test_access::MakePushFrame(cid, 2, 16), 2),
+    Require(vmux::vmux_net_test_access::InjectFrame(*peer, queued[1], 2),
             "peer takes DSN 2");
     Require(vmux::vmux_net_test_access::PeerNextDsn(*peer, cid) == 3,
             "the peer must expect the next DSN of the flow");
 
-    // The sender closes: the FIN must land on the DSN the peer expects.
-    vmux::vmux_net_test_access::CloseFlow(*sender, sender_skt);
-    const std::vector<std::uint8_t> fin = vmux::vmux_net_test_access::TakeQueuedFrame(*sender, cid);
-    Require(!fin.empty(), "the close must queue the end-of-stream frame");
-    Require(vmux::vmux_net_test_access::FrameDsn(fin) == 3,
+    // The FIN must land on the DSN the peer waits for.
+    Require(vmux::vmux_net_test_access::FrameIsFin(queued[2]),
+            "the last queued frame must be the end-of-stream frame");
+    Require(vmux::vmux_net_test_access::FrameDsn(queued[2]) == 3,
             "the FIN must carry the DSN the peer waits for");
 
-    Require(vmux::vmux_net_test_access::InjectFrame(*peer, fin, 3),
+    Require(vmux::vmux_net_test_access::InjectFrame(*peer, queued[2], 3),
             "the peer must accept the end-of-stream frame");
     Require(!vmux::vmux_net_test_access::PeerHasFlow(*peer, cid),
             "the peer must release the flow: the end of the stream was observed");
@@ -357,6 +424,7 @@ int main() {
     try {
         TestFinContinuesTheFlowDsn();
         TestFinOfAnEmptyFlowIsDsnOne();
+        TestCloseKeepsTheQueuedFrames();
         TestPeerObservesTheEndOfStream();
         std::cout << "vmux_fin_dsn_test: ok" << std::endl;
         return 0;

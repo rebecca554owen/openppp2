@@ -266,9 +266,22 @@ namespace vmux {
             bool                                                                    rtx_parked = false;    ///< Held off the active ring by the retransmit send window (active stays true so enqueue does not re-add it).
         };
 
+        /**
+         * @brief A flow that finished here, remembered for a while.
+         * @details The peer keeps retransmitting until it hears that the frames
+         *          were taken.  Without the record those frames look like frames
+         *          of a flow this side never had, and they are refused as
+         *          unknown instead of acknowledged.
+         */
+        struct closed_flow_record {
+            uint32_t                                                                last_dsn = 0;  ///< The last DSN delivered for the finished flow.
+            uint64_t                                                                tick = 0;      ///< When the flow was recorded.
+        };
+
         typedef vmux::unordered_map<uint32_t, vmux_skt_ptr>                         vmux_skt_map;
         typedef vmux::unordered_map<uint32_t, flow_rx_context>                      vmux_flow_map;
         typedef vmux::unordered_map<uint32_t, flow_tx_context>                      vmux_tx_flow_map;
+        typedef vmux::unordered_map<uint32_t, closed_flow_record>                   vmux_closed_flow_map;
         typedef vmux::list<uint32_t>                                                vmux_tx_active_list;
     public:
         enum mux_mode {
@@ -657,8 +670,25 @@ namespace vmux {
         void                                                                        reliability_tick() noexcept;
         /** @brief Arm the reliability maintenance timer (no-op unless negotiated). */
         void                                                                        start_reliability_timer() noexcept;
-        /** @brief Drop reliability state of one connection space (flow reset / release). */
-        void                                                                        release_flow_reliability_state(uint32_t connection_id) noexcept;
+        /** @brief Drop reliability state of one connection space (flow reset / release).
+         *  @param keep_frames Keep the retained frames of the connection space: their
+         *         sequence numbers were spent when they were queued, so dropping them
+         *         leaves a hole in the peer's sequence space. */
+        void                                                                        release_flow_reliability_state(uint32_t connection_id, bool keep_frames = false) noexcept;
+        /** @brief The sender's fail deadline: the time a frame that spent its attempt budget is still given. */
+        uint64_t                                                                    rtx_fail_after_ms() const noexcept;
+        /** @brief The gap timeout a receiver must use before declaring a hole permanent. */
+        uint64_t                                                                    effective_gap_timeout() const noexcept;
+        /** @brief Fail the connections of the frames that spent their budget AND aged past the fail deadline. */
+        void                                                                        fail_exhausted_frames(uint64_t now) noexcept;
+        /** @brief Remember a finished flow so its retransmitted frames are acknowledged instead of refused. */
+        void                                                                        remember_closed_flow(uint32_t connection_id, uint32_t last_dsn, uint64_t now) noexcept;
+        /** @brief Remember a finished flow from its receive context, if it still has one. */
+        void                                                                        remember_closed_flow_from_context(uint32_t connection_id) noexcept;
+        /** @brief Acknowledge a frame of an already finished flow with the flow's real delivery frontier. */
+        void                                                                        acknowledge_closed_flow(uint32_t connection_id, uint32_t seq, uint64_t now) noexcept;
+        /** @brief Tell the peer that this flow is gone, so it stops retransmitting into the void. */
+        void                                                                        refuse_flow(uint32_t connection_id) noexcept;
         /** @brief Fold one sent data frame into the running FEC group (strand-affine). */
         void                                                                        fec_note_sent(const std::shared_ptr<Byte>& packet, int packet_length, uint64_t now) noexcept;
         /** @brief Cache one received data frame and advance pending FEC groups (strand-affine). */
@@ -952,6 +982,9 @@ namespace vmux {
         size_t                                                                      rtx_flow_window_bytes_ = (size_t)PPP_MUX_RTX_FLOW_MAX_BYTES; ///< Per-flow retransmit send window under flow_v2 (from config, clamped to rtx_cap_bytes_).
         size_t                                                                      rtx_cap_bytes_ = (size_t)PPP_MUX_RELIABILITY_RTX_BYTES;   ///< Retransmit send window in unacked bytes (from config); the buffer itself fails only at window * PPP_MUX_RTX_HARD_FACTOR.
         uint32_t                                                                    rtx_max_attempts_ = (uint32_t)PPP_MUX_RELIABILITY_RTX_MAX_ATTEMPTS; ///< Per-frame retransmit attempt cap (from config).
+        uint64_t                                                                    rtx_fail_grace_ms_ = (uint64_t)PPP_MUX_RELIABILITY_RTX_FAIL_GRACE_MS; ///< A frame that spent its attempt budget stays unacknowledged this long before its flow is failed.
+        uint64_t                                                                    rtx_fail_margin_ms_ = (uint64_t)PPP_MUX_RELIABILITY_RTX_FAIL_MARGIN_MS; ///< The receiver's gap timeout outlasts the sender's fail deadline by this much.
+        uint64_t                                                                    rtx_exhausted_backoff_ms_ = (uint64_t)PPP_MUX_RELIABILITY_RTX_EXHAUSTED_BACKOFF_MS; ///< Re-send spacing once the attempt budget is spent.
         uint64_t                                                                    ack_delay_ms_ = (uint64_t)PPP_MUX_RELIABILITY_ACK_DELAY;  ///< Delayed-ACK wait in ms (from config).
         uint64_t                                                                    reliability_gap_timeout_ms_ = (uint64_t)PPP_MUX_RELIABILITY_GAP_TIMEOUT; ///< Gap timeout when reliability is active (from config).
         int                                                                         fec_group_k_ = PPP_MUX_FEC_GROUP;       ///< Data frames per FEC parity group (from config).
@@ -960,6 +993,7 @@ namespace vmux {
 
         ppp::app::mux::MuxRetransmitBuffer                                          rtx_;               ///< Sender-side retransmit buffer (strand-affine).
         vmux::unordered_map<uint32_t, ppp::app::mux::MuxAckTracker>                 ack_trackers_;      ///< Received-sequence trackers; cid 0 = compat global space (strand-affine).
+        vmux_closed_flow_map                                                        closed_flows_;      ///< Recently finished flows, so a retransmitted FIN is acknowledged again (strand-affine).
         uint32_t                                                                    ack_pending_count_ = 0;      ///< Reliable frames received since the last emitted ACK.
         uint64_t                                                                    ack_first_pending_tick_ = 0; ///< Tick the oldest un-ACKed frame arrived (delayed-ACK base).
         uint64_t                                                                    ack_last_sent_tick_ = 0;    ///< Tick the last ACK frame was emitted (suppresses redundant immediate ACKs).

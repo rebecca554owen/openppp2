@@ -1831,8 +1831,23 @@ namespace vmux {
      */
     void vmux_net::maybe_release_flow(uint32_t connection_id, flow_rx_context& fx) noexcept {
         if (fx.fin_seen_ && fx.flow_reorder_.empty()) {
+            // Remember the last delivered DSN before the context is gone: the
+            // peer retransmits its FIN until the acknowledgement arrives, and
+            // that acknowledgement can be lost. The retransmitted FIN must be
+            // acknowledged again, not treated as the first frame of a new flow.
+            remember_closed_flow(connection_id,
+                fx.flow_rx_next_ > 0 ? fx.flow_rx_next_ - 1 : 0, now_tick());
             flows_.erase(connection_id);
-            tx_flow_seq_.erase(connection_id);
+            // The send-side DSN counter is NOT erased here. The two directions
+            // of a flow have independent DSN spaces but share the connection
+            // id, and the receive side finishing does not mean the send side
+            // is done: the peer half-closed, we may still have a whole
+            // response to send. Erasing tx_flow_seq_ here restarts our DSN
+            // numbering at one, so the frames we send afterwards collide with
+            // the frames we already sent -- the peer sees them as duplicates
+            // and drops them, including our FIN, which then never gets
+            // acknowledged and burns its retransmit budget. The counter lives
+            // as long as the socket does (release_connection erases it).
             release_flow_reliability_state(connection_id);
         }
     }
@@ -2076,6 +2091,51 @@ namespace vmux {
         uint32_t cid = ntohl(h->connection_id);
         uint32_t seq = ntohl(h->seq);
 
+        // A flow whose FIN was already delivered can still be retransmitted by
+        // the peer: the acknowledgement of that FIN can be lost. Answer it with
+        // another acknowledgement instead of re-creating a flow context -- a new
+        // context would restart the DSN frontier at one, and the retransmitted
+        // frame would then sit in the reorder buffer forever, unanswered,
+        // until the peer's attempt budget runs out and it resets the flow.
+        {
+            const auto closed = closed_flows_.find(cid);
+            if (closed != closed_flows_.end()) {
+                if (now >= closed->second.tick &&
+                    (now - closed->second.tick) > (uint64_t)PPP_MUX_CLOSED_FLOW_LIFETIME_MS) {
+                    // Too old to be a retransmission: the connection id may
+                    // have been reused by now.
+                    closed_flows_.erase(closed);
+                }
+                else {
+                    if (seq <= closed->second.last_dsn) {
+                        ppp::telemetry::Count("mux.rx.closed_flow.reack", 1);
+                        // Acknowledge with the flow's real delivery frontier,
+                        // not with the sequence that happened to be
+                        // retransmitted: the tracker for this flow is gone, so
+                        // the frontier is the only thing that can release the
+                        // peer's whole retained set. Answering with the
+                        // retransmitted sequence alone would leave the later
+                        // frames of the flow retained on the peer side, which
+                        // then burns its attempt budget.
+                        acknowledge_closed_flow(cid, closed->second.last_dsn, now);
+                    }
+                    else {
+                        // Beyond the last delivered DSN of a closed flow: not
+                        // a retransmission. Drop it WITHOUT acknowledging, so
+                        // the peer keeps its copy of data that was never taken
+                        // here.
+                        ppp::telemetry::Count("mux.rx.closed_flow.drop", 1);
+                        // ... but tell the peer the flow is gone, so it stops
+                        // retransmitting into the void.
+                        refuse_flow(cid);
+                    }
+                    active(now);
+                    linklayer_update(linklayer);
+                    return true;
+                }
+            }
+        }
+
         flow_rx_context* fxp = try_get_or_create_flow(cid);
         if (NULLPTR == fxp) {
             active(now);
@@ -2266,10 +2326,11 @@ namespace vmux {
         }
 
         // With reliability negotiated, retransmission fills gaps first; use the
-        // wider reliability gap timeout as the final backstop.
-        const uint64_t gap_timeout = (reliability_on_ && reliability_gap_timeout_ms_ > 0)
-            ? reliability_gap_timeout_ms_
-            : flow_reorder_timeout_;
+        // wider reliability gap timeout as the final backstop. The timeout also
+        // has to outlast the peer's whole retransmit window: a receiver that
+        // gives up while the sender is still legitimately retrying tears the
+        // direction down and nullifies the reliability layer.
+        const uint64_t gap_timeout = effective_gap_timeout();
 
         // Collect first: fail_flow erases from flows_ while we iterate.
         ppp::vector<uint32_t> expired;
@@ -2300,13 +2361,7 @@ namespace vmux {
             return;
         }
 
-        uint64_t timeout = flow_reorder_timeout_;
-        if (timeout == 0) {
-            timeout = (uint64_t)PPP_MUX_FLOW_REORDER_TIMEOUT;
-        }
-        if (reliability_on_ && reliability_gap_timeout_ms_ > 0) {
-            timeout = reliability_gap_timeout_ms_;
-        }
+        const uint64_t timeout = effective_gap_timeout();
         if ((now - rx_gap_oldest_tick_) <= timeout) {
             return;
         }
@@ -2785,16 +2840,20 @@ namespace vmux {
                 continue; // Already (re)sent this turn (duplicate schedule); orphaned re-injections always go.
             }
             if (entry->attempts >= rtx_max_attempts_) {
-                // Unrecoverable frame: degrade exactly like an unrecovered gap.
-                ppp::telemetry::Count("mux.rtx.exhausted", 1);
-                const uint32_t cid = ppp::app::mux::MuxRetransmitBuffer::KeyCid(key);
-                if (ordering_mode_ == ordering_flow_v2) {
-                    fail_flow(cid, "rtx_exhausted");
+                // The attempt budget is spent, but the frame is not dead yet:
+                // it is kept alive until the fail deadline and re-sent on a
+                // relaxed cadence, so the peer keeps seeing the hole and the
+                // carrier keeps getting a chance to drain. Failing the flow on
+                // the attempt count alone kills a connection the carrier was
+                // about to deliver, and tearing the whole session down kills
+                // every unrelated transfer with it.
+                //
+                // The fail itself happens in fail_exhausted_frames(), outside
+                // this send path.
+                if ((now - entry->last_sent_tick) < rtx_exhausted_backoff_ms_) {
+                    leftover.emplace_back(key);
                     continue;
                 }
-
-                close_exec();
-                return;
             }
 
             // Pick any free link with byte credit; retransmissions keep the
@@ -2821,6 +2880,184 @@ namespace vmux {
             --burst;
         }
         rtx_pending_.swap(leftover);
+    }
+
+    uint64_t vmux_net::rtx_fail_after_ms() const noexcept {
+        // The sender's fail deadline: the attempt budget has to be spent
+        // first (which already takes at least the full backoff window), and
+        // the grace floor keeps a congested carrier from being declared dead
+        // while it is still making progress.
+        const uint64_t budget = ppp::app::mux::MuxRetransmitBuffer::TotalBackoffWindow(
+            current_pto(), rtx_max_attempts_, (uint64_t)PPP_MUX_RELIABILITY_PTO_MAX);
+        return (rtx_fail_grace_ms_ > budget) ? rtx_fail_grace_ms_ : budget;
+    }
+
+    uint64_t vmux_net::effective_gap_timeout() const noexcept {
+        uint64_t timeout = flow_reorder_timeout_;
+        if (timeout == 0) {
+            timeout = (uint64_t)PPP_MUX_FLOW_REORDER_TIMEOUT;
+        }
+        if (!reliability_on_) {
+            // Without the reliability sub-protocol the peer does not
+            // retransmit at all, so there is no retransmit window to wait
+            // for: the configured timeout stands. Raising it here would
+            // stretch every gap to tens of seconds for no reason.
+            return timeout;
+        }
+        if (reliability_gap_timeout_ms_ > 0) {
+            timeout = reliability_gap_timeout_ms_;
+        }
+
+        // The peer keeps retrying until its fail deadline, so the receiver must
+        // outlast that deadline: otherwise the receiver evicts a flow the
+        // sender is still legitimately retrying, and the two sides race. The
+        // sender failing its own flow is the clean outcome, so the receiver
+        // gets a margin on top of the sender's deadline.
+        const uint64_t peer_window = rtx_fail_after_ms() + rtx_fail_margin_ms_;
+        if (peer_window > timeout) {
+            timeout = peer_window;
+            const uint64_t ceiling = (uint64_t)PPP_MUX_RELIABILITY_GAP_TIMEOUT_MAX;
+            if (timeout > ceiling) {
+                timeout = ceiling;
+            }
+        }
+        return timeout;
+    }
+
+    void vmux_net::fail_exhausted_frames(uint64_t now) noexcept {
+        std::vector<std::uint64_t> exhausted;
+        rtx_.CollectExhausted(now, rtx_max_attempts_, rtx_fail_after_ms(), exhausted);
+        for (const std::uint64_t key : exhausted) {
+            ppp::app::mux::MuxRtxEntry* entry = rtx_.Find(key);
+            if (NULLPTR == entry) {
+                continue; // Already released by an ACK or a flow reset.
+            }
+            const uint32_t cid = ppp::app::mux::MuxRetransmitBuffer::KeyCid(key);
+            const uint32_t attempts = entry->attempts;
+            const uint64_t age = (now >= entry->first_sent_tick) ? (now - entry->first_sent_tick) : 0;
+            ppp::telemetry::Count("mux.rtx.exhausted", 1);
+            ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux",
+                "rtx exhausted: cid=%u seq=%u attempts=%u age=%llums; failing that connection only",
+                (unsigned)cid,
+                (unsigned)(key & 0xFFFFFFFFu),
+                (unsigned)attempts,
+                (unsigned long long)age);
+            if (ordering_mode_ == ordering_flow_v2) {
+                fail_flow(cid, "rtx_exhausted");
+                continue;
+            }
+
+            // compat: the retransmit space is session-global, so the key
+            // carries no connection id -- the frame header does.
+            //
+            // Tearing the whole session down over ONE unrecoverable frame is
+            // what turns a single lost acknowledgement into a dead tunnel:
+            // every unrelated transfer in the session dies with it, including
+            // a gigabyte-scale download in flight. Fail only the logical
+            // connection that owns the frame, drop the frame (it can never be
+            // acknowledged, and keeping it would hold the session's send
+            // budget hostage) and keep the session alive.
+            {
+                uint32_t frame_cid = 0;
+                if (entry->length >= (int)sizeof(vmux_hdr) && NULLPTR != entry->buffer) {
+                    const vmux_hdr* fh = (const vmux_hdr*)entry->buffer.get();
+                    frame_cid = ntohl(fh->connection_id);
+                }
+                rtx_.Erase(key);
+                vmux_skt_ptr skt = get_connection(frame_cid);
+                if (NULLPTR != skt) {
+                    // Suppress the outbound FIN: post() would consume a global
+                    // sequence number and, on failure, call close_exec() --
+                    // killing the session for a single-connection failure.
+                    skt->status_.fin_ = true;
+                    skt->close();
+                }
+                ppp::telemetry::Count("mux.rtx.exhausted.connection", 1);
+            }
+        }
+    }
+
+    void vmux_net::remember_closed_flow(uint32_t connection_id, uint32_t last_dsn, uint64_t now) noexcept {
+        if (connection_id == 0) {
+            return;
+        }
+
+        closed_flow_record record;
+        record.last_dsn = last_dsn;
+        record.tick = now;
+
+        const auto it = closed_flows_.find(connection_id);
+        if (it != closed_flows_.end()) {
+            it->second = record;
+            return;
+        }
+
+        // Bounded: evict the oldest entry when the table is full.
+        const size_t cap = (size_t)PPP_MUX_FLOW_MAX_CONTEXTS;
+        if (closed_flows_.size() >= cap) {
+            uint32_t oldest_cid = 0;
+            uint64_t oldest_tick = 0;
+            for (const auto& kv : closed_flows_) {
+                if (oldest_tick == 0 || kv.second.tick < oldest_tick) {
+                    oldest_tick = kv.second.tick;
+                    oldest_cid = kv.first;
+                }
+            }
+            if (oldest_cid != 0) {
+                closed_flows_.erase(oldest_cid);
+            }
+        }
+        closed_flows_.emplace(connection_id, record);
+    }
+
+    void vmux_net::remember_closed_flow_from_context(uint32_t connection_id) noexcept {
+        const auto it = flows_.find(connection_id);
+        if (it == flows_.end()) {
+            // No receive context: either the flow never got one here, or the
+            // FIN path already recorded it and erased the context in the same
+            // step. Nothing to add, and nothing to overwrite.
+            return;
+        }
+
+        const flow_rx_context& fx = it->second;
+        remember_closed_flow(connection_id,
+            fx.flow_rx_next_ > 0 ? fx.flow_rx_next_ - 1 : 0, now_tick());
+    }
+
+    void vmux_net::acknowledge_closed_flow(uint32_t connection_id, uint32_t seq, uint64_t now) noexcept {
+        note_ack_pending(connection_id, seq, now);
+        // Force the acknowledgement out before the tracker is dropped again: a
+        // deferred ACK would be thrown away with the tracker.
+        maybe_send_ack(now, true);
+        // The tracker is dropped only when its acknowledgement actually went
+        // out: a queued-but-unsent acknowledgement would be dropped together
+        // with the tracker and never retried, so the peer would keep
+        // retransmitting frames we already delivered.
+        {
+            const auto it = ack_trackers_.find(connection_id);
+            if (it != ack_trackers_.end() && !it->second.pending()) {
+                ack_trackers_.erase(it);
+            }
+        }
+    }
+
+    void vmux_net::refuse_flow(uint32_t connection_id) noexcept {
+        if (connection_id == 0) {
+            return; // zero is reserved for "no connection"; there is nothing to refuse
+        }
+        const Byte err = 'N'; // no such flow
+        ppp::telemetry::Count("mux.rx.flow.refused", 1);
+        // Best-effort: the refusal is a notification, not a guarantee. The
+        // control queue has a hard cap, and a refusal that does not fit must
+        // not tear the session down -- post() reports that refusal as
+        // backpressure and keeps the session running, and the peer keeps
+        // retransmitting until its own budget runs out, exactly as it did
+        // before the refusal existed.
+        if (!post(cmd_syn_ok, &err, 1, connection_id)) {
+            // The refusal could not be queued: the peer will keep
+            // retransmitting this flow until its own budget runs out.
+            ppp::diagnostics::SetLastErrorCode(ppp::diagnostics::ErrorCode::RuntimeTaskPostFailed);
+        }
     }
 
     uint64_t vmux_net::current_pto() const noexcept {
@@ -2872,7 +3109,9 @@ namespace vmux {
 
             if (rtx_pto_on_) {
                 const size_t before = rtx_pending_.size();
-                rtx_.CollectExpired(now, current_pto(), (uint64_t)PPP_MUX_RELIABILITY_PTO_MAX, (size_t)PPP_MUX_RELIABILITY_RXT_BURST, rtx_pending_);
+                rtx_.CollectExpired(now, current_pto(), (uint64_t)PPP_MUX_RELIABILITY_PTO_MAX,
+                    (size_t)PPP_MUX_RELIABILITY_RXT_BURST, rtx_pending_,
+                    rtx_max_attempts_, rtx_exhausted_backoff_ms_);
                 if (rtx_pending_.size() > before) {
                     ppp::telemetry::Count("mux.rtx.pto", 1);
                 }
@@ -2881,6 +3120,11 @@ namespace vmux {
             if (!rtx_pending_.empty()) {
                 retransmit_pending(now);
             }
+
+            // Frames that spent the attempt budget AND aged past the fail
+            // deadline: their flow is dead now. The teardown is deferred to
+            // here so it never runs inside the send path.
+            fail_exhausted_frames(now);
 
             // Send-window backstop: flows parked on the retransmit window are
             // normally resumed by the ACK that frees bytes; bytes freed by a
@@ -2919,9 +3163,11 @@ namespace vmux {
         reliability_tick(); // Arms the wait chain; work is a no-op pre-establishment.
     }
 
-    void vmux_net::release_flow_reliability_state(uint32_t connection_id) noexcept {
+    void vmux_net::release_flow_reliability_state(uint32_t connection_id, bool keep_frames) noexcept {
         if (ordering_mode_ == ordering_flow_v2) {
-            rtx_.EraseCid(connection_id);
+            if (!keep_frames) {
+                rtx_.EraseCid(connection_id);
+            }
             // The tracker for this cid may still hold acknowledgements that
             // were QUEUED but never flushed: the delayed-ACK window is short
             // (10ms) and this runs in the very tick that delivered the frame.
@@ -2951,7 +3197,7 @@ namespace vmux {
                 }
             }
         }
-        if (!fec_on_) {
+        if (!fec_on_ || keep_frames) {
             return;
         }
 
@@ -3319,29 +3565,33 @@ namespace vmux {
                 skt = tail->second;
                 if (skt.get() == refer_pointer) {
                     skts_.erase(tail);
+                    // The socket is gone on this side, so remember the flow
+                    // before its context disappears: the peer keeps
+                    // retransmitting until it hears that the frames were
+                    // taken. Without the record those frames look like frames
+                    // of a flow this side never had, and they are refused as
+                    // unknown instead of acknowledged.
+                    remember_closed_flow_from_context(connection_id);
                     flows_.erase(connection_id);          // drop per-flow receive context (flow v2)
                     tx_flow_seq_.erase(connection_id);    // drop per-flow send DSN counter (flow v2)
-                    release_flow_reliability_state(connection_id); // free RTX/FEC state for this cid
-                    // Drop any remaining TX frames for this cid (DRR fairness state).
-                    auto txit = tx_flows_.find(connection_id);
-                    if (txit != tx_flows_.end()) {
-                        if (tx_data_frames_ >= txit->second.queue.size()) {
-                            tx_data_frames_ -= txit->second.queue.size();
-                        }
-                        else {
-                            tx_data_frames_ = 0;
-                        }
-                        if (txit->second.bytes <= tx_data_bytes_total_) {
-                            tx_data_bytes_total_ -= txit->second.bytes;
-                        }
-                        else {
-                            tx_data_bytes_total_ = 0;
-                        }
-                        if (txit->second.active) {
-                            active_tx_flows_.remove(connection_id);
-                        }
-                        tx_flows_.erase(txit);
-                    }
+                    // The remaining TX frames of this flow are NOT dropped.
+                    //
+                    // Their sequence numbers were spent when they were queued
+                    // (the global sequence in compat, the per-flow DSN in flow
+                    // v2), and the peer is waiting for exactly those numbers.
+                    // Dropping the frames leaves a HOLE in the peer's sequence
+                    // space: the peer delivers in order, so it stops at the hole
+                    // and its gap timeout resets the flow -- a bulk transfer ends
+                    // early even though the data was fine.
+                    //
+                    // The frames drain through the normal path, and the flow's TX
+                    // context disappears by itself once its queue is empty.  The
+                    // retransmit state is kept for the same reason: a queued frame
+                    // that is lost in transit still has to be retransmitted.  The
+                    // frames are released when the peer acknowledges them, and a
+                    // flow that never gets that far is failed by the retransmit
+                    // budget, which releases them as well.
+                    release_flow_reliability_state(connection_id, /*keep_frames*/ true);
                 }
             }
         }
@@ -4713,6 +4963,15 @@ namespace vmux {
             if (skt_tail != skt_endl) {
                 continue;
             }
+
+            // This connection id is live again: drop the record of its previous
+            // incarnation, so the frames of the new flow are not mistaken for
+            // retransmissions of the old one. The old flow's acknowledgement
+            // tracker goes with it: a stale tracker would make the next
+            // acknowledgement for this id report the previous flow's frontier
+            // and release frames the peer never delivered.
+            closed_flows_.erase(connection_id);
+            ack_trackers_.erase(connection_id);
 
             skt = ppp::make_shared_object<vmux_skt>(self, connection_id);
             if (NULLPTR == skt) {
