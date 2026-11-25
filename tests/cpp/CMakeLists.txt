@@ -18,6 +18,13 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
 endif()
 get_filename_component(OPENPPP2_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 include("${OPENPPP2_ROOT}/cmake/Corocc.cmake")
+
+# The root CMakeLists defines this for the Apple build; this project is
+# configured standalone against the same tree, so it has to define it too:
+# boost/stacktrace refuses to compile on Apple without it.
+if(APPLE)
+    add_definitions(-DBOOST_STACKTRACE_GNU_SOURCE_NOT_REQUIRED)
+endif()
 if(ENABLE_COROCC)
     link_libraries(ppp_context_backend)
 endif()
