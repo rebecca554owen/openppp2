@@ -20,6 +20,7 @@
 #include <ppp/coroutines/YieldContext.h>
 
 #include <common/libtcpip/netstack.h>
+#include <common/chnroutes2/chnroutes2_http_framing.h>
 
 #ifdef _WIN32
 #include <io.h>
@@ -354,8 +355,22 @@ static bool http_easy_request(const std::shared_ptr<boost::asio::ip::tcp::socket
     return ppp::coroutines::asio::async_write(*socket, boost::asio::buffer(headers.data(), headers.size()), y);
 }
 
+/**
+ * @brief Reads one HTTP response and returns its body.
+ * @details The body is the route list, so it has to be framed exactly:
+ *          the status line has to be a success, the announced length has to
+ *          match the body exactly, and both the headers and the body are
+ *          bounded so a broken or hostile peer cannot exhaust the memory of
+ *          the client. A body that does not add up is refused instead of
+ *          being applied as a partial route list.
+ */
 static bool htpp_easy_response(const std::shared_ptr<boost::asio::ip::tcp::socket>& socket, ppp::string& response_text, ppp::coroutines::YieldContext& y) noexcept {
     auto timeout = http_easy_timeout(socket, HTTP_EASY_READ_TIMEOUT);
+
+    // The headers come first: the length of the body is only known once
+    // they are in.
+    ppp::string headers;
+    std::size_t header_end = ppp::string::npos;
     for (;;) {
         char buf[1400];
         int transferred_bytes = ppp::coroutines::asio::async_read_some(*socket, boost::asio::buffer(buf, sizeof(buf)), y);
@@ -363,20 +378,86 @@ static bool htpp_easy_response(const std::shared_ptr<boost::asio::ip::tcp::socke
             break;
         }
 
+        headers.append(buf, transferred_bytes);
+        header_end = headers.find("\r\n\r\n");
+        if (ppp::string::npos != header_end) {
+            break;
+        }
+        if (headers.size() > chnroutes2::kMaxHeaderBytes) {
+            return false;
+        }
+    }
+
+    if (ppp::string::npos == header_end) {
+        return false;
+    }
+
+    // The framing helpers work on a plain std::string, so they stay free of
+    // the project's own string type and can be unit tested on their own.
+    const std::string header_block(headers.data(), headers.size());
+
+    const int status_code = chnroutes2::StatusCode(header_block);
+    if (status_code < 200 || status_code > 299) {
+        // The body of an error response is not a route list.
+        return false;
+    }
+
+    long long content_length = -1;
+    if (!chnroutes2::ContentLength(header_block, content_length)) {
+        return false;
+    }
+
+    // The bytes that arrived together with the headers are already the
+    // beginning of the body.
+    response_text = headers.substr(header_end + 4);
+    if (response_text.size() > chnroutes2::kMaxBodyBytes) {
+        response_text.clear();
+        return false;
+    }
+
+    if (content_length < 0) {
+        // No length was announced: the body ends when the peer closes the
+        // connection ("Connection: close" was requested).
+        for (;;) {
+            char buf[1400];
+            int transferred_bytes = ppp::coroutines::asio::async_read_some(*socket, boost::asio::buffer(buf, sizeof(buf)), y);
+            if (transferred_bytes < 1) {
+                break;
+            }
+
+            response_text.append(buf, transferred_bytes);
+            if (response_text.size() > chnroutes2::kMaxBodyBytes) {
+                response_text.clear();
+                return false;
+            }
+        }
+
+        return !response_text.empty();
+    }
+
+    // The peer announced the length: the body has to be exactly that long.
+    // A connection that ends earlier means a truncated route list, which
+    // must not be applied as if it were complete.
+    while ((long long)response_text.size() < content_length) {
+        char buf[1400];
+        int transferred_bytes = ppp::coroutines::asio::async_read_some(*socket, boost::asio::buffer(buf, sizeof(buf)), y);
+        if (transferred_bytes < 1) {
+            response_text.clear();
+            return false;
+        }
+
         response_text.append(buf, transferred_bytes);
+        if (response_text.size() > chnroutes2::kMaxBodyBytes) {
+            response_text.clear();
+            return false;
+        }
     }
 
-    if (response_text.empty()) {
+    if ((long long)response_text.size() != content_length) {
+        response_text.clear();
         return false;
     }
 
-    int next[4];
-    int index = ppp::FindIndexOf(next, (char*)response_text.data(), response_text.size(), (char*)("\r\n\r\n"), 4); // KMP
-    if (index < 0) {
-        return false;
-    }
-
-    response_text = response_text.substr(index + 4);
     return true;
 }
 

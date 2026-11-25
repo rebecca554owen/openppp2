@@ -644,6 +644,12 @@ openppp2_add_cpp_test(vmux_reliability_negotiation_test SOURCES
     vmux_reliability_negotiation_test.cpp)
 openppp2_add_cpp_test(vmux_ack_tracker_test SOURCES
     vmux_ack_tracker_test.cpp)
+# Only the sequence spaces that gained data since the last ACK are encoded,
+# and as many ACK frames as needed are sent to cover them all.  Without that,
+# a session with more flows than the per-frame block cap reports the same
+# subset forever and the remaining flows are never acknowledged.
+openppp2_add_cpp_test(vmux_ack_pending_test SOURCES
+    vmux_ack_pending_test.cpp)
 openppp2_add_cpp_test(vmux_retransmit_buffer_test SOURCES
     vmux_retransmit_buffer_test.cpp)
 openppp2_add_cpp_test(vmux_fec_codec_test SOURCES
@@ -685,6 +691,34 @@ openppp2_add_cpp_test(vmux_qa001_ack_malicious_test SOURCES
 openppp2_add_cpp_test(mux_transport_adapter_test SOURCES
     mux_transport_adapter_test.cpp)
 target_link_libraries(mux_transport_adapter_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+# The mux contract tests pin the invariants that upstream expresses in
+# comments rather than in code: the connection id lifetime, the lock domains,
+# the strand affinity, the refusal of a dead flow, the carrier close order and
+# the posted lambda lifetime. They read the mux sources, so they need the
+# source root.
+openppp2_add_cpp_test(mux_invariants_contract_test SOURCES
+    mux_invariants_contract_test.cpp)
+target_compile_definitions(mux_invariants_contract_test PRIVATE
+    OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
+openppp2_add_cpp_test(mux_flow_refusal_contract_test SOURCES
+    mux_flow_refusal_contract_test.cpp)
+target_compile_definitions(mux_flow_refusal_contract_test PRIVATE
+    OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
+# The route-list fetch has to frame its body exactly: a truncated body would be
+# applied as if it were a complete route list, and that changes the routing
+# policy of the client.
+openppp2_add_cpp_test(chnroutes2_http_framing_test SOURCES
+    chnroutes2_http_framing_test.cpp)
+target_include_directories(chnroutes2_http_framing_test PRIVATE
+    "${OPENPPP2_ROOT}/common")
+openppp2_add_cpp_test(mux_fin_dsn_contract_test SOURCES
+    mux_fin_dsn_contract_test.cpp)
+target_compile_definitions(mux_fin_dsn_contract_test PRIVATE
+    OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
+openppp2_add_cpp_test(mux_carrier_clean_close_test SOURCES
+    mux_carrier_clean_close_test.cpp)
+target_compile_definitions(mux_carrier_clean_close_test PRIVATE
+    OPENPPP2_SOURCE_ROOT="${OPENPPP2_ROOT}")
 openppp2_add_cpp_test(runtime_readiness_test SOURCES
     runtime_readiness_test.cpp)
 openppp2_add_cpp_test(runtime_lifecycle_test SOURCES

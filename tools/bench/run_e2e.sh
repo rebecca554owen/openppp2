@@ -18,7 +18,10 @@ CLIENT_MODE="${BENCH_CLIENT_MODE:-proxy}"
 for command in "$PPP_BIN" iperf3; do
     command -v "$command" >/dev/null || { echo "missing $command" >&2; exit 1; }
 done
-if [ "$(id -u)" -ne 0 ]; then
+# The proxy-mode client runs without a TAP device (--tun-host=no --tun-vnet=no),
+# so it does not need root.  Root is still required for any other client mode,
+# and for proxy mode when a host or vnet TAP device was requested explicitly.
+if [ "$(id -u)" -ne 0 ] && [[ "$CLIENT_MODE" != "proxy" || "$*" == *"--tun-host=yes"* || "$*" == *"--tun-vnet=yes"* ]]; then
     echo "run_e2e.sh requires root for the VPN processes" >&2
     exit 1
 fi
