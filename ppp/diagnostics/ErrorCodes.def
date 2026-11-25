@@ -266,6 +266,7 @@ X(VmuxSocketConnectAckAlreadyConnected, "Vmux socket connect acknowledgment rece
 X(VmuxSocketInputBufferAllocFailed, "Vmux socket input path failed to allocate receive buffer", ErrorSeverity::kError)
 X(VmuxSocketSendInvalidPayload, "Vmux socket send payload is invalid", ErrorSeverity::kError)
 X(VmuxSocketSendContextNotReady, "Vmux socket send requested while socket context is not ready", ErrorSeverity::kError)
+X(VmuxSocketSendAfterFin, "Vmux socket send requested after the flow's FIN was already sent; the peer drops such frames without acknowledging them, so the sender would burn its retransmit budget on a dead flow", ErrorSeverity::kError)
 X(VmuxSocketSendYieldInvalidPayload, "Vmux socket yield send payload is invalid", ErrorSeverity::kError)
 X(VmuxSocketSendYieldStatusAllocFailed, "Vmux socket yield send failed to allocate completion status", ErrorSeverity::kError)
 X(VmuxSocketForwardRxContextInvalid, "Vmux socket forward-to-rx path has invalid socket context", ErrorSeverity::kError)
