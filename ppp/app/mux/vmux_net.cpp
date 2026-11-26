@@ -545,11 +545,17 @@ namespace vmux {
             ack_pending_count_ = 0;
             ack_first_pending_tick_ = 0;
             srtt_ms_ = 0;
-            fec_encoder_.Reset(now_tick());
-            fec_groups_.clear();
-            fec_frame_cache_.clear();
-            fec_frame_cache_order_.clear();
-            fec_frame_cache_bytes_ = 0;
+            {
+                std::lock_guard<std::mutex> enc_scope(fec_encoder_mutex_);
+                fec_encoder_.Reset(now_tick());
+            }
+            {
+                std::lock_guard<std::recursive_mutex> rx_scope(fec_rx_mutex_);
+                fec_groups_.clear();
+                fec_frame_cache_.clear();
+                fec_frame_cache_order_.clear();
+                fec_frame_cache_bytes_ = 0;
+            }
             fec_flush_due_ = false;
             break;
         }
@@ -2418,6 +2424,7 @@ namespace vmux {
             publish_runtime_snapshot_locked();
         }
 
+        fprintf(stderr, "[FEC-DBG] latch reliability=%d fec=%d\n", reliability_on_ ? 1 : 0, fec_on_ ? 1 : 0);
         ppp::telemetry::Log(ppp::telemetry::Level::kInfo, "mux", "reliability=%d fec=%d pto=%d fast=%d",
             reliability_on_ ? 1 : 0,
             fec_on_ ? 1 : 0,
@@ -3134,8 +3141,13 @@ namespace vmux {
                 process_tx_all_packets();
             }
 
-            if (fec_on_ && fec_encoder_.count() > 0 &&
-                (fec_flush_due_ || (now - fec_encoder_.first_add_tick()) >= fec_flush_ms_)) {
+            bool flush_needed = false;
+            {
+                std::lock_guard<std::mutex> scope(fec_encoder_mutex_);
+                flush_needed = fec_on_ && fec_encoder_.count() > 0 &&
+                    (fec_flush_due_ || (now - fec_encoder_.first_add_tick()) >= fec_flush_ms_);
+            }
+            if (flush_needed) {
                 fec_flush_due_ = false;
                 fec_flush_group();
             }
@@ -3244,6 +3256,7 @@ namespace vmux {
             return; // Parity covers reliable data frames only.
         }
 
+        std::lock_guard<std::mutex> scope(fec_encoder_mutex_);
         if (fec_encoder_.count() == 0) {
             fec_encoder_.Reset(now);
         }
@@ -3256,44 +3269,86 @@ namespace vmux {
     }
 
     void vmux_net::fec_flush_group() noexcept {
+
+        // Single lock domain: the group snapshot (Build), the reset, and the
+
+        // entry check are atomic against concurrent fec_note_sent Add()s.
+
+        // post_internal runs AFTER the lock is released: its synchronous
+
+        // tx drain (tx_send_on -> underlyin_sent -> fec_note_sent) would
+
+        // re-enter this same non-recursive mutex and self-deadlock.
+
+        std::lock_guard<std::mutex> scope(fec_encoder_mutex_);
+
         if (fec_encoder_.count() == 0) {
+
             return;
+
         }
 
+        if (!fec_on_ || !base_.established_) {
+
+            return;
+
+        }
+
+
+
         const uint64_t now = now_tick();
-        do {
-            if (!fec_on_ || !base_.established_) {
-                break;
-            }
 
-            const int payload_cap = (int)fec_encoder_.MaxPayloadSize();
-            std::shared_ptr<Byte> packet = make_byte_array((int)sizeof(vmux_hdr) + payload_cap);
-            if (NULLPTR == packet) {
-                break;
-            }
+        const int payload_cap = (int)fec_encoder_.MaxPayloadSize();
 
-            const int payload_len = fec_encoder_.Build(packet.get() + sizeof(vmux_hdr), payload_cap);
-            if (payload_len <= 0) {
-                break;
-            }
+        std::shared_ptr<Byte> packet = make_byte_array((int)sizeof(vmux_hdr) + payload_cap);
 
-            vmux_hdr* h = (vmux_hdr*)packet.get();
-            h->cmd = cmd_fec;
-            h->connection_id = htonl(0);
+        if (NULLPTR == packet) {
 
-            PostInternalAsynchronousCallback null_ac;
-            if (post_internal(packet, (int)sizeof(vmux_hdr) + payload_len, false, null_ac)) {
-                ppp::telemetry::Count("mux.fec.send", 1);
-            }
-        } while (false);
+            return;
+
+        }
+
+
+
+        const int payload_len = fec_encoder_.Build(packet.get() + sizeof(vmux_hdr), payload_cap);
+
+        if (payload_len <= 0) {
+
+            return;
+
+        }
+
+
 
         fec_encoder_.Reset(now);
+
+
+
+        vmux_hdr* h = (vmux_hdr*)packet.get();
+
+        h->cmd = cmd_fec;
+
+        h->connection_id = htonl(0);
+
+
+
+        PostInternalAsynchronousCallback null_ac;
+
+        if (post_internal(packet, (int)sizeof(vmux_hdr) + payload_len, false, null_ac)) {
+
+            ppp::telemetry::Count("mux.fec.send", 1);
+
+        }
+
     }
+
+
 
     void vmux_net::fec_note_received(const vmux_linklayer_ptr& linklayer, uint32_t connection_id, uint32_t seq, const std::shared_ptr<Byte>& buffer, int length, uint64_t now) noexcept {
         if (!fec_on_ || NULLPTR == buffer || length < (int)sizeof(vmux_hdr)) {
             return;
         }
+        std::lock_guard<std::recursive_mutex> scope(fec_rx_mutex_);
 
         // Cache the frame for later single-loss recovery (bounded FIFO).
         const uint64_t key = ppp::app::mux::MuxRetransmitBuffer::Key(connection_id, seq);
@@ -3385,8 +3440,10 @@ namespace vmux {
                             ? packet_input_flow(linklayer, rh, recovered_length, now, recovered)
                             : packet_input_unorder(linklayer, rh, recovered_length, now, recovered);
                         if (!delivered) {
-                            close_exec();
-                            return;
+                            // FEC 恢复帧与正常帧竞速交付同一 DSN：窗口拒绝（重复/
+                            // 乱序竞态）无害——正常帧已承载同一数据，丢弃恢复帧
+                            // 即可；会话重建（close_exec）是过度反应。
+                            ppp::telemetry::Count("mux.fec.recover_stale", 1);
                         }
                     }
                     else {
@@ -3413,6 +3470,7 @@ namespace vmux {
             ppp::telemetry::Count("mux.fec.unexpected", 1);
             return;
         }
+        std::lock_guard<std::recursive_mutex> scope(fec_rx_mutex_);
 
         ppp::app::mux::MuxFecFrameView view;
         const int max_count = std::max(1, fec_group_k_ * 4);

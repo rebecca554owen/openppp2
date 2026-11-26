@@ -15,6 +15,7 @@
 #include <ppp/app/mux/MuxAckTracker.h>
 #include <ppp/app/mux/MuxRetransmitBuffer.h>
 #include <ppp/app/mux/MuxFecCodec.h>
+#include <mutex>
 #include <ppp/app/mux/MuxRxBackpressure.h>
 #include <ppp/app/mux/MuxRxQueueLimit.h>
 #include <ppp/app/mux/MuxTxBackpressure.h>
@@ -1003,6 +1004,11 @@ namespace vmux {
 
         ppp::app::mux::MuxFecEncoder                                                fec_encoder_;       ///< Send-side running parity group (strand-affine).
         vmux::list<fec_rx_group>                                                    fec_groups_;        ///< Receive-side pending parity groups (strand-affine).
+        /// FEC state spans the tx scheduler threads (fec_note_sent) and the
+        /// strand maintenance tick (fec_flush_group), so both sides need locks;
+        /// "strand-affine" does not hold for the send-side encoder.
+        std::mutex                                                                  fec_encoder_mutex_;  // Guards fec_encoder_ (tx scheduler threads + strand tick).
+        std::recursive_mutex                                                        fec_rx_mutex_;       // Guards fec_frame_cache_/fec_groups_ (rx strands).
         vmux::unordered_map<uint64_t, fec_cached_frame>                             fec_frame_cache_;   ///< Recent received data frames keyed by (cid, seq) (strand-affine).
         vmux::list<uint64_t>                                                        fec_frame_cache_order_; ///< FIFO eviction order for fec_frame_cache_.
         size_t                                                                      fec_frame_cache_bytes_ = 0; ///< Byte total of fec_frame_cache_ (bound enforcement).
