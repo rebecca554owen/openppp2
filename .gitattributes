@@ -1,2 +1,3 @@
 * text=auto eol=lf
 ppp/app/server/VirtualEthernetDatagramPort.cpp whitespace=cr-at-eol
+ppp/threading/BufferblockAllocator.cpp -text whitespace=cr-at-eol

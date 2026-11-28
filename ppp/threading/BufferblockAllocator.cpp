@@ -215,7 +215,10 @@ namespace ppp
             memory_maxof_ = NULLPTR;
 
 #if !defined(_WIN32)
-            ppp::io::File::Delete(path_.data());
+            /* Direct unlink: the temp vmem file is best-effort cleanup. During global
+               teardown File::Delete would call SetLastErrorCode -> GetTickCount and touch
+               the already-freed Executors singleton (heap-use-after-free). */
+            ::unlink(path_.data());
 #endif
         }
 
@@ -302,10 +305,15 @@ namespace ppp
                 return false;
             }
 
+#if defined(PPP_AB_MALLOC_BACKEND)
+            ::free(const_cast<void*>(allocated_memory));
+            return true;
+#else
             if (allocated_memory < memory_start_ || allocated_memory >= memory_maxof_)
             {
                 return false;
             }
+#endif
 
             SynchronizedObjectScope scope(syncobj_);
             struct buddy* buddy = reinterpret_cast<struct buddy*>(buddy_);
@@ -331,6 +339,10 @@ namespace ppp
                 return NULLPTR;
             }
 
+#if defined(PPP_AB_MALLOC_BACKEND)
+            /* A/B experiment: malloc-backed allocator isolates buddy-vs-user bugs. */
+            return ::malloc(Malign(allocated_size, page_size_));
+#else
             SynchronizedObjectScope scope(syncobj_);
             struct buddy* buddy = reinterpret_cast<struct buddy*>(buddy_);
             if (NULLPTR == buddy)
@@ -345,6 +357,7 @@ namespace ppp
             /* Allocate using the buddy allocator */
             void* data = buddy_malloc(buddy, allocated_size);
             return data;
+#endif
         }
     }
 }

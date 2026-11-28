@@ -1,0 +1,1057 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index a0826df..dc179df 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -132,6 +132,8 @@ if(XTCP_BUILD_TESTS)
+         test_eifel
+         test_tlp
+         test_rack
++        test_rack_xmit_ts
++        test_sack_scoreboard
+         test_dsack
+         test_sack_option_budget
+         test_ip
+diff --git a/include/xtcp/core/stack.h b/include/xtcp/core/stack.h
+index d2289aa..24f3b0d 100644
+--- a/include/xtcp/core/stack.h
++++ b/include/xtcp/core/stack.h
+@@ -499,6 +499,16 @@ typedef std::function<bool(UInt64 conn_id, const Byte* data, UInt32 len)> RecvHa
+             }
+             return it->second->conn->RetransQueueSize();
+         }
++        /** @brief Diagnostics/tests: SACKed bytes recorded on the retransmit queue. */
++        UInt64 ConnSackedBytes(UInt64 conn_id) const noexcept {
++            Shard* shard = ShardOf(conn_id);
++            std::lock_guard<std::recursive_mutex> scope(shard->syncobj_);
++            auto it = shard->conns_.find(conn_id);
++            if (it == shard->conns_.end() || NULLPTR == it->second->conn) {
++                return 0;
++            }
++            return it->second->conn->SackedBytes();
++        }
+         /**
+          * @brief Total retransmissions on a connection (RTO + fast + RACK).
+          */
+diff --git a/include/xtcp/core/tcp.h b/include/xtcp/core/tcp.h
+index 787a7c4..6da84d1 100644
+--- a/include/xtcp/core/tcp.h
++++ b/include/xtcp/core/tcp.h
+@@ -106,6 +106,40 @@ namespace xtcp {
+             return a == b || SeqLt(a, b);
+         }
+ 
++        /**
++         * @brief Contiguous SACK coverage above @a una, wrap-safe.
++         *
++         * Walks the blocks in wire order tracking the covered frontier as an
++         * OFFSET from @a una (mod 2^32), so blocks straddling the 2^32 wrap
++         * compare correctly. A block starting beyond the frontier proves a
++         * hole. Blocks wholly at/below @a una carry no information.
++         *
++         * @param una   Cumulative ACK point (snd_una_).
++         * @param sack  [left, right) edge pairs, wire order.
++         * @param count Number of valid pairs.
++         * @param has_hole Set true when a hole precedes some block.
++         * @return Frontier offset (bytes above @a una) after the walk.
++         */
++        inline UInt64 SackFrontierOffset(UInt32 una, const UInt32 (*sack)[2], Byte count,
++                                         bool& has_hole) noexcept {
++            UInt64 cursor = 0;
++            has_hole = false;
++            for (Byte b = 0; b < count; ++b) {
++                if (SeqLt(sack[b][1], una)) {
++                    continue;  // wholly behind the frontier
++                }
++                const UInt64 left = SeqLt(sack[b][0], una)
++                    ? 0 : static_cast<UInt64>(static_cast<UInt32>(sack[b][0] - una));
++                const UInt64 right = static_cast<UInt64>(static_cast<UInt32>(sack[b][1] - una));
++                if (cursor < left) {
++                    has_hole = true;
++                    break;
++                }
++                cursor = right;
++            }
++            return cursor;
++        }
++
+         /**
+          * @brief TCP protocol states (RFC 793).
+          */
+@@ -837,6 +871,14 @@ namespace xtcp {
+             void SetChecksumPartialTx(bool on) noexcept { checksum_partial_tx_ = on; }
+             /** @brief Number of unacknowledged segments (diagnostics/tests:
+              *         the TSO-direct gate requires an empty queue). */
++            /** @brief Diagnostics/tests: total SACKed bytes recorded on the retransmit queue. */
++            UInt64 SackedBytes() const noexcept {
++                UInt64 total = 0;
++                for (const SentSeg& seg : retrans_queue_) {
++                    total += seg.sacked;
++                }
++                return total;
++            }
+             UInt32 RetransQueueSize() const noexcept {
+                 return static_cast<UInt32>(retrans_queue_.size());
+             }
+@@ -1100,6 +1142,15 @@ namespace xtcp {
+                 UInt32      seq = 0;
+                 UInt32      len = 0;
+                 TimePoint   sent_at = 0;
++                /**
++                 * @brief RFC 8985 RACK.xmit_ts: time of the LATEST (re)transmission.
++                 *        Unlike sent_at it is NOT cleared by the Karn guard, so a
++                 *        retransmitted segment keeps a real timestamp for the
++                 *        time-based loss test.
++                 */
++                TimePoint   xmit_ts = 0;
++                UInt32      sack_lo = 0;   /**< Merged SACKed interval [sack_lo, sack_hi), offsets from seq */
++                UInt32      sack_hi = 0;
+                 UInt32      rto = 0;       /**< Current per-segment RTO */
+                 UInt32      retries = 0;
+                 UInt32      sacked = 0;    /**< Bytes SACKed within this segment (RFC 6675 pipe) */
+@@ -1303,6 +1354,8 @@ namespace xtcp {
+             void ResplitRetransQueue(UInt16 payload_cap) noexcept;
+             void OnAckReceived(UInt32 ack, bool ece, TimePoint now, const TcpOpts* opts) noexcept;
+             void RackDetectLoss(TimePoint now) noexcept;
++            void RackOnDsack() noexcept;
++            void RackOnRecoveryExit() noexcept;
+             UInt32 PipeBytes() const noexcept;
+             /**
+              * @brief Kernel tcp_packets_in_flight() equivalent in bytes:
+@@ -1679,8 +1732,14 @@ namespace xtcp {
+             bool        tlp_armed_ = false;      /**< A TLP probe is pending */
+             TimePoint   first_outstanding_ = 0;  /**< Send time of the oldest unacked segment (TCP_USER_TIMEOUT anchor; immune to the Karn sent_at clear) */
+             UInt32      rack_seq_ = 0;           /**< RFC 8985 RACK: seq of the most recently delivered segment */
+-            TimePoint   rack_time_ = 0;          /**< RACK: send time of the most recently delivered segment */
+-            UInt32      rack_reo_wnd_ = 0;       /**< RACK: reorder window (us); shrinks toward min-RTT/4 */
++            bool        rack_seq_set_ = false;   /**< rack_seq_ holds a valid anchor (0 is a legal sequence number) */
++            TimePoint   rack_time_ = 0;          /**< RACK.xmit_ts: send time of the most recently delivered segment */
++            UInt32      rack_reo_wnd_ = 0;       /**< RACK: reorder window (us) = min-RTT/4 * rack_reo_mult_, capped at SRTT */
++            UInt32      rack_rtt_ = 0;           /**< RACK.rtt: RTT sample (us) of the most recently delivered, never-retransmitted segment */
++            UInt32      rack_reo_mult_ = 1;      /**< RACK.reo_wnd_mult (RFC 8985 s6.2): grows by 1 per DSACK round */
++            UInt32      rack_reo_persist_ = 0;   /**< RACK.reo_wnd_persist: recovery rounds left before the multiplier resets */
++            bool        rack_dsack_round_ = false; /**< A DSACK was already counted in this round */
++            UInt32      rack_dsack_round_end_ = 0; /**< snd_nxt_ when the DSACK round opened */
+             TimePoint   pool_retry_deadline_ = 0;
+             TimePoint   pacing_deadline_ = 0;    /**< Next allowed send time (pacing, bytes/sec) */
+             TimePoint   last_rate_sample_ = 0;   /**< Last rate-sample time (for interval_us) */
+diff --git a/src/core/tcp_fsm.cpp b/src/core/tcp_fsm.cpp
+index 5732898..bc75e62 100644
+--- a/src/core/tcp_fsm.cpp
++++ b/src/core/tcp_fsm.cpp
+@@ -1656,6 +1656,9 @@ namespace xtcp {
+                 // would inflate srtt/min_rtt (hence BDP). Clear sent_at so the
+                 // RTT sampler (which skips sent_at == 0) never uses it.
+                 seg.sent_at = 0;
++                // RFC 8985 RACK.xmit_ts: the retransmission's own send time
++                // (sent_at stays zero for the Karn RTT guard).
++                seg.xmit_ts = now;
+                 // Kernel tcp_event_data_sent runs INSIDE __tcp_transmit_skb,
+                 // i.e. BEFORE tcp_retransmit_skb adds retrans_out
+                 // (tcp_output_v66.c:3383): the gate uses the pipe snapshot
+@@ -1785,6 +1788,7 @@ namespace xtcp {
+                     ns.seq = seg.seq + off;
+                     ns.len = chunk;
+                     ns.sent_at = seg.sent_at;
++                    ns.xmit_ts = seg.xmit_ts;
+                     ns.rto = seg.rto;
+                     ns.retries = seg.retries;
+                     // A split is not a new transmission: inherit the send
+@@ -2877,6 +2881,7 @@ namespace xtcp {
+                             // segment (the ACK is ambiguous), or srtt/min_rtt (and
+                             // the BDP derived from it) inflate.
+                             seg.sent_at = 0;
++                            seg.xmit_ts = now;  // RACK.xmit_ts (Karn zeroes sent_at only)
+                             seg.sent_delivered = cc_.delivered;
+                             seg.sent_delivered_pkts = cc_.delivered_pkts;
+                             seg.pkt_count = PktCount(seg.len, peer_mss_);
+@@ -2946,6 +2951,30 @@ namespace xtcp {
+             (void)mss;
+         }
+ 
++        void TcpConn::RackOnDsack() noexcept {
++            // RFC 8985 s6.2: grow the reorder window once per round that sees a
++            // DSACK (a round ends when SND.UNA passes the SND.NXT recorded at
++            // its start); the multiplier persists for 16 recovery rounds.
++            if (rack_dsack_round_ && !SeqLt(snd_una_, rack_dsack_round_end_)) {
++                rack_dsack_round_ = false;
++            }
++            if (!rack_dsack_round_) {
++                rack_dsack_round_ = true;
++                rack_dsack_round_end_ = snd_nxt_;
++                if (rack_reo_mult_ < 64) {
++                    ++rack_reo_mult_;
++                }
++                rack_reo_persist_ = 16;
++            }
++        }
++
++        void TcpConn::RackOnRecoveryExit() noexcept {
++            // RFC 8985 s6.2: 16 DSACK-free recoveries restore the base window.
++            if (0 < rack_reo_persist_ && 0 == --rack_reo_persist_) {
++                rack_reo_mult_ = 1;
++            }
++        }
++
+         void TcpConn::RackDetectLoss(TimePoint now) noexcept {
+             // RFC 8985 RACK: time-based loss detection. A segment is lost
+             // when a LATER segment has been delivered (RACK.seq covers it)
+@@ -2968,12 +2997,30 @@ namespace xtcp {
+             // (tcp_66.h:1245-1249). During CWR the reduction snapshot already
+             // exists, so a RACK verdict must not run tcp_init_cwnd_reduction a
+             // second time and halve ssthresh again (audit B).
+-            if (!sack_ok_ || 0 == rack_seq_ || fast_recovery_ ||
++            if (!sack_ok_ || !rack_seq_set_ || fast_recovery_ ||
+                 2 == cc_.ca_state || 4 == cc_.ca_state || rto_pending_ ||
+                 retrans_queue_.empty()) {
+                 return;
+             }
+             bool lost = false;
++            // RFC 8985 s6.2 RACK_update_reo_wnd: reo_wnd = min_rtt/4 scaled by
++            // the DSACK-driven multiplier, capped at SRTT (never below the
++            // 1 ms timer floor). The deadline of a segment is
++            //   xmit_ts + RACK.rtt + reo_wnd
++            // measured from ITS OWN send time: an in-flight segment that is
++            // only about one RTT old is never overdue, so a reordered packet
++            // below the highest SACK survives until the window has elapsed.
++            {
++                const UInt32 rtt_min = (0 < cc_.rtt_min_us) ? cc_.rtt_min_us
++                    : ((0 < srtt_) ? srtt_ : 1000);
++                UInt64 reo = static_cast<UInt64>(rtt_min / 4 > 1000 ? rtt_min / 4 : 1000) *
++                    rack_reo_mult_;
++                if (1000 < srtt_ && reo > srtt_) {
++                    reo = srtt_;
++                }
++                rack_reo_wnd_ = static_cast<UInt32>(reo);
++            }
++            const UInt32 rack_rtt = (0 != rack_rtt_) ? rack_rtt_ : srtt_;
+             for (SentSeg& seg : retrans_queue_) {
+                 if (seg.sacked >= seg.len) {
+                     continue;  // fully SACKed: delivered
+@@ -2999,7 +3046,13 @@ namespace xtcp {
+                 // tcp_packets_in_flight() over-reports the pipe and the
+                 // recovery entry derives its window from an inflated flight
+                 // (audit D15).
+-                if (rack_time_ > seg.sent_at && rack_time_ - seg.sent_at > rack_reo_wnd_) {
++                // RFC 8985 s6.2 RACK_detect_loss: a later-SENT segment was
++                // delivered (RACK.xmit_ts >= xmit_ts) AND the deadline has
++                // passed. xmit_ts is refreshed on retransmit, so a
++                // retransmission is judged from its own send time instead of
++                // the Karn-zeroed sent_at (which re-marked it lost at once).
++                if (rack_time_ >= seg.xmit_ts &&
++                    now >= seg.xmit_ts + rack_rtt + rack_reo_wnd_) {
+                     lost = true;
+                     // Kernel RACK loss marking (tcp_input.c tcp_mark_skb_lost
+                     // -> TCPCB_LOST + tp->lost_out): the LOSS DECISION point
+@@ -3188,6 +3241,7 @@ namespace xtcp {
+                             ? ((ds_len + peer_mss_ - 1) / peer_mss_) : 1u;
+                         dsack_dups_ += dup_segs;
+                         if (dsack_dups_ <= total_retrans_pkts_) {
++                            RackOnDsack();  // RFC 8985 s6.2: widen the reorder window
+                             sack_new_pkts += dup_segs;
+                             // Kernel tcp_check_dsack (tcp_input_66.c:1296-1301):
+                             //   if (tp->undo_marker && tp->undo_retrans > 0 &&
+@@ -3290,9 +3344,33 @@ namespace xtcp {
+                         const UInt32 lo = SeqLt(seg.seq, sl) ? sl : seg.seq;
+                         const UInt32 hi = SeqLt(seg_end, sr) ? seg_end : sr;
+                         if (SeqLt(lo, hi)) {
+-                            const UInt32 ov = hi - lo;
+-                            const UInt32 room = seg.len - seg.sacked;
+-                            const UInt32 add = (ov < room) ? ov : room;
++                            // Idempotent coverage: a block re-advertised in
++                            // later dupACKs overlaps what is already SACKed and
++                            // must add only the NEW bytes. The segment keeps one
++                            // merged [sack_lo, sack_hi) interval (offsets from
++                            // seg.seq); a disjoint block keeps the larger of the
++                            // two (an under-count is the safe direction).
++                            const UInt32 nlo = lo - seg.seq;
++                            const UInt32 nhi = hi - seg.seq;
++                            UInt32 add = 0;
++                            if (seg.sack_hi <= seg.sack_lo) {
++                                seg.sack_lo = nlo;
++                                seg.sack_hi = nhi;
++                                add = nhi - nlo;
++                            } else if (nlo <= seg.sack_hi && nhi >= seg.sack_lo) {
++                                const UInt32 old_cov = seg.sack_hi - seg.sack_lo;
++                                if (nlo < seg.sack_lo) {
++                                    seg.sack_lo = nlo;
++                                }
++                                if (nhi > seg.sack_hi) {
++                                    seg.sack_hi = nhi;
++                                }
++                                add = (seg.sack_hi - seg.sack_lo) - old_cov;
++                            } else if (nhi - nlo > seg.sack_hi - seg.sack_lo) {
++                                add = (nhi - nlo) - (seg.sack_hi - seg.sack_lo);
++                                seg.sack_lo = nlo;
++                                seg.sack_hi = nhi;
++                            }
+                             if (0 < add) {
+                                 const UInt32 before = seg.sacked;
+                                 const Byte before_lost = seg.lost;
+@@ -3371,7 +3449,10 @@ namespace xtcp {
+                         }
+                     }
+                 }
+-                if (SeqLt(rack_seq_, delivered_end) && snd_nxt_ != snd_una_) {
++                // rack_seq_set_ (not `0 == rack_seq_`): seq 0 is a legal value and
++                // SeqLt(0, x) is false for x >= 2^31, which left the anchor
++                // unset - and RACK silently off - on half of all ISNs.
++                if ((!rack_seq_set_ || SeqLt(rack_seq_, delivered_end)) && snd_nxt_ != snd_una_) {
+                     // Locate the delivering segment to confirm the frontier
+                     // maps to a real queued segment; RACK.time is the
+                     // DELIVERY time (RFC 8985: the time the RACK segment was
+@@ -3386,7 +3467,25 @@ namespace xtcp {
+                          it != retrans_queue_.rend(); ++it) {
+                         if (it->seq + it->len == delivered_end) {
+                             rack_seq_ = delivered_end;
+-                            rack_time_ = now;
++                            rack_seq_set_ = true;
++                            // RFC 8985 s6.2 step 2: RACK.xmit_ts is the SEND time
++                            // of the most recently delivered segment (not the ACK
++                            // arrival), and RACK.rtt its RTT sample. A segment that
++                            // was ever retransmitted gives an ambiguous sample: it
++                            // may move xmit_ts only when the elapsed time is at
++                            // least min_rtt (the ACK cannot be for the earlier
++                            // copy), and never sets RACK.rtt.
++                            const UInt32 min_rtt = (0 < cc_.rtt_min_us) ? cc_.rtt_min_us : srtt_;
++                            const UInt32 rtt = (now > it->xmit_ts)
++                                ? static_cast<UInt32>(now - it->xmit_ts) : 0;
++                            if (0 == it->retries && 0 == it->is_retrans) {
++                                rack_rtt_ = rtt;
++                                if (rack_time_ <= it->xmit_ts) {
++                                    rack_time_ = it->xmit_ts;
++                                }
++                            } else if (rtt >= min_rtt && rack_time_ <= it->xmit_ts) {
++                                rack_time_ = it->xmit_ts;
++                            }
+                             break;
+                         }
+                         // The queue is seq-ascending, so once a segment ends
+@@ -3395,13 +3494,6 @@ namespace xtcp {
+                             break;
+                         }
+                     }
+-                    if (rack_seq_ == delivered_end) {
+-                        const UInt32 rtt_min = (0 < cc_.rtt_min_us) ? cc_.rtt_min_us
+-                            : ((0 < srtt_) ? srtt_ : 1000);
+-                        const UInt32 target = (rtt_min / 4 > 1000) ? (rtt_min / 4) : 1000;
+-                        rack_reo_wnd_ = (0 == rack_reo_wnd_) ? target
+-                            : ((target < rack_reo_wnd_) ? target : rack_reo_wnd_);
+-                    }
+                 }
+             }
+             // RFC 2883 D-SACK: the FIRST SACK block covering data AT or
+@@ -3923,6 +4015,7 @@ namespace xtcp {
+                                 episode_undone_ = true;  // kernel tcp_undo_cwnd_reduction
+                             }
+                             if (!hold_reno) {
++                                RackOnRecoveryExit();  // RFC 8985 s6.2: decay the DSACK multiplier
+                                 fast_recovery_ = false;
+                                 sack_retx_next_ = 0;
+                                 undo_retrans_ = -1;
+@@ -3965,6 +4058,7 @@ namespace xtcp {
+                         // a spurious fast recovery.
+                         const bool hold_reno = (snd_una_ == high_seq_) && !sack_ok_;
+                         if (!hold_reno) {
++                            RackOnRecoveryExit();  // RFC 8985 s6.2: decay the DSACK multiplier
+                             fast_recovery_ = false;
+                             sack_retx_next_ = 0;
+                             undo_retrans_ = -1;
+@@ -4397,24 +4491,12 @@ namespace xtcp {
+                     // regardless of age).
+                     bool sack_no_gap = (NULLPTR != opts && 0 < opts->sack_count);
+                     if (sack_no_gap) {
+-                        UInt64 cursor = static_cast<UInt64>(snd_una_);
+-                        for (Byte b = 0; b < opts->sack_count; ++b) {
+-                            const UInt32 raw_left = opts->sack[b][0];
+-                            const UInt32 raw_right = opts->sack[b][1];
+-                            if (SeqLt(raw_right, snd_una_)) {
+-                                continue;  // wholly behind the frontier
+-                            }
+-                            const UInt64 left = SeqLt(raw_left, snd_una_)
+-                                ? static_cast<UInt64>(snd_una_) : static_cast<UInt64>(raw_left);
+-                            const UInt64 right = SeqLt(raw_right, snd_una_)
+-                                ? static_cast<UInt64>(snd_una_) : static_cast<UInt64>(raw_right);
+-                            if (cursor < left) {
+-                                sack_no_gap = false;  // real gap: confirmed loss
+-                                break;
+-                            }
+-                            cursor = right;
+-                        }
+-                        if (!SeqLt(static_cast<UInt32>(cursor), snd_nxt_)) {
++                        // Wrap-safe walk (offsets from snd_una_, mod 2^32).
++                        bool hole = false;
++                        const UInt64 cursor = SackFrontierOffset(snd_una_, opts->sack, opts->sack_count, hole);
++                        if (hole) {
++                            sack_no_gap = false;  // real gap: confirmed loss
++                        } else if (cursor >= static_cast<UInt64>(snd_nxt_ - snd_una_)) {
+                             sack_no_gap = false;  // covers everything: no gap
+                         }
+                     }
+@@ -4546,23 +4628,9 @@ namespace xtcp {
+                         // when the SACKs reveal a gap BEYOND the front.
+                         bool sack_zero_info = true;
+                         {
+-                            UInt64 cursor = static_cast<UInt64>(snd_una_);
+-                            for (Byte b = 0; b < opts->sack_count; ++b) {
+-                                const UInt32 raw_left = opts->sack[b][0];
+-                                const UInt32 raw_right = opts->sack[b][1];
+-                                if (SeqLt(raw_right, snd_una_)) {
+-                                    continue;  // wholly behind the frontier
+-                                }
+-                                const UInt64 left = SeqLt(raw_left, snd_una_)
+-                                    ? static_cast<UInt64>(snd_una_) : static_cast<UInt64>(raw_left);
+-                                const UInt64 right = SeqLt(raw_right, snd_una_)
+-                                    ? static_cast<UInt64>(snd_una_) : static_cast<UInt64>(raw_right);
+-                                if (cursor < left) {
+-                                    sack_zero_info = false;  // real gap: walk
+-                                    break;
+-                                }
+-                                cursor = right;
+-                            }
++                            bool hole = false;
++                            (void)SackFrontierOffset(snd_una_, opts->sack, opts->sack_count, hole);
++                            sack_zero_info = !hole;  // a hole behind a block: walk
+                         }
+                         if (!sack_zero_info) {
+                             RetransmitEarliestMissing(now, opts);
+@@ -4942,6 +5010,7 @@ namespace xtcp {
+             seg.seq = seq;
+             seg.len = len;
+             seg.sent_at = now;
++            seg.xmit_ts = now;
+             seg.rto = 0;
+             seg.sent_delivered = cc_.delivered;
+             seg.sent_delivered_pkts = cc_.delivered_pkts;
+@@ -4985,9 +5054,11 @@ namespace xtcp {
+                 if (tlp < now + 10000) {
+                     tlp = now + 10000;  // 10ms floor
+                 }
+-                if (!tlp_armed_ || tlp < tlp_deadline_) {
+-                    tlp_deadline_ = tlp;
+-                }
++                // RFC 8985 s7.2: the PTO is measured from the LAST
++                // transmission, so every new tail send re-arms it (later as
++                // well as earlier); keeping the older, earlier deadline fired
++                // the probe against a tail that had just been sent.
++                tlp_deadline_ = tlp;
+                 tlp_armed_ = true;
+                 timers_dirty_.store(true, std::memory_order_relaxed);
+             }
+@@ -5083,6 +5154,7 @@ namespace xtcp {
+                             seg.seq = probe_seq;
+                             seg.len = 1;
+                             seg.sent_at = now;
++                            seg.xmit_ts = now;
+                             seg.rto = 0;
+                             seg.sent_delivered = cc_.delivered;
+                             seg.sent_delivered_pkts = cc_.delivered_pkts;
+@@ -5123,6 +5195,7 @@ namespace xtcp {
+                             // window reopens. Clone so retrans_queue_ keeps the
+                             // original for zero-copy retransmit.
+                             SentSeg& front = retrans_queue_.front();
++                            front.xmit_ts = now;
+                             front.sent_delivered = cc_.delivered;
+                             front.sent_delivered_pkts = cc_.delivered_pkts;
+                             front.pkt_count = PktCount(front.len, peer_mss_);
+@@ -5266,6 +5339,7 @@ namespace xtcp {
+                         // TLP re-sends existing data: it is a retransmission
+                         // for the delayed-ACK heuristic even though retries
+                         // (the RTO budget) deliberately stays untouched.
++                        tail.xmit_ts = now;
+                         tail.sent_delivered = cc_.delivered;
+                         tail.sent_delivered_pkts = cc_.delivered_pkts;
+                         tail.pkt_count = PktCount(tail.len, peer_mss_);
+@@ -5669,6 +5743,7 @@ namespace xtcp {
+                 seg.seq = seq;
+                 seg.len = n;
+                 seg.sent_at = now;
++                seg.xmit_ts = now;
+                 seg.rto = 0;
+                 seg.sent_delivered = cc_.delivered;
+                 seg.sent_delivered_pkts = cc_.delivered_pkts;
+@@ -5786,9 +5861,12 @@ namespace xtcp {
+                 c.seq = s.seq;
+                 c.len = s.len;
+                 c.sent_at = s.sent_at;
++                c.xmit_ts = s.xmit_ts;
+                 c.rto = s.rto;
+                 c.retries = s.retries;
+                 c.sacked = s.sacked;
++                c.sack_lo = s.sack_lo;
++                c.sack_hi = s.sack_hi;
+                 c.pkt_count = s.pkt_count;
+                 c.lost = s.lost;
+                 // See ApplyCheckpoint: the retransmit marker and the
+@@ -5951,9 +6029,12 @@ namespace xtcp {
+                 c.seq = s.seq;
+                 c.len = s.len;
+                 c.sent_at = s.sent_at;
++                c.xmit_ts = s.xmit_ts;
+                 c.rto = s.rto;
+                 c.retries = s.retries;
+                 c.sacked = s.sacked;
++                c.sack_lo = s.sack_lo;
++                c.sack_hi = s.sack_hi;
+                 c.pkt_count = s.pkt_count;
+                 c.lost = s.lost;
+                 // TCPCB_RETRANS and the retirement flag travel with the
+@@ -6669,6 +6750,7 @@ namespace xtcp {
+                                 seg.seq = hdr.ack;
+                                 seg.len = n;
+                                 seg.sent_at = now;
++                                seg.xmit_ts = now;
+                                 seg.rto = 0;
+                                 seg.sent_delivered = cc_.delivered;
+                                 seg.sent_delivered_pkts = cc_.delivered_pkts;
+diff --git a/tests/test_cc_kcc.cpp b/tests/test_cc_kcc.cpp
+index 791f773..2250b0e 100644
+--- a/tests/test_cc_kcc.cpp
++++ b/tests/test_cc_kcc.cpp
+@@ -2742,6 +2742,9 @@ namespace {
+         for (UInt32 i = 0; i < 10; ++i) {
+             std::vector<Byte> buf(kMss, 0x41);
+             CHECK(conn.SendData(buf.data(), kMss, now));
++            // RFC 8985: the hole is lost only when a LATER-SENT segment is
++            // delivered; space the sends beyond the reorder window.
++            now += 5000;
+         }
+         const UInt32 una = conn.SndUna();
+         for (UInt32 i = 0; i < 3; ++i) {
+@@ -2752,7 +2755,10 @@ namespace {
+         CHECK(conn.FastRecovery());
+         const UInt32 cwnd_cut = conn.Cwnd();
+         const UInt32 ssth_cut = conn.Ssthresh();
+-        CHECK(cwnd_cut > ssth_cut);            // the entry cut, so they differ
++        // RFC 8985 RACK marks the hole lost on the first SACK dup, so the
++        // entry no longer leaves the window inflated above ssthresh; the
++        // exit collapse below is still pinned (exit == ssthresh).
++        CHECK(cwnd_cut >= ssth_cut);
+         now += 20000;
+         DeliverRawAck(conn, now, conn.SndNxt());
+         CHECK(!conn.FastRecovery());
+@@ -3143,6 +3149,7 @@ namespace {
+         h.conn.SetSndBuf(4u << 20);
+         for (UInt32 i = 0; i < 5; ++i) {
+             h.Send(kMss);
++            h.now += 5000;  // RFC 8985: xmit gap beyond the reorder window
+         }
+         const UInt32 una = h.conn.SndUna();
+         // Let every segment age well past the reorder window.
+diff --git a/tests/test_rack_xmit_ts.cpp b/tests/test_rack_xmit_ts.cpp
+new file mode 100644
+index 0000000..2d63653
+--- /dev/null
++++ b/tests/test_rack_xmit_ts.cpp
+@@ -0,0 +1,260 @@
++/**
++ * @file test_rack_xmit_ts.cpp
++ * @brief RFC 8985 RACK uses the SEND time of the most recently delivered
++ *        segment (RACK.xmit_ts) and its RTT: a segment is lost only when a
++ *        later-sent segment was delivered AND now >= xmit_ts + RACK.rtt +
++ *        reo_wnd. Measuring from the ACK arrival (the old rule) marked any
++ *        in-flight segment that was about one RTT old as lost the moment a
++ *        later segment was SACKed.
++ *
++ * The link is given a real ~20 ms RTT (10 ms sleep per direction) so that
++ * min_rtt/4 (the reorder window, ~5 ms) is far above the microsecond
++ * transmit gaps and far below the multi-RTT RTO.
++ *
++ * Scenarios (A = sender, B = receiver):
++ *   a  two segments sent back to back, the SECOND delivered first (reorder
++ *      within the reorder window): the first must NOT be marked lost - no
++ *      retransmit, no cwnd cut. (The old rule retransmitted at once.)
++ *   b  two segments sent 15 ms apart, the first lost: once the later one is
++ *      SACKed the first IS lost (xmit gap >= reo_wnd) and is retransmitted
++ *      without waiting for the dup-ACK threshold or the RTO.
++ *   c  a segment sent right after that retransmission is SACKed while the
++ *      retransmission is outstanding: the retransmitted segment (its
++ *      sent_at is Karn-zeroed) is not re-marked / re-sent immediately.
++ */
++
++#include <xtcp/buf/bufref.h>
++#include <xtcp/core/stack.h>
++#include <xtcp/ndi/manual.h>
++
++#include <atomic>
++#include <chrono>
++#include <cstdio>
++#include <cstring>
++#include <thread>
++#include <vector>
++
++static int g_failures = 0;
++
++#define CHECK(cond)                                                           \
++    do {                                                                      \
++        if (!(cond)) {                                                        \
++            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
++            ++g_failures;                                                     \
++        }                                                                     \
++    } while (0)
++
++static void SleepMs(int ms) {
++    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
++}
++
++int main() {
++    xtcp::buf::InitPools();
++    {
++        xtcp::ndi::ManualBackend backend_a, backend_b;
++        xtcp::XtcpStack stack_a(&backend_a);
++        xtcp::XtcpStack stack_b(&backend_b);
++        stack_a.SetDefaultCongestionControl("");
++        backend_a.SetRxHandler([&stack_a](xtcp::ndi::Packet&& p) {
++            xtcp::buf::BufRef buf = xtcp::buf::BufRef::Acquire(p.len);
++            std::memcpy(buf.Data(), p.data, p.len);
++            buf.SetLen(p.len);
++            stack_a.OnPacket(std::move(buf));
++        });
++        backend_b.SetRxHandler([&stack_b](xtcp::ndi::Packet&& p) {
++            xtcp::buf::BufRef buf = xtcp::buf::BufRef::Acquire(p.len);
++            std::memcpy(buf.Data(), p.data, p.len);
++            buf.SetLen(p.len);
++            stack_b.OnPacket(std::move(buf));
++        });
++        std::atomic<UInt64> b_recv{0};
++        stack_b.SetRecvHandler([&b_recv](UInt64, const Byte*, UInt32 len) {
++            b_recv.fetch_add(len, std::memory_order_relaxed);
++            return true;
++        });
++
++        struct Frame {
++            std::vector<Byte> bytes;
++            bool Data() const { return 1000 <= bytes.size(); }
++        };
++        auto drain = [](xtcp::ndi::ManualBackend& be) {
++            std::vector<Frame> v;
++            Byte out[65536];
++            while (0 != be.TxPending()) {
++                const UInt32 n = be.PollTx(out);
++                if (0 < n) {
++                    Frame f;
++                    f.bytes.assign(out, out + n);
++                    v.push_back(std::move(f));
++                }
++            }
++            return v;
++        };
++        auto inject = [](xtcp::ndi::ManualBackend& be, const Frame& f) {
++            be.Inject(f.bytes.data(), static_cast<UInt32>(f.bytes.size()), 0x0800);
++        };
++        // Inject a frame into B, let B's (possibly deferred) dup-ACK timer
++        // fire, then return the ACK frames after a 10 ms one-way delay.
++        auto deliver_and_collect = [&](const Frame& f) {
++            inject(backend_b, f);
++            stack_b.PollAckTimers();
++            SleepMs(2);
++            stack_b.PollAckTimers();
++            SleepMs(10);
++            stack_b.PollAckTimers();
++            return drain(backend_b);
++        };
++        // One full round trip with a 10 ms one-way delay.
++        auto step = [&]() {
++            SleepMs(10);
++            for (const Frame& f : drain(backend_a)) inject(backend_b, f);
++            stack_b.PollAckTimers();
++            SleepMs(10);
++            for (const Frame& f : drain(backend_b)) inject(backend_a, f);
++            stack_a.PollAckTimers();
++        };
++
++        xtcp::core::Endpoint server_ep, client_ep;
++        server_ep.family = 4;
++        server_ep.addr[0] = 0x0A000001;
++        server_ep.port = 443;
++        client_ep.family = 4;
++        client_ep.addr[0] = 0xC0A80102;
++        client_ep.port = 40000;
++        CHECK(stack_b.Listen(server_ep));
++        const UInt64 conn = stack_a.Connect(client_ep, server_ep);
++        CHECK(0 != conn);
++        for (UInt32 i = 0; i < 50 && xtcp::core::TcpState::kEstablished != stack_a.ConnectionState(conn); ++i) {
++            step();
++        }
++        CHECK(xtcp::core::TcpState::kEstablished == stack_a.ConnectionState(conn));
++
++        const UInt32 kSeg = stack_a.ConnPayloadCap(conn);
++        std::vector<Byte> payload(kSeg * 64, 0x4D);
++        UInt64 total = 0;
++        auto send_seg = [&]() {
++            const bool ok = stack_a.Send(conn, payload.data(), kSeg);
++            if (ok) total += kSeg;
++            return ok;
++        };
++        auto drain_all = [&]() {
++            for (UInt32 i = 0; i < 200 && (b_recv.load() < total ||
++                                           0 < stack_a.ConnOutstandingSegments(conn)); ++i) {
++                step();
++            }
++        };
++
++        // Warm-up: grow cwnd and seed srtt/min_rtt with ~20 ms samples.
++        for (UInt32 i = 0; i < 24; ++i) {
++            SleepMs(2);
++            if (!send_seg()) step();
++        }
++        drain_all();
++        CHECK(total == b_recv.load());
++        CHECK(0 == stack_a.ConnOutstandingSegments(conn));
++        xtcp::XtcpStack::ConnInfo info;
++        CHECK(stack_a.ConnGetInfo(conn, info));
++        CHECK(10000 < info.rtt_us);  // the delayed link was measured
++
++        // Collect up to `want` data frames the sender has emitted.
++        auto take_data = [&](UInt32 want) {
++            std::vector<Frame> got;
++            for (UInt32 i = 0; i < 20 && got.size() < want; ++i) {
++                stack_a.PollAckTimers();
++                for (Frame& f : drain(backend_a)) {
++                    if (f.Data()) got.push_back(std::move(f));
++                }
++                if (got.size() < want) SleepMs(1);
++            }
++            return got;
++        };
++
++        // ---- a: reordered pair, second delivered first -------------------
++        {
++            xtcp::XtcpStack::ConnInfo pre;
++            CHECK(stack_a.ConnGetInfo(conn, pre));
++            const UInt32 retx0 = stack_a.ConnRetransmitCount(conn);
++            SleepMs(2);
++            CHECK(send_seg());
++            SleepMs(2);
++            CHECK(send_seg());
++            std::vector<Frame> f = take_data(2);
++            CHECK(2 == f.size());
++            if (2 == f.size()) {
++                SleepMs(10);
++                std::vector<Frame> acks = deliver_and_collect(f[1]);  // later segment first
++                CHECK(!acks.empty());                                 // the SACK ACK exists
++                for (const Frame& a : acks) inject(backend_a, a);
++                stack_a.PollAckTimers();
++                xtcp::XtcpStack::ConnInfo mid;
++                CHECK(stack_a.ConnGetInfo(conn, mid));
++                CHECK(retx0 == stack_a.ConnRetransmitCount(conn));  // not marked lost
++                CHECK(pre.cwnd <= mid.cwnd);                        // no spurious cut
++                inject(backend_b, f[0]);           // the reordered one arrives
++            }
++            drain_all();
++            CHECK(total == b_recv.load());
++            CHECK(retx0 == stack_a.ConnRetransmitCount(conn));
++            std::fprintf(stderr, "[rack_xmit] a: reorder absorbed, retx %u\n",
++                         stack_a.ConnRetransmitCount(conn));
++        }
++
++        // ---- b + c: real loss, then no immediate re-mark ------------------
++        {
++            const UInt32 retx0 = stack_a.ConnRetransmitCount(conn);
++            SleepMs(2);
++            CHECK(send_seg());                      // f3: will be lost
++            std::vector<Frame> lost = take_data(1);
++            CHECK(1 == lost.size());
++            // Gap >= SRTT >= reo_wnd (reo_wnd is capped at SRTT).
++            xtcp::XtcpStack::ConnInfo cur;
++            CHECK(stack_a.ConnGetInfo(conn, cur));
++            std::fprintf(stderr, "[rack_xmit] srtt=%u cwnd=%u ssthresh=%u\n", cur.rtt_us, cur.cwnd, cur.ssthresh);
++            SleepMs(static_cast<int>(cur.rtt_us / 1000) + 10);
++            CHECK(send_seg());                      // f4: delivered
++            std::vector<Frame> later = take_data(1);
++            CHECK(1 == later.size());
++            if (1 == lost.size() && 1 == later.size()) {
++                SleepMs(10);
++                std::vector<Frame> acks = deliver_and_collect(later[0]);
++                CHECK(!acks.empty());
++                for (const Frame& a : acks) inject(backend_a, a);
++                stack_a.PollAckTimers();
++                const UInt32 retx1 = stack_a.ConnRetransmitCount(conn);
++                xtcp::XtcpStack::ConnInfo post;
++                CHECK(stack_a.ConnGetInfo(conn, post));
++                std::fprintf(stderr, "[rack_xmit] after SACK: cwnd=%u ssthresh=%u\n", post.cwnd, post.ssthresh);
++                CHECK(retx0 < retx1);               // marked lost after RTT + reo_wnd
++                std::vector<Frame> rtx = take_data(1);
++                CHECK(1 == rtx.size());
++                std::fprintf(stderr, "[rack_xmit] b: real loss retx %u -> %u\n", retx0, retx1);
++
++                // c: send another segment right behind the retransmission and
++                // SACK it while the retransmission is still in flight.
++                SleepMs(2);
++                CHECK(send_seg());
++                std::vector<Frame> f5 = take_data(1);
++                CHECK(1 == f5.size());
++                if (1 == f5.size()) {
++                    SleepMs(10);
++                    std::vector<Frame> acks = deliver_and_collect(f5[0]);
++                    CHECK(!acks.empty());
++                    for (const Frame& a : acks) inject(backend_a, a);
++                    stack_a.PollAckTimers();
++                    CHECK(retx1 == stack_a.ConnRetransmitCount(conn));  // not re-marked
++                }
++                if (1 == rtx.size()) {
++                    inject(backend_b, rtx[0]);
++                }
++            }
++            drain_all();
++            CHECK(total == b_recv.load());
++            std::fprintf(stderr, "[rack_xmit] c: recv=%llu/%llu retx=%u\n",
++                         (unsigned long long)b_recv.load(), (unsigned long long)total,
++                         stack_a.ConnRetransmitCount(conn));
++        }
++    }
++    xtcp::buf::ShutdownPools();
++    std::fprintf(stderr, g_failures ? "RACK_XMIT_TS: FAILED (%d)\n" : "RACK_XMIT_TS: ALL PASSED\n", g_failures);
++    return g_failures ? 1 : 0;
++}
+diff --git a/tests/test_sack_scoreboard.cpp b/tests/test_sack_scoreboard.cpp
+new file mode 100644
+index 0000000..c416ac0
+--- /dev/null
++++ b/tests/test_sack_scoreboard.cpp
+@@ -0,0 +1,246 @@
++/**
++ * @file test_sack_scoreboard.cpp
++ * @brief SACK scoreboard accounting.
++ *   s1  A partial SACK block re-advertised in 3 dup-ACKs is counted ONCE:
++ *       the segment's SACKed bytes stay at the block size (the old
++ *       `sacked += overlap` re-added it each time until the segment looked
++ *       fully SACKed). An overlapping/adjacent block only adds the new bytes.
++ *   s2  The hole check (SackFrontierOffset, used by the dup-ACK reordering
++ *       gate and the zero-info guard) is correct for blocks straddling the
++ *       2^32 sequence wrap.
++ */
++
++#include <xtcp/core/stack.h>
++#include <xtcp/core/tcp.h>
++#include <xtcp/ndi/manual.h>
++#include "harness/raw_pkt.h"
++
++#include <chrono>
++#include <cstdio>
++#include <cstring>
++#include <thread>
++#include <vector>
++
++static int g_failures = 0;
++
++#define CHECK(cond)                                                       \
++    do {                                                                  \
++        if (!(cond)) {                                                    \
++            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
++            ++g_failures;                                                 \
++        }                                                                 \
++    } while (0)
++
++namespace {
++    using xtcp::harness::FillIp4Checksum;
++    using xtcp::harness::FillTcp4Checksum;
++
++    /** Raw ACK from B's tuple with optional SACK blocks ([left,right) pairs,
++     *  already absolute sequence numbers). */
++    static std::vector<Byte> BuildAckWithSack(UInt32 ack, const UInt32* sack_pairs, UInt32 n_pairs) {
++        // Full size up front (20 IP + 20 TCP + padded options): resize after
++        // taking pointers would invalidate them via reallocation.
++        const UInt32 opt_len = (0 < n_pairs) ? (2 + 8 * n_pairs) : 0;
++        const UInt32 padded = (opt_len + 3) & ~3u;
++        std::vector<Byte> out(40 + padded, 0);
++        Byte* ip = out.data();
++        ip[0] = 0x45;
++        const UInt32 total = static_cast<UInt32>(out.size());
++        ip[2] = static_cast<Byte>(total >> 8);
++        ip[3] = static_cast<Byte>(total & 0xFF);
++        ip[8] = 64;
++        ip[9] = 6;
++        ip[12] = 0x0A; ip[13] = 0x00; ip[14] = 0x00; ip[15] = 0x02;  // B
++        ip[16] = 0x0A; ip[17] = 0x00; ip[18] = 0x00; ip[19] = 0x01;  // A
++        Byte* t = ip + 20;
++        t[0] = 0x23; t[1] = 0x82;  // sport 9090
++        t[2] = 0x9C; t[3] = 0x7D;  // dport 40061
++        t[4] = t[5] = t[6] = t[7] = 0x50;  // seq (in window)
++        t[8] = static_cast<Byte>(ack >> 24); t[9] = static_cast<Byte>(ack >> 16);
++        t[10] = static_cast<Byte>(ack >> 8); t[11] = static_cast<Byte>(ack & 0xFF);
++        t[12] = static_cast<Byte>(((20 + padded) / 4) << 4);  // data offset
++        t[13] = 0x10;  // ACK
++        t[14] = 0xFF; t[15] = 0xFF;
++        // TCP options: kind=5 (SACK), len=10, two edges per block, then
++        // NOP padding so the header is 4-byte aligned.
++        if (0 < n_pairs) {
++            Byte* opt = t + 20;
++            opt[0] = 5;
++            opt[1] = static_cast<Byte>(opt_len);
++            for (UInt32 i = 0; i < n_pairs; ++i) {
++                Byte* e = opt + 2 + 8 * i;
++                e[0] = static_cast<Byte>(sack_pairs[2 * i] >> 24);
++                e[1] = static_cast<Byte>(sack_pairs[2 * i] >> 16);
++                e[2] = static_cast<Byte>(sack_pairs[2 * i] >> 8);
++                e[3] = static_cast<Byte>(sack_pairs[2 * i] & 0xFF);
++                e[4] = static_cast<Byte>(sack_pairs[2 * i + 1] >> 24);
++                e[5] = static_cast<Byte>(sack_pairs[2 * i + 1] >> 16);
++                e[6] = static_cast<Byte>(sack_pairs[2 * i + 1] >> 8);
++                e[7] = static_cast<Byte>(sack_pairs[2 * i + 1] & 0xFF);
++            }
++            for (UInt32 i = opt_len; i < padded; ++i) {
++                opt[i] = 1;  // NOP padding
++            }
++        }
++        FillIp4Checksum(ip);
++        FillTcp4Checksum(ip, t, static_cast<UInt32>(20 + padded));
++        return out;
++    }
++
++    /** Pumps A's tx into B ONLY (B's ACKs stay queued): keeps A's data in
++     *  retrans_queue_ while raw dup-ACKs are injected. */
++    static void PumpOneWay(xtcp::ndi::ManualBackend& a, xtcp::ndi::ManualBackend& b,
++                           xtcp::XtcpStack& sa) {
++        Byte out[65536];
++        for (UInt32 round = 0; round < 50; ++round) {
++            bool moved = false;
++            while (0 != a.TxPending()) {
++                const UInt32 n = a.PollTx(out);
++                if (0 < n) {
++                    b.Inject(out, n, 0x0800);
++                    moved = true;
++                }
++            }
++            sa.PollAckTimers();
++            if (!moved) {
++                return;
++            }
++        }
++    }
++
++    static void PumpBoth(xtcp::ndi::ManualBackend& a, xtcp::ndi::ManualBackend& b,
++                         xtcp::XtcpStack& sa, xtcp::XtcpStack& sb) {
++        Byte out[65536];
++        for (UInt32 round = 0; round < 5000; ++round) {
++            bool moved = false;
++            while (0 != a.TxPending()) {
++                const UInt32 n = a.PollTx(out);
++                if (0 < n) {
++                    b.Inject(out, n, 0x0800);
++                    moved = true;
++                }
++            }
++            while (0 != b.TxPending()) {
++                const UInt32 n = b.PollTx(out);
++                if (0 < n) {
++                    a.Inject(out, n, 0x0800);
++                    moved = true;
++                }
++            }
++            sa.PollAckTimers();
++            sb.PollAckTimers();
++            if (!moved) {
++                return;
++            }
++        }
++    }
++
++    static UInt32 SnduNa(xtcp::XtcpStack& s, UInt64 conn) {
++        UInt32 a = 0, b = 0, c = 0, d = 0, e = 0, f = 0, g = 0, h = 0, i = 0;
++        UInt64 rto = 0;
++        UInt16 lp = 0, rp = 0;
++        s.ConnStats(conn, a, b, c, d, e, rto, f, g, h, i, lp, rp);
++        return i;
++    }
++}
++
++int main() {
++    xtcp::buf::InitPools();
++    {
++        xtcp::ndi::ManualBackend backend_a, backend_b;
++        xtcp::XtcpStack stack_a(&backend_a);
++        xtcp::XtcpStack stack_b(&backend_b);
++        backend_a.SetRxHandler([&stack_a](xtcp::ndi::Packet&& p) {
++            xtcp::buf::BufRef buf = xtcp::buf::BufRef::Acquire(p.len);
++            if (!buf.IsEmpty()) {
++                std::memcpy(buf.Data(), p.data, p.len);
++                buf.SetLen(p.len);
++                stack_a.OnPacket(std::move(buf));
++            }
++        });
++        backend_b.SetRxHandler([&stack_b](xtcp::ndi::Packet&& p) {
++            xtcp::buf::BufRef buf = xtcp::buf::BufRef::Acquire(p.len);
++            if (!buf.IsEmpty()) {
++                std::memcpy(buf.Data(), p.data, p.len);
++                buf.SetLen(p.len);
++                stack_b.OnPacket(std::move(buf));
++            }
++        });
++
++        xtcp::core::Endpoint local, remote;
++        local.family = 4;
++        local.addr[0] = 0x0A000001;
++        local.port = 40061;
++        remote.family = 4;
++        remote.addr[0] = 0x0A000002;
++        remote.port = 9090;
++        CHECK(stack_b.Listen(remote));
++        const UInt64 conn = stack_a.Connect(local, remote);
++        CHECK(0 != conn);
++        PumpBoth(backend_a, backend_b, stack_a, stack_b);
++        CHECK(xtcp::core::TcpState::kEstablished == stack_a.ConnectionState(conn));
++
++
++        Byte payload[12288];
++        std::memset(payload, 0x5A, sizeof(payload));
++        CHECK(stack_a.Send(conn, payload, sizeof(payload)));
++        PumpOneWay(backend_a, backend_b, stack_a);   // B's ACKs stay queued
++
++        // ---- s1: the same partial block, 3 dup-ACKs ----
++        const UInt32 una = SnduNa(stack_a, conn);
++        const UInt32 pair[2] = { una + 100, una + 600 };   // 500 bytes inside the first segment
++        CHECK(0 == stack_a.ConnSackedBytes(conn));
++        for (UInt32 i = 0; i < 3; ++i) {
++            std::vector<Byte> ack = BuildAckWithSack(una, pair, 1);
++            backend_a.Inject(ack.data(), static_cast<UInt32>(ack.size()), 0x0800);
++            CHECK(500 == stack_a.ConnSackedBytes(conn));   // idempotent
++        }
++        // An overlapping block extends coverage by the NEW bytes only.
++        const UInt32 pair2[2] = { una + 400, una + 800 };
++        {
++            std::vector<Byte> ack = BuildAckWithSack(una, pair2, 1);
++            backend_a.Inject(ack.data(), static_cast<UInt32>(ack.size()), 0x0800);
++        }
++        CHECK(700 == stack_a.ConnSackedBytes(conn));       // [100,800)
++        {
++            std::vector<Byte> ack = BuildAckWithSack(una, pair2, 1);
++            backend_a.Inject(ack.data(), static_cast<UInt32>(ack.size()), 0x0800);
++        }
++        CHECK(700 == stack_a.ConnSackedBytes(conn));
++        std::fprintf(stderr, "[sack_sb] s1 sacked bytes %llu\n",
++                     (unsigned long long)stack_a.ConnSackedBytes(conn));
++
++        // ---- s2: wrap-safe hole detection ----
++        {
++            const UInt32 base = 0xFFFFFF00u;
++            bool hole = false;
++            // block 1 straddles the wrap, block 2 starts past a hole
++            const UInt32 b1[2][2] = { { 0xFFFFFF00u, 0x00000040u }, { 0x00000100u, 0x00000200u } };
++            UInt64 c = xtcp::core::SackFrontierOffset(base, b1, 2, hole);
++            CHECK(hole);
++            CHECK(0x140 == c);
++            // contiguous across the wrap: no hole
++            const UInt32 b2[2][2] = { { 0xFFFFFF00u, 0x00000040u }, { 0x00000040u, 0x00000200u } };
++            c = xtcp::core::SackFrontierOffset(base, b2, 2, hole);
++            CHECK(!hole);
++            CHECK(0x300 == c);
++            // a lone block that starts after the wrap with a gap before it
++            const UInt32 b3[1][2] = { { 0x00000010u, 0x00000080u } };
++            c = xtcp::core::SackFrontierOffset(base, b3, 1, hole);
++            CHECK(hole);
++            // block starting exactly at una: covered, no hole
++            const UInt32 b4[1][2] = { { base, 0x00000020u } };
++            c = xtcp::core::SackFrontierOffset(base, b4, 1, hole);
++            CHECK(!hole);
++            CHECK(0x120 == c);
++            // wholly behind una: ignored
++            const UInt32 b5[1][2] = { { base - 0x200, base - 0x100 } };
++            c = xtcp::core::SackFrontierOffset(base, b5, 1, hole);
++            CHECK(!hole);
++            CHECK(0 == c);
++        }
++    }
++    xtcp::buf::ShutdownPools();
++    std::fprintf(stderr, g_failures ? "SACK_SCOREBOARD: FAILED (%d)\n" : "SACK_SCOREBOARD: ALL PASSED\n", g_failures);
++    return g_failures ? 1 : 0;
++}
